@@ -9,211 +9,492 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
     <style>
-      :root{--bg:#fff;--text:#09090b;--muted:#52525b;--border:#e4e4e7;--border2:#d4d4d8;}
+      :root{
+        --bg:#fff;
+        --text:#09090b;
+        --muted:#52525b;
+        --border:#e4e4e7;
+        --border2:#d4d4d8;
+        --ring:rgba(9,9,11,1);
+        --ringOffset:#fff;
+      }
       html,body{height:100%;}
-      body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;}
+      body{
+        margin:0;
+        min-height:100vh;
+        background:var(--bg);
+        color:var(--text);
+        font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+        -webkit-font-smoothing:antialiased;
+        -moz-osx-font-smoothing:grayscale;
+      }
       a{color:inherit}
-      .srOnly{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
-      .skip:focus{position:fixed;left:16px;top:16px;z-index:9999;width:auto;height:auto;margin:0;clip:auto;white-space:normal;border:1px solid var(--border2);background:#fff;border-radius:10px;padding:10px 12px;font-size:12px;}
-      .app{min-height:100vh;background:#fff;}
-      .header{position:sticky;top:0;z-index:40;border-bottom:1px solid var(--border);background:rgba(255,255,255,0.86);backdrop-filter:blur(10px);}
-      .container{max-width:1152px;margin:0 auto;padding:0 16px;}
-      .bar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;}
-      .brandRow{display:flex;align-items:center;gap:12px;}
-      .logo{width:36px;height:36px;display:grid;place-items:center;border:1px solid var(--border);border-radius:10px;background:#fff;}
-      .logo span{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;font-size:12px;}
-      .brand{font-size:14px;font-weight:600;letter-spacing:-0.02em;}
-      .nav{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;align-items:center;font-size:13px;}
-      .navLink{display:inline-flex;height:36px;align-items:center;border-radius:10px;padding:0 10px;color:var(--muted);text-decoration:none;outline:none;}
-      .navLink:hover{background:#fafafa;color:var(--text);}
-      .btn{display:inline-flex;height:36px;align-items:center;border-radius:10px;padding:0 12px;background:var(--text);color:#fff;text-decoration:none;font-weight:600;outline:none;border:1px solid var(--text);}
-      .btn:hover{background:#18181b;border-color:#18181b;}
-      .btnSecondary{display:inline-flex;height:36px;align-items:center;border-radius:10px;padding:0 12px;background:#fff;color:var(--text);text-decoration:none;font-weight:600;outline:none;border:1px solid var(--border2);}
-      .btnSecondary:hover{background:#fafafa;}
-      .hero{position:relative;overflow:hidden;}
-      .heroBg{pointer-events:none;position:absolute;inset:0;background:radial-gradient(circle at top, rgba(0,0,0,0.06), transparent 55%);}
-      .heroInner{padding:72px 0 72px;}
-      .pill{display:inline-flex;align-items:center;gap:10px;border-radius:999px;border:1px solid var(--border);background:#fff;padding:6px 12px;font-size:12px;color:var(--muted);}
       .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;}
-      h1{margin:14px 0 0;font-size:44px;line-height:1.1;letter-spacing:-0.03em;font-weight:650;}
-      .lead{margin:16px 0 0;max-width:640px;font-size:16px;line-height:1.6;color:var(--muted);}
-      .ctaRow{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:22px;}
-      .tagRow{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px;}
-      .tag{display:inline-flex;align-items:center;border:1px solid var(--border);background:#fff;border-radius:10px;padding:6px 10px;font-size:12px;color:#18181b;}
-      .section{padding:64px 0;}
-      .sectionHead{margin-bottom:18px;}
-      .h2{margin:0;font-size:22px;letter-spacing:-0.02em;font-weight:650;}
-      .sub{margin-top:8px;color:var(--muted);font-size:14px;line-height:1.5;}
-      .grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;}
-      .card{border:1px solid var(--border);border-radius:14px;background:#fff;padding:14px;}
+      .sr-only{
+        position:absolute;
+        width:1px;
+        height:1px;
+        padding:0;
+        margin:-1px;
+        overflow:hidden;
+        clip:rect(0,0,0,0);
+        white-space:nowrap;
+        border:0;
+      }
+      .skip{
+        outline:none;
+      }
+      .skip:focus{
+        position:fixed;
+        left:16px;
+        top:16px;
+        z-index:9999;
+        width:auto;
+        height:auto;
+        margin:0;
+        clip:auto;
+        white-space:normal;
+        border:1px solid var(--border2);
+        background:#fff;
+        border-radius:6px;
+        padding:10px 12px;
+        font-size:12px;
+      }
+      .header{
+        position:sticky;
+        top:0;
+        z-index:40;
+        border-bottom:1px solid var(--border);
+        background:rgba(255,255,255,0.85);
+        backdrop-filter:blur(10px);
+      }
+      .container{
+        max-width:1152px;
+        margin:0 auto;
+        padding:0 16px;
+      }
+      .bar{
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:16px;
+        padding:12px 0;
+      }
+      .brandRow{
+        display:flex;
+        align-items:center;
+        gap:12px;
+      }
+      .logo{
+        display:grid;
+        place-items:center;
+        width:36px;
+        height:36px;
+        border:1px solid var(--border);
+        border-radius:6px;
+        background:#fff;
+      }
+      .logo span{font-size:12px;}
+      .brand{
+        font-size:14px;
+        font-weight:600;
+        letter-spacing:-0.02em;
+      }
+      .nav{
+        display:flex;
+        flex-wrap:wrap;
+        align-items:center;
+        justify-content:flex-end;
+        gap:8px;
+        font-size:14px;
+      }
+      .navLink{
+        display:inline-flex;
+        height:36px;
+        align-items:center;
+        border-radius:6px;
+        padding:0 10px;
+        color:var(--muted);
+        text-decoration:none;
+        outline:none;
+      }
+      .navLink:hover{
+        background:#fafafa;
+        color:var(--text);
+      }
+      .btnPrimary{
+        display:inline-flex;
+        height:36px;
+        align-items:center;
+        border-radius:6px;
+        padding:0 12px;
+        background:var(--text);
+        color:#fff;
+        text-decoration:none;
+        font-size:14px;
+        font-weight:500;
+        outline:none;
+        transition:background .15s ease;
+      }
+      .btnPrimary:hover{background:#18181b;}
+      .btnSecondary{
+        display:inline-flex;
+        height:44px;
+        align-items:center;
+        border-radius:6px;
+        padding:0 16px;
+        border:1px solid var(--border2);
+        background:#fff;
+        color:var(--text);
+        text-decoration:none;
+        font-size:14px;
+        font-weight:500;
+        outline:none;
+        transition:background .15s ease;
+      }
+      .btnSecondary:hover{background:#fafafa;}
+      .btnHeroPrimary{
+        display:inline-flex;
+        height:44px;
+        align-items:center;
+        border-radius:6px;
+        padding:0 16px;
+        background:var(--text);
+        color:#fff;
+        text-decoration:none;
+        font-size:14px;
+        font-weight:500;
+        outline:none;
+        transition:background .15s ease;
+      }
+      .btnHeroPrimary:hover{background:#18181b;}
+      .focusRing:focus-visible{
+        box-shadow:0 0 0 2px var(--ring), 0 0 0 4px var(--ringOffset);
+      }
+      .hero{
+        position:relative;
+        overflow:hidden;
+      }
+      .heroBg{
+        pointer-events:none;
+        position:absolute;
+        inset:0;
+        background:radial-gradient(circle at top, rgba(0,0,0,0.06), transparent 55%);
+      }
+      .heroInner{
+        padding:80px 0 96px;
+      }
+      .pill{
+        display:inline-flex;
+        align-items:center;
+        gap:10px;
+        border:1px solid var(--border);
+        background:#fff;
+        border-radius:999px;
+        padding:6px 12px;
+        font-size:12px;
+        color:var(--muted);
+      }
+      h1{
+        margin:14px 0 0;
+        font-size:36px;
+        line-height:1.1;
+        font-weight:600;
+        letter-spacing:-0.03em;
+      }
+      .lead{
+        margin:16px 0 0;
+        max-width:640px;
+        font-size:16px;
+        line-height:1.6;
+        color:var(--muted);
+      }
+      .ctaRow{
+        margin-top:28px;
+        display:flex;
+        flex-wrap:wrap;
+        align-items:center;
+        gap:12px;
+      }
+      .tagRow{
+        margin-top:32px;
+        display:flex;
+        flex-wrap:wrap;
+        gap:8px;
+      }
+      .tag{
+        display:inline-flex;
+        align-items:center;
+        border:1px solid var(--border);
+        background:#fff;
+        border-radius:6px;
+        padding:6px 10px;
+        font-size:12px;
+        color:#18181b;
+      }
+      .section{
+        padding:64px 0 80px;
+      }
+      .sectionHead{
+        margin-bottom:24px;
+      }
+      .h2{
+        margin:0;
+        font-size:20px;
+        font-weight:600;
+        letter-spacing:-0.02em;
+      }
+      .sub{
+        margin-top:10px;
+        font-size:14px;
+        color:var(--muted);
+        line-height:1.5;
+      }
+      .grid4{
+        display:grid;
+        grid-template-columns:1fr;
+        gap:16px;
+      }
+      .card{
+        border:1px solid var(--border);
+        border-radius:8px;
+        background:#fff;
+        padding:16px;
+        transition:border-color .15s ease;
+      }
       .card:hover{border-color:var(--border2);}
-      .cardTitle{font-size:13px;font-weight:650;letter-spacing:-0.01em;margin:0;}
-      .cardBody{margin:10px 0 0;color:var(--muted);font-size:13px;line-height:1.55;}
-      .dl{border:1px solid var(--border);border-radius:14px;background:#fff;overflow:hidden;}
-      .dlGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));}
-      .dlItem{padding:14px;}
-      .dlItem + .dlItem{border-left:1px solid var(--border);}
-      .dlItem:nth-child(n+3){border-top:1px solid var(--border);}
-      dt{font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);font-weight:650;}
-      dd{margin:10px 0 0;font-size:13px;color:var(--text);}
-      .contactCard{display:flex;flex-direction:column;gap:12px;align-items:flex-start;justify-content:space-between;border:1px solid var(--border);border-radius:14px;background:#fff;padding:16px;}
-      .contactCard p{margin:0;}
-      .footer{border-top:1px solid var(--border);padding:36px 0;color:var(--muted);font-size:12px;}
-      .footerRow{display:flex;flex-direction:column;gap:10px;}
-      .footerLinks{display:flex;flex-wrap:wrap;gap:14px;}
-      .footerLinks a{color:var(--muted);text-decoration:none;}
-      .footerLinks a:hover{text-decoration:underline;color:var(--text);}
-      @media (max-width:1024px){h1{font-size:40px}.grid4{grid-template-columns:repeat(2,minmax(0,1fr));}}
-      @media (max-width:640px){h1{font-size:34px}.dlGrid{grid-template-columns:1fr}.dlItem + .dlItem{border-left:none}.footerRow{gap:12px}}
+      .cardTitle{
+        margin:0;
+        font-size:14px;
+        font-weight:600;
+        letter-spacing:-0.01em;
+      }
+      .cardBody{
+        margin:10px 0 0;
+        font-size:14px;
+        line-height:1.55;
+        color:var(--muted);
+      }
+      .dl{
+        border:1px solid var(--border);
+        border-radius:8px;
+        background:#fff;
+        overflow:hidden;
+      }
+      .dlGrid{
+        display:grid;
+        grid-template-columns:1fr;
+      }
+      .dlItem{
+        padding:16px;
+        border-top:1px solid var(--border);
+      }
+      .dlItem:first-child{border-top:none;}
+      dt{
+        font-size:12px;
+        font-weight:500;
+        letter-spacing:0.08em;
+        text-transform:uppercase;
+        color:var(--muted);
+      }
+      dd{
+        margin:10px 0 0;
+        font-size:14px;
+        color:var(--text);
+      }
+      .contactCard{
+        display:flex;
+        flex-direction:column;
+        align-items:flex-start;
+        justify-content:space-between;
+        gap:16px;
+        border:1px solid var(--border);
+        border-radius:8px;
+        background:#fff;
+        padding:20px;
+      }
+      .footer{
+        border-top:1px solid var(--border);
+      }
+      .footerInner{
+        padding:40px 0;
+        display:flex;
+        flex-direction:column;
+        gap:12px;
+      }
+      .footerText{
+        font-size:12px;
+        color:var(--muted);
+      }
+      .footerLinks{
+        display:flex;
+        flex-wrap:wrap;
+        gap:12px;
+        font-size:12px;
+      }
+      .footerLinks a{
+        color:var(--muted);
+        text-decoration:none;
+      }
+      .footerLinks a:hover{
+        color:var(--text);
+        text-decoration:underline;
+        text-underline-offset:4px;
+      }
+      @media (min-width:640px){
+        h1{font-size:48px;}
+        .grid4{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}
+        .dlGrid{grid-template-columns:repeat(2,minmax(0,1fr));}
+        .dlItem{border-top:none;}
+        .dlItem:nth-child(odd){border-right:1px solid var(--border);}
+        .dlItem:nth-child(n+3){border-top:1px solid var(--border);}
+      }
+      @media (min-width:1024px){
+        .grid4{grid-template-columns:repeat(4,minmax(0,1fr));}
+      }
     </style>
   </head>
   <body>
-    <div class="app">
-      <a href="#content" class="srOnly skip">Skip to content</a>
+    <a href="#content" class="sr-only skip">Skip to content</a>
 
-      <header class="header">
-        <div class="container">
-          <div class="bar">
-            <div class="brandRow">
-              <div class="logo"><span>LI</span></div>
-              <span class="brand">LiteInsurance</span>
-            </div>
-            <nav class="nav" aria-label="Primary">
-              <a class="navLink" href="#features">Features</a>
-              <a class="navLink" href="#tech">Tech</a>
-              <a class="navLink" href="#contact">Contact</a>
-              <a class="btn" href="liteinsurance.php">Open app</a>
-            </nav>
+    <header class="header">
+      <div class="container">
+        <div class="bar">
+          <div class="brandRow">
+            <div class="logo"><span class="mono">LI</span></div>
+            <span class="brand">LiteInsurance</span>
           </div>
+          <nav class="nav" aria-label="Primary">
+            <a class="navLink focusRing" href="#features">Features</a>
+            <a class="navLink focusRing" href="#tech">Tech</a>
+            <a class="navLink focusRing" href="#contact">Contact</a>
+            <a class="btnPrimary focusRing" href="liteinsurance.php">Open app</a>
+          </nav>
         </div>
-      </header>
+      </div>
+    </header>
 
-      <main id="content">
-        <section class="hero">
-          <div class="heroBg"></div>
-          <div class="container">
-            <div class="heroInner">
-              <p class="pill">
-                <span class="mono">v1</span>
-                <span>Single-file PHP • shared-hosting friendly • no cloud required</span>
-              </p>
-              <h1>Local-first risk intelligence for insurance ops.</h1>
-              <p class="lead">
-                Import policyholder CSVs, impute missing fields, compute LTV, apply JSON rules for risk tiers, build segments, and simulate cross-sell campaigns — all in PHP + SQLite.
-              </p>
-
-              <div class="ctaRow">
-                <a class="btn" href="https://github.com/tanzir71/&lt;REPO-NAME&gt;" target="_blank" rel="noopener">View repo</a>
-                <a class="btnSecondary" href="#features">See workflow</a>
-                <a class="btnSecondary" href="SETUP.md" target="_blank" rel="noopener">Setup</a>
-                <a class="btnSecondary" href="SECURITY.md" target="_blank" rel="noopener">Security</a>
-              </div>
-
-              <div class="tagRow">
-                <span class="tag mono">Local-first</span>
-                <span class="tag mono">SQLite</span>
-                <span class="tag mono">CSRF</span>
-                <span class="tag mono">Rules engine</span>
-                <span class="tag mono">Segments</span>
-                <span class="tag mono">Campaign simulator</span>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section id="features" class="section">
-          <div class="container">
-            <div class="sectionHead">
-              <h2 class="h2">Workflow</h2>
-              <p class="sub">Import → clean → score → segment → simulate. All local by default.</p>
-            </div>
-
-            <div class="grid4">
-              <div class="card">
-                <p class="cardTitle">Import + impute</p>
-                <p class="cardBody">Upload CSV, map columns, preview changes, and impute missing values with mean/mode/defaults.</p>
-              </div>
-              <div class="card">
-                <p class="cardTitle">Rules → risk tiers</p>
-                <p class="cardBody">Edit JSON rules, test on a record, then apply in priority order to set tier + tags.</p>
-              </div>
-              <div class="card">
-                <p class="cardTitle">Segments</p>
-                <p class="cardBody">Build segments from rule sets + a safe filter expression, estimate size, and export CSV.</p>
-              </div>
-              <div class="card">
-                <p class="cardTitle">Campaign simulator</p>
-                <p class="cardBody">Model cross-sell assumptions and get gross, cost, and net projections before sending.</p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section id="tech" class="section">
-          <div class="container">
-            <div class="sectionHead">
-              <h2 class="h2">Stack</h2>
-              <p class="sub">Portable by design. Runs on shared hosting with only built-in PHP extensions.</p>
-            </div>
-
-            <div class="dl">
-              <div class="dlGrid">
-                <div class="dlItem">
-                  <dt>Runtime</dt>
-                  <dd class="mono">PHP 8+ (PDO + SQLite)</dd>
-                </div>
-                <div class="dlItem">
-                  <dt>Database</dt>
-                  <dd class="mono">SQLite (WAL + NORMAL)</dd>
-                </div>
-                <div class="dlItem">
-                  <dt>Security</dt>
-                  <dd class="mono">CSRF + CSP (nonce) + rate limits</dd>
-                </div>
-                <div class="dlItem">
-                  <dt>Ops</dt>
-                  <dd class="mono">cPanel cron (recompute + segments)</dd>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section id="contact" class="section">
-          <div class="container">
-            <div class="sectionHead">
-              <h2 class="h2">Get involved</h2>
-              <p class="sub">Ship the MVP, then iterate.</p>
-            </div>
-
-            <div class="contactCard">
-              <div>
-                <p style="font-size:13px;font-weight:650;color:var(--text);">Want this on your hosting?</p>
-                <p class="cardBody">Start with SETUP.md, then open an issue with your workflow and data schema.</p>
-              </div>
-              <div class="ctaRow" style="margin-top:0;">
-                <a class="btnSecondary" href="https://github.com/tanzir71/&lt;REPO-NAME&gt;/issues" target="_blank" rel="noopener">Open an issue</a>
-                <a class="btnSecondary" href="liteinsurance.php?action=download_sample_csv">Download sample CSV</a>
-              </div>
-            </div>
-          </div>
-        </section>
-      </main>
-
-      <footer class="footer">
+    <main id="content">
+      <section class="hero">
+        <div class="heroBg"></div>
         <div class="container">
-          <div class="footerRow">
-            <div>Vibe-coded with ♥ by tanziro.com</div>
-            <div class="footerLinks">
-              <a href="https://github.com/tanzir71/&lt;REPO-NAME&gt;" target="_blank" rel="noopener">GitHub</a>
-              <a href="README.md" target="_blank" rel="noopener">README</a>
-              <a href="SETUP.md" target="_blank" rel="noopener">Docs</a>
-              <a href="SECURITY.md" target="_blank" rel="noopener">Security</a>
-              <a href="#features">Features</a>
+          <div class="heroInner">
+            <p class="pill">
+              <span class="mono">v1</span>
+              <span>Local-first • offline after setup • no cloud required</span>
+            </p>
+            <h1>Local-first risk intelligence for insurance ops.</h1>
+            <p class="lead">
+              Ingest policyholder CSVs, impute missing fields, compute LTV, evaluate JSON rules, build segments, and simulate cross-sell revenue — offline after setup.
+            </p>
+
+            <div class="ctaRow">
+              <a class="btnHeroPrimary focusRing" href="https://github.com/tanzir71/%3CREPO-NAME%3E" target="_blank" rel="noreferrer">View repo</a>
+              <a class="btnSecondary focusRing" href="#features">See workflow</a>
+            </div>
+
+            <div class="tagRow">
+              <span class="tag mono">Local-first</span>
+              <span class="tag mono">Offline</span>
+              <span class="tag mono">SQLite</span>
+              <span class="tag mono">CSRF</span>
+              <span class="tag mono">Rules</span>
+              <span class="tag mono">Segments/Campaigns</span>
             </div>
           </div>
         </div>
-      </footer>
-    </div>
+      </section>
+
+      <section id="features" class="section">
+        <div class="container">
+          <div class="sectionHead">
+            <h2 class="h2">Workflow</h2>
+            <p class="sub">Import → clean → score → segment → simulate. All local by default.</p>
+          </div>
+
+          <div class="grid4">
+            <div class="card">
+              <h3 class="cardTitle">Import + impute</h3>
+              <p class="cardBody">Upload CSV, map columns, preview, and impute missing values (mean/mode/defaults) with confidence scoring.</p>
+            </div>
+            <div class="card">
+              <h3 class="cardTitle">Risk tiers</h3>
+              <p class="cardBody">Create JSON rules, test them against a record, and evaluate in priority order to set tier + tags.</p>
+            </div>
+            <div class="card">
+              <h3 class="cardTitle">Segments</h3>
+              <p class="cardBody">Combine rules and a safe filter expression, estimate size, then export segment CSV with LTV and tier.</p>
+            </div>
+            <div class="card">
+              <h3 class="cardTitle">Campaign simulator</h3>
+              <p class="cardBody">Project conversions, gross, cost, and net revenue from cross-sell assumptions before sending.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tech" class="section">
+        <div class="container">
+          <div class="sectionHead">
+            <h2 class="h2">Stack</h2>
+            <p class="sub">Portable single-file architecture with optional cron for scheduled recompute.</p>
+          </div>
+
+          <div class="dl">
+            <div class="dlGrid">
+              <div class="dlItem">
+                <dt>Runtime</dt>
+                <dd class="mono">PHP 8+ + sessions</dd>
+              </div>
+              <div class="dlItem">
+                <dt>Database</dt>
+                <dd class="mono">SQLite (PDO, WAL)</dd>
+              </div>
+              <div class="dlItem">
+                <dt>Security</dt>
+                <dd class="mono">CSRF + CSP + rate limits</dd>
+              </div>
+              <div class="dlItem">
+                <dt>Ops</dt>
+                <dd class="mono">cPanel cron (recompute)</dd>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="contact" class="section">
+        <div class="container">
+          <div class="sectionHead">
+            <h2 class="h2">Get involved</h2>
+            <p class="sub">Ship the MVP, then iterate with ops teams.</p>
+          </div>
+
+          <div class="contactCard">
+            <div>
+              <p style="margin:0;font-size:14px;font-weight:500;">Want this on your machine?</p>
+              <p style="margin:8px 0 0;font-size:14px;line-height:1.55;color:var(--muted);">Open an issue with your workflow, segment criteria, and target products.</p>
+            </div>
+            <a class="btnSecondary focusRing" href="https://github.com/tanzir71/%3CREPO-NAME%3E/issues" target="_blank" rel="noreferrer">Open an issue</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container">
+        <div class="footerInner">
+          <p class="footerText">Vibe-coded with ♥ by tanziro.com</p>
+          <div class="footerLinks">
+            <a href="https://github.com/tanzir71/%3CREPO-NAME%3E" target="_blank" rel="noreferrer">GitHub</a>
+            <a href="#features">Features</a>
+            <a href="#tech">Tech</a>
+            <a href="#contact">Contact</a>
+            <a href="SETUP.md" target="_blank" rel="noopener">Docs</a>
+            <a href="SECURITY.md" target="_blank" rel="noopener">Security</a>
+          </div>
+        </div>
+      </div>
+    </footer>
   </body>
 </html>
