@@ -37,6 +37,14 @@ const CROSS_SELL_MULTIPLIER_BY_POLICY_TYPE = [
     'life' => 1.08,
 ];
 const CRON_TOKEN = '';
+const DEBUG = false;
+const ERROR_LOG_FILE = __DIR__ . DIRECTORY_SEPARATOR . 'liteinsurance_error.log';
+const LOGIN_RATE_LIMIT_MAX = 8;
+const LOGIN_RATE_LIMIT_WINDOW_SECONDS = 15 * 60;
+const REGISTER_RATE_LIMIT_MAX = 4;
+const REGISTER_RATE_LIMIT_WINDOW_SECONDS = 60 * 60;
+const IMPORT_RATE_LIMIT_MAX = 6;
+const IMPORT_RATE_LIMIT_WINDOW_SECONDS = 10 * 60;
 
 const SAMPLE_CSV = "policy_number,name,dob,gender,policy_type,region,premium_amount,tenure_months,sum_assured\n"
     . "P-1001,Asha Rahman,1962-03-11,F,term,West,120.50,14,50000\n"
@@ -45,11 +53,54 @@ const SAMPLE_CSV = "policy_number,name,dob,gender,policy_type,region,premium_amo
     . "P-1004,Li Wei,1959-07-21,M,term,,110.00,6,45000\n"
     . "P-1005,Sam Patel,1994-01-17,,auto,South,,12,18000\n";
 
+ini_set('display_errors', '0');
+error_reporting(E_ALL);
+
+$GLOBALS['LI_CFG'] = load_env_file(__DIR__ . DIRECTORY_SEPARATOR . '.env');
+$GLOBALS['CSP_NONCE'] = base64_encode(random_bytes(16));
+
+set_exception_handler(static function (Throwable $e): void {
+    li_log('php.exception', [
+        'type' => get_class($e),
+        'message' => $e->getMessage(),
+        'file' => $e->getFile(),
+        'line' => $e->getLine(),
+    ]);
+    if (PHP_SAPI === 'cli') {
+        fwrite(STDERR, "Server error.\n");
+        return;
+    }
+    if (!headers_sent()) {
+        http_response_code(500);
+    }
+    echo 'Server error.';
+});
+
+set_error_handler(static function (int $severity, string $message, string $file, int $line): bool {
+    if (!(error_reporting() & $severity)) {
+        return false;
+    }
+    li_log('php.error', ['severity' => $severity, 'message' => $message, 'file' => $file, 'line' => $line]);
+    return true;
+});
+
+register_shutdown_function(static function (): void {
+    $e = error_get_last();
+    if (!$e) {
+        return;
+    }
+    $fatal = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR];
+    if (in_array((int)($e['type'] ?? 0), $fatal, true)) {
+        li_log('php.fatal', $e);
+        if (PHP_SAPI !== 'cli' && !headers_sent()) {
+            http_response_code(500);
+            echo 'Server error.';
+        }
+    }
+});
+
 if (PHP_SAPI !== 'cli') {
-    header('X-Frame-Options: DENY');
-    header('X-Content-Type-Options: nosniff');
-    header('Referrer-Policy: same-origin');
-    header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
+    send_security_headers((string)$GLOBALS['CSP_NONCE']);
 }
 
 session_init();
@@ -78,6 +129,9 @@ route_web($pdo);
 
 function session_init(): void
 {
+    ini_set('session.use_only_cookies', '1');
+    ini_set('session.use_strict_mode', '1');
+    ini_set('session.cookie_httponly', '1');
     $p = session_get_cookie_params();
     session_set_cookie_params([
         'lifetime' => 0,
@@ -108,7 +162,7 @@ function session_init(): void
 
 function db(): PDO
 {
-    $pdo = new PDO('sqlite:' . DB_PATH, null, null, [
+    $pdo = new PDO('sqlite:' . db_path(), null, null, [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES => false,
@@ -116,6 +170,7 @@ function db(): PDO
     $pdo->exec('PRAGMA journal_mode=WAL;');
     $pdo->exec('PRAGMA synchronous=NORMAL;');
     $pdo->exec('PRAGMA temp_store=MEMORY;');
+    $pdo->exec('PRAGMA busy_timeout=3000;');
     $pdo->exec('PRAGMA foreign_keys=OFF;');
     return $pdo;
 }
@@ -191,6 +246,12 @@ function migrate(PDO $pdo): void
         . "rows_imported INTEGER NOT NULL DEFAULT 0,\n"
         . "errors_json TEXT NOT NULL DEFAULT '[]',\n"
         . "created_at TEXT NOT NULL\n"
+        . ")");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS rate_limits (\n"
+        . "bucket TEXT PRIMARY KEY,\n"
+        . "hits INTEGER NOT NULL,\n"
+        . "reset_at INTEGER NOT NULL\n"
         . ")");
 
     $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_policyholders_policy_number ON policyholders(policy_number)');
@@ -371,6 +432,7 @@ function render_auth_page(string $mode, bool $hasUsers): void
         echo '<a class="link" href="' . h(self_url(['action' => 'register_form'])) . '">Create an account</a>';
     }
     echo '<div class="tiny muted">Session secured, CSRF protected.</div>';
+    echo '<div class="tiny muted"><a class="link" href="SETUP.md" target="_blank" rel="noopener">Docs</a> · <a class="link" href="SECURITY.md" target="_blank" rel="noopener">Security</a></div>';
     echo '</div>';
     echo '</div></main>';
     echo app_js();
@@ -380,6 +442,12 @@ function render_auth_page(string $mode, bool $hasUsers): void
 function handle_register(PDO $pdo): void
 {
     require_csrf();
+    if (!rate_limit_allow($pdo, 'auth.register', client_ip(), REGISTER_RATE_LIMIT_MAX, REGISTER_RATE_LIMIT_WINDOW_SECONDS)) {
+        http_response_code(429);
+        flash('error', 'Too many registration attempts. Try again later.');
+        render_auth_page('register', true);
+        return;
+    }
     $email = trim((string)($_POST['email'] ?? ''));
     $password = (string)($_POST['password'] ?? '');
     $password2 = (string)($_POST['password2'] ?? '');
@@ -419,6 +487,12 @@ function handle_register(PDO $pdo): void
 function handle_login(PDO $pdo): void
 {
     require_csrf();
+    if (!rate_limit_allow($pdo, 'auth.login', client_ip(), LOGIN_RATE_LIMIT_MAX, LOGIN_RATE_LIMIT_WINDOW_SECONDS)) {
+        http_response_code(429);
+        flash('error', 'Too many sign-in attempts. Try again later.');
+        render_auth_page('login', true);
+        return;
+    }
     $email = trim((string)($_POST['email'] ?? ''));
     $password = (string)($_POST['password'] ?? '');
     if ($email === '' || $password === '') {
@@ -483,8 +557,7 @@ function require_csrf(): void
     $token = (string)($_POST['csrf_token'] ?? '');
     $expected = (string)($_SESSION['csrf_token'] ?? '');
     if ($token === '' || $expected === '' || !hash_equals($expected, $token)) {
-        flash('error', 'Invalid CSRF token. Refresh and try again.');
-        redirect_self();
+        csrf_fail();
     }
 }
 
@@ -546,6 +619,7 @@ function render_app(PDO $pdo, array $user, string $tab): void
         }
     }
     echo '</main>';
+    echo '<footer class="footer"><a class="link" href="SETUP.md" target="_blank" rel="noopener">Docs</a> · <a class="link" href="SECURITY.md" target="_blank" rel="noopener">Security</a></footer>';
     echo '</div>';
     echo app_js();
     echo '</body></html>';
@@ -624,7 +698,7 @@ function render_tab_import(PDO $pdo): void
 
     echo '<div class="grid2">';
     echo '<div class="card"><div class="h2">Upload CSV</div>';
-    echo '<div class="muted">Max upload: ' . h((string)round(MAX_UPLOAD_BYTES / 1024 / 1024, 1)) . ' MB. Staged in <code>liteinsurance_uploads/</code>.</div>';
+    echo '<div class="muted">Max upload: ' . h((string)round(MAX_UPLOAD_BYTES / 1024 / 1024, 1)) . ' MB. Staged in <code>' . h(basename(upload_dir())) . '/</code>.</div>';
     echo '<form method="post" enctype="multipart/form-data" class="form">';
     echo '<input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="import_upload">';
     echo '<input class="input" type="file" name="csv" accept=".csv,text/csv" required>';
@@ -920,8 +994,8 @@ function render_tab_settings(PDO $pdo): void
     echo '<div class="grid2">';
     echo '<div class="card"><div class="h2">App config (read-only)</div>';
     echo '<table class="table"><tbody>';
-    echo '<tr><td>DB path</td><td class="muted"><code>' . h(DB_PATH) . '</code></td></tr>';
-    echo '<tr><td>Upload dir</td><td class="muted"><code>' . h(UPLOAD_DIR) . '</code></td></tr>';
+    echo '<tr><td>DB path</td><td class="muted"><code>' . h(db_path()) . '</code></td></tr>';
+    echo '<tr><td>Upload dir</td><td class="muted"><code>' . h(upload_dir()) . '</code></td></tr>';
     echo '<tr><td>Session timeout</td><td class="muted">' . h((string)SESSION_TIMEOUT_SECONDS) . ' seconds</td></tr>';
     echo '<tr><td>Accent</td><td class="muted"><span class="swatch" style="background:' . h(ACCENT_COLOR) . '"></span> ' . h(ACCENT_COLOR) . '</td></tr>';
     echo '</tbody></table>';
@@ -944,7 +1018,8 @@ function run_cron_jobs(PDO $pdo): void
 {
     $token = (string)($_GET['cron_token'] ?? '');
     if (PHP_SAPI !== 'cli') {
-        if (CRON_TOKEN === '' || $token === '' || !hash_equals(CRON_TOKEN, $token)) {
+        $expected = (string)cfg('CRON_TOKEN', CRON_TOKEN);
+        if ($expected === '' || $token === '' || !hash_equals($expected, $token)) {
             http_response_code(403);
             echo 'Forbidden';
             return;
@@ -985,7 +1060,7 @@ function run_cron_jobs(PDO $pdo): void
         }
     }
     $pdo->commit();
-    $pdo->exec("UPDATE segments SET last_run_at = '" . now_iso() . "' WHERE last_run_at IS NULL OR last_run_at = ''");
+    $pdo->prepare('UPDATE segments SET last_run_at = ? WHERE last_run_at IS NULL OR last_run_at = ?')->execute([now_iso(), '']);
     echo 'OK. Updated policyholders: ' . $updated;
 }
 
@@ -1017,7 +1092,8 @@ function kpi(string $label, string $value): string
     return '<div class="kpi"><div class="kpiLabel">' . h($label) . '</div><div class="kpiValue">' . h($value) . '</div></div>';
 }
 
-function h(string $s): string { return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
+function htmlEscape(string $s): string { return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
+function h(string $s): string { return htmlEscape($s); }
 function now_iso(): string { return gmdate('Y-m-d H:i:s'); }
 function client_ip(): string { return (string)($_SERVER['REMOTE_ADDR'] ?? ''); }
 
@@ -1057,7 +1133,8 @@ function inter_font_css(): string
 function app_css(): string
 {
     $accent = h(ACCENT_COLOR);
-    return '<style>'
+    $nonce = h((string)($GLOBALS['CSP_NONCE'] ?? ''));
+    return '<style nonce="' . $nonce . '">'
         . ':root{--bg:#fff;--text:#111;--muted:#555;--border:#e6e6e6;--accent:' . $accent . ';}'
         . 'html,body{height:100%;}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;}'
         . '.appShell{display:grid;grid-template-columns:240px 1fr;grid-template-rows:56px 1fr;min-height:100vh;}'
@@ -1071,6 +1148,7 @@ function app_css(): string
         . '.navItem:hover{border-color:var(--border);background:#fafafa;}'
         . '.navOn{border-color:var(--border);background:#fff;box-shadow:0 1px 0 rgba(0,0,0,.03);font-weight:600;}'
         . '.main{padding:16px 16px 40px;max-width:1120px;}'
+        . '.footer{grid-column:1/-1;border-top:1px solid var(--border);padding:14px 16px;color:var(--muted);font-size:12px;display:flex;gap:8px;align-items:center;}'
         . '.pageHead{margin-bottom:12px;}'
         . '.h1{margin:0 0 4px;font-size:20px;line-height:28px;}'
         . '.h2{font-size:14px;font-weight:600;margin:0 0 10px;}'
@@ -1130,7 +1208,8 @@ function app_css(): string
 
 function app_js(): string
 {
-    return '<script>'
+    $nonce = h((string)($GLOBALS['CSP_NONCE'] ?? ''));
+    return '<script nonce="' . $nonce . '">'
         . 'window.LiteInsurance=window.LiteInsurance||{};'
         . 'window.LiteInsurance.ruleTest=async function(){'
         . 'const out=document.getElementById("ruleTestOut");'
@@ -1182,12 +1261,235 @@ function safe_json(string $s)
     }
 }
 
+function li_log(string $event, array $payload): void
+{
+    $line = json_encode(['ts' => now_iso(), 'event' => $event, 'payload' => $payload], JSON_UNESCAPED_SLASHES);
+    if (!is_string($line)) {
+        return;
+    }
+    @file_put_contents(ERROR_LOG_FILE, $line . "\n", FILE_APPEND);
+}
+
+function load_env_file(string $path): array
+{
+    if (!is_file($path)) {
+        return [];
+    }
+    $out = [];
+    $lines = @file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if (!is_array($lines)) {
+        return [];
+    }
+    foreach ($lines as $line) {
+        $line = trim((string)$line);
+        if ($line === '' || str_starts_with($line, '#')) {
+            continue;
+        }
+        $parts = explode('=', $line, 2);
+        if (count($parts) !== 2) {
+            continue;
+        }
+        $k = trim($parts[0]);
+        $v = trim($parts[1]);
+        if ($k === '') {
+            continue;
+        }
+        if ((str_starts_with($v, '"') && str_ends_with($v, '"')) || (str_starts_with($v, "'") && str_ends_with($v, "'"))) {
+            $v = substr($v, 1, -1);
+        }
+        $out[$k] = $v;
+    }
+    return $out;
+}
+
+function cfg(string $key, string $default = ''): string
+{
+    $env = getenv($key);
+    if (is_string($env) && $env !== '') {
+        return $env;
+    }
+    $map = is_array($GLOBALS['LI_CFG'] ?? null) ? (array)$GLOBALS['LI_CFG'] : [];
+    $v = $map[$key] ?? null;
+    return is_string($v) && $v !== '' ? $v : $default;
+}
+
+function db_path(): string
+{
+    return cfg('DB_PATH', DB_PATH);
+}
+
+function upload_dir(): string
+{
+    return cfg('UPLOAD_DIR', UPLOAD_DIR);
+}
+
+function send_security_headers(string $nonce): void
+{
+    /*
+    Customize CSP allowlists here if you add external CDNs.
+    - The default policy permits only self + Google Fonts (Inter), and uses a nonce for inline <style>/<script>.
+    */
+    header('X-Frame-Options: DENY');
+    header('X-Content-Type-Options: nosniff');
+    header('Referrer-Policy: same-origin');
+    header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
+    header('Cross-Origin-Opener-Policy: same-origin');
+    header('Cross-Origin-Resource-Policy: same-origin');
+
+    if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
+        header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+    }
+
+    $nonce = preg_replace('/[^a-zA-Z0-9+\/=]/', '', $nonce);
+    $csp = "default-src 'self'; "
+        . "base-uri 'self'; "
+        . "connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; "
+        . "object-src 'none'; "
+        . "frame-ancestors 'none'; "
+        . "form-action 'self'; "
+        . "img-src 'self' data:; "
+        . "font-src 'self' https://fonts.gstatic.com data:; "
+        . "style-src 'self' 'nonce-{$nonce}' https://fonts.googleapis.com; "
+        . "script-src 'self' 'nonce-{$nonce}';";
+    header('Content-Security-Policy: ' . $csp);
+}
+
+function csrf_fail(): void
+{
+    http_response_code(403);
+    if (is_fetch_request()) {
+        echo 'Forbidden';
+        exit;
+    }
+    flash('error', 'Invalid CSRF token. Refresh and try again.');
+    redirect_self();
+}
+
+function is_fetch_request(): bool
+{
+    $xrw = (string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '');
+    $accept = (string)($_SERVER['HTTP_ACCEPT'] ?? '');
+    return strtolower($xrw) === 'fetch' || str_contains(strtolower($accept), 'application/json');
+}
+
+function rate_limit_allow(PDO $pdo, string $action, string $key, int $maxHits, int $windowSeconds): bool
+{
+    $key = trim($key);
+    if ($key === '' || $maxHits <= 0 || $windowSeconds <= 0) {
+        return true;
+    }
+    $bucket = $action . '|' . $key;
+    $now = time();
+    $pdo->prepare('DELETE FROM rate_limits WHERE reset_at < ?')->execute([$now - 3600]);
+
+    $st = $pdo->prepare('SELECT hits, reset_at FROM rate_limits WHERE bucket = ?');
+    $st->execute([$bucket]);
+    $row = $st->fetch();
+    if (!$row) {
+        $pdo->prepare('INSERT INTO rate_limits (bucket, hits, reset_at) VALUES (?, 1, ?)')->execute([$bucket, $now + $windowSeconds]);
+        return true;
+    }
+    $hits = (int)($row['hits'] ?? 0);
+    $resetAt = (int)($row['reset_at'] ?? 0);
+    if ($resetAt <= $now) {
+        $pdo->prepare('UPDATE rate_limits SET hits = 1, reset_at = ? WHERE bucket = ?')->execute([$now + $windowSeconds, $bucket]);
+        return true;
+    }
+    if ($hits >= $maxHits) {
+        return false;
+    }
+    $pdo->prepare('UPDATE rate_limits SET hits = hits + 1 WHERE bucket = ?')->execute([$bucket]);
+    return true;
+}
+
+function sanitize_filename(string $name): string
+{
+    $name = trim($name);
+    $name = preg_replace('/[^\w.\-]+/u', '_', $name);
+    $name = preg_replace('/_+/', '_', (string)$name);
+    $name = ltrim((string)$name, '._');
+    if ($name === '') {
+        return 'upload.csv';
+    }
+    if (strlen($name) > 120) {
+        $name = substr($name, -120);
+    }
+    return $name;
+}
+
+function detect_mime(string $path): string
+{
+    if ($path === '' || !is_file($path)) {
+        return '';
+    }
+    if (!class_exists('finfo')) {
+        return '';
+    }
+    try {
+        $fi = new finfo(FILEINFO_MIME_TYPE);
+        $m = $fi->file($path);
+        return is_string($m) ? $m : '';
+    } catch (Throwable $e) {
+        return '';
+    }
+}
+
+function tokenize_filter_expr(string $expr): array
+{
+    $pattern = "/\\G\\s*(?:(?<lp>\\()|(?<rp>\\))|(?<comma>,)|(?<op>>=|<=|!=|=|>|<)|(?<kw>AND|OR|NOT|LIKE|IN|IS|NULL)\\b|(?<num>-?\\d+(?:\\.\\d+)?)|(?<str>'(?:''|[^'])*')|(?<id>[A-Za-z_][A-Za-z0-9_]*))\\s*/Ai";
+    $tokens = [];
+    $pos = 0;
+    $len = strlen($expr);
+    while ($pos < $len) {
+        if (!preg_match($pattern, $expr, $m, 0, $pos)) {
+            throw new RuntimeException('Invalid characters in filter.');
+        }
+        $pos += strlen($m[0]);
+        if (!empty($m['lp'])) {
+            $tokens[] = ['type' => 'LPAREN', 'value' => '('];
+        } elseif (!empty($m['rp'])) {
+            $tokens[] = ['type' => 'RPAREN', 'value' => ')'];
+        } elseif (!empty($m['comma'])) {
+            $tokens[] = ['type' => 'COMMA', 'value' => ','];
+        } elseif (!empty($m['op'])) {
+            $tokens[] = ['type' => 'OP', 'value' => $m['op']];
+        } elseif (!empty($m['kw'])) {
+            $tokens[] = ['type' => 'KW', 'value' => strtoupper($m['kw'])];
+        } elseif (!empty($m['num'])) {
+            $raw = $m['num'];
+            $parsed = str_contains($raw, '.') ? (float)$raw : (int)$raw;
+            $tokens[] = ['type' => 'NUMBER', 'value' => $raw, 'parsed' => $parsed];
+        } elseif (!empty($m['str'])) {
+            $raw = $m['str'];
+            $inner = substr($raw, 1, -1);
+            $inner = str_replace("''", "'", $inner);
+            $tokens[] = ['type' => 'STRING', 'value' => $raw, 'parsed' => $inner];
+        } elseif (!empty($m['id'])) {
+            $tokens[] = ['type' => 'IDENT', 'value' => strtolower($m['id'])];
+        } else {
+            throw new RuntimeException('Invalid token.');
+        }
+    }
+    return $tokens;
+}
+
 function ensure_upload_dir(): bool
 {
-    if (!is_dir(UPLOAD_DIR)) {
-        @mkdir(UPLOAD_DIR, 0755, true);
+    $dir = upload_dir();
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0755, true);
     }
-    return is_dir(UPLOAD_DIR) && is_writable(UPLOAD_DIR);
+    if (is_dir($dir) && is_writable($dir)) {
+        $ht = $dir . DIRECTORY_SEPARATOR . '.htaccess';
+        $idx = $dir . DIRECTORY_SEPARATOR . 'index.html';
+        if (!is_file($ht)) {
+            @file_put_contents($ht, "Options -Indexes\nDeny from all\n");
+        }
+        if (!is_file($idx)) {
+            @file_put_contents($idx, '<!doctype html><title>Not found</title>');
+        }
+    }
+    return is_dir($dir) && is_writable($dir);
 }
 
 function mask_name(string $name): string
@@ -1814,7 +2116,7 @@ function handle_load_sample(PDO $pdo, array $user): void
         flash('error', 'Upload directory is not writable.');
         redirect_to(['tab' => 'import']);
     }
-    $path = UPLOAD_DIR . DIRECTORY_SEPARATOR . 'sample_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.csv';
+    $path = upload_dir() . DIRECTORY_SEPARATOR . 'sample_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.csv';
     file_put_contents($path, SAMPLE_CSV);
     $lines = preg_split('/\r?\n/', trim(SAMPLE_CSV));
     $headers = $lines ? str_getcsv($lines[0]) : [];
@@ -1859,6 +2161,11 @@ function sample_rules_seed(): array
 
 function handle_import_upload(PDO $pdo, array $user): void
 {
+    if (!rate_limit_allow($pdo, 'import.upload', client_ip(), IMPORT_RATE_LIMIT_MAX, IMPORT_RATE_LIMIT_WINDOW_SECONDS)) {
+        http_response_code(429);
+        flash('error', 'Too many uploads. Try again later.');
+        redirect_to(['tab' => 'import']);
+    }
     if (!isset($_FILES['csv']) || !is_array($_FILES['csv'])) {
         flash('error', 'No file uploaded.');
         redirect_to(['tab' => 'import']);
@@ -1877,12 +2184,24 @@ function handle_import_upload(PDO $pdo, array $user): void
         flash('error', 'Upload directory is not writable.');
         redirect_to(['tab' => 'import']);
     }
-    $origName = preg_replace('/[^a-zA-Z0-9._-]+/', '_', (string)($f['name'] ?? 'upload.csv'));
-    $dest = UPLOAD_DIR . DIRECTORY_SEPARATOR . 'import_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '_' . $origName;
+    $origRaw = (string)($f['name'] ?? 'upload.csv');
+    $ext = strtolower((string)pathinfo($origRaw, PATHINFO_EXTENSION));
+    if ($ext !== 'csv') {
+        flash('error', 'Only .csv files are allowed.');
+        redirect_to(['tab' => 'import']);
+    }
+    $mime = detect_mime((string)($f['tmp_name'] ?? ''));
+    if (!in_array($mime, ['text/plain', 'text/csv', 'application/csv', 'application/vnd.ms-excel'], true)) {
+        flash('error', 'Unsupported file type.');
+        redirect_to(['tab' => 'import']);
+    }
+    $origName = sanitize_filename($origRaw);
+    $dest = upload_dir() . DIRECTORY_SEPARATOR . 'import_' . date('Ymd_His') . '_' . bin2hex(random_bytes(6)) . '.csv';
     if (!move_uploaded_file((string)$f['tmp_name'], $dest)) {
         flash('error', 'Could not move uploaded file.');
         redirect_to(['tab' => 'import']);
     }
+    @chmod($dest, 0640);
     $fh = fopen($dest, 'rb');
     if (!$fh) {
         flash('error', 'Could not read uploaded file.');
@@ -2043,16 +2362,16 @@ function export_rules_json(PDO $pdo): void
 
 function json_rule_test(PDO $pdo): void
 {
+    header('Content-Type: application/json; charset=utf-8');
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         http_response_code(405);
-        echo json_encode(['error' => 'POST required']);
+        echo json_encode(['ok' => false, 'error' => 'POST required']);
         return;
     }
     $pid = (int)($_POST['_test_policyholder_id'] ?? ($_POST['policyholder_id'] ?? 0));
     $defJson = (string)($_POST['definition_json'] ?? '');
     $def = safe_json($defJson);
     if (!is_array($def) || !isset($def['conditions'], $def['actions'])) {
-        header('Content-Type: application/json; charset=utf-8');
         echo json_encode(['ok' => false, 'error' => 'Invalid rule JSON']);
         return;
     }
@@ -2128,43 +2447,166 @@ function handle_rule_toggle(PDO $pdo, array $user): void
     redirect_to(['tab' => 'rules']);
 }
 
-function is_safe_where_expr(string $expr): bool
+function compile_filter_expr(string $expr): array
 {
     $expr = trim($expr);
     if ($expr === '') {
-        return true;
+        return ['1=1', []];
     }
-    if (preg_match('/(;|--|\/\*|\*\/)/', $expr)) {
-        return false;
-    }
-    if (preg_match('/\b(select|union|pragma|attach|detach|drop|alter|insert|update|delete)\b/i', $expr)) {
-        return false;
-    }
-    if (!preg_match('/^[a-zA-Z0-9_\s\(\)\.=<>!\'\"%,+-]+$/', $expr)) {
-        return false;
-    }
+
     $allowedFields = [
-        'risk_tier', 'region', 'policy_type', 'premium_amount', 'tenure_months', 'age', 'ltv_estimate', 'confidence_score',
+        'risk_tier' => 'text',
+        'region' => 'text',
+        'policy_type' => 'text',
+        'premium_amount' => 'num',
+        'tenure_months' => 'num',
+        'age' => 'num',
+        'ltv_estimate' => 'num',
+        'confidence_score' => 'num',
     ];
-    $allowedKeywords = [
-        'and', 'or', 'not', 'like', 'in', 'is', 'null', 'between',
-    ];
-    if (preg_match_all('/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/', $expr, $m)) {
-        foreach ($m[1] as $tok) {
-            $t = strtolower($tok);
-            if (in_array($t, $allowedKeywords, true)) {
-                continue;
-            }
-            if (in_array($t, $allowedFields, true)) {
-                continue;
-            }
-            if (is_numeric($t)) {
-                continue;
-            }
-            return false;
+
+    $tokens = tokenize_filter_expr($expr);
+    $i = 0;
+    $parseExpr = null;
+
+    $expect = static function (string $type, ?string $value = null) use (&$tokens, &$i): array {
+        $t = $tokens[$i] ?? null;
+        if (!$t || $t['type'] !== $type || ($value !== null && strtoupper((string)$t['value']) !== strtoupper($value))) {
+            throw new RuntimeException('Invalid filter syntax.');
         }
+        $i++;
+        return $t;
+    };
+
+    $peek = static function () use (&$tokens, &$i): ?array {
+        return $tokens[$i] ?? null;
+    };
+
+    $parseValue = static function () use (&$expect, &$peek): array {
+        $t = $peek();
+        if (!$t) {
+            throw new RuntimeException('Missing value.');
+        }
+        if ($t['type'] === 'NUMBER') {
+            return $expect('NUMBER');
+        }
+        if ($t['type'] === 'STRING') {
+            return $expect('STRING');
+        }
+        throw new RuntimeException('Invalid value.');
+    };
+
+    $parseComparison = static function () use (&$expect, &$peek, &$parseValue, $allowedFields): array {
+        $fieldTok = $expect('IDENT');
+        $field = (string)$fieldTok['value'];
+        $fieldLower = strtolower($field);
+        if (!isset($allowedFields[$fieldLower])) {
+            throw new RuntimeException('Field not allowed.');
+        }
+        $kw = $peek();
+        if ($kw && $kw['type'] === 'KW' && strtoupper((string)$kw['value']) === 'IS') {
+            $expect('KW', 'IS');
+            $not = false;
+            $p = $peek();
+            if ($p && $p['type'] === 'KW' && strtoupper((string)$p['value']) === 'NOT') {
+                $expect('KW', 'NOT');
+                $not = true;
+            }
+            $expect('KW', 'NULL');
+            return ['sql' => $fieldLower . ' IS ' . ($not ? 'NOT ' : '') . 'NULL', 'params' => []];
+        }
+        if ($kw && $kw['type'] === 'KW' && strtoupper((string)$kw['value']) === 'IN') {
+            $expect('KW', 'IN');
+            $expect('LPAREN');
+            $vals = [];
+            $params = [];
+            while (true) {
+                $vTok = $parseValue();
+                $vals[] = '?';
+                $params[] = $vTok['parsed'];
+                $p = $peek();
+                if ($p && $p['type'] === 'COMMA') {
+                    $expect('COMMA');
+                    continue;
+                }
+                break;
+            }
+            $expect('RPAREN');
+            if (count($params) === 0 || count($params) > 50) {
+                throw new RuntimeException('Invalid IN list.');
+            }
+            return ['sql' => $fieldLower . ' IN (' . implode(',', $vals) . ')', 'params' => $params];
+        }
+        if ($kw && $kw['type'] === 'KW' && strtoupper((string)$kw['value']) === 'LIKE') {
+            $expect('KW', 'LIKE');
+            $vTok = $parseValue();
+            return ['sql' => $fieldLower . ' LIKE ?', 'params' => [$vTok['parsed']]];
+        }
+
+        $opTok = $expect('OP');
+        $op = (string)$opTok['value'];
+        if (!in_array($op, ['=', '!=', '>', '<', '>=', '<='], true)) {
+            throw new RuntimeException('Operator not allowed.');
+        }
+        $vTok = $parseValue();
+        if ($allowedFields[$fieldLower] === 'num' && !is_numeric($vTok['parsed'])) {
+            throw new RuntimeException('Numeric value required.');
+        }
+        return ['sql' => $fieldLower . ' ' . $op . ' ?', 'params' => [$vTok['parsed']]];
+    };
+
+    $parseFactor = static function () use (&$peek, &$expect, &$parseComparison, &$parseExpr): array {
+        $t = $peek();
+        if (!$t) {
+            throw new RuntimeException('Unexpected end.');
+        }
+        if ($t['type'] === 'KW' && strtoupper((string)$t['value']) === 'NOT') {
+            $expect('KW', 'NOT');
+            $inner = $parseFactor();
+            return ['sql' => '(NOT ' . $inner['sql'] . ')', 'params' => $inner['params']];
+        }
+        if ($t['type'] === 'LPAREN') {
+            $expect('LPAREN');
+            $inner = $parseExpr();
+            $expect('RPAREN');
+            return ['sql' => '(' . $inner['sql'] . ')', 'params' => $inner['params']];
+        }
+        return $parseComparison();
+    };
+
+    $parseTerm = static function () use (&$parseFactor, &$peek, &$expect): array {
+        $left = $parseFactor();
+        while (true) {
+            $t = $peek();
+            if (!$t || $t['type'] !== 'KW' || strtoupper((string)$t['value']) !== 'AND') {
+                break;
+            }
+            $expect('KW', 'AND');
+            $right = $parseFactor();
+            $left = ['sql' => '(' . $left['sql'] . ' AND ' . $right['sql'] . ')', 'params' => array_merge($left['params'], $right['params'])];
+        }
+        return $left;
+    };
+
+    $parseExpr = static function () use (&$parseTerm, &$peek, &$expect): array {
+        $left = $parseTerm();
+        while (true) {
+            $t = $peek();
+            if (!$t || $t['type'] !== 'KW' || strtoupper((string)$t['value']) !== 'OR') {
+                break;
+            }
+            $expect('KW', 'OR');
+            $right = $parseTerm();
+            $left = ['sql' => '(' . $left['sql'] . ' OR ' . $right['sql'] . ')', 'params' => array_merge($left['params'], $right['params'])];
+        }
+        return $left;
+    };
+
+    $out = $parseExpr();
+    if (($tokens[$i] ?? null) !== null) {
+        throw new RuntimeException('Unexpected token.');
     }
-    return true;
+    return [$out['sql'], $out['params']];
 }
 
 function segment_criteria(array $segRow): array
@@ -2175,16 +2617,20 @@ function segment_criteria(array $segRow): array
     }
     $ruleIds = array_values(array_unique(array_filter(array_map('intval', (array)($criteria['rule_ids'] ?? [])), fn($x) => $x > 0)));
     $where = is_string($criteria['where'] ?? null) ? trim((string)$criteria['where']) : '';
-    if ($where !== '' && !is_safe_where_expr($where)) {
-        $where = '';
-    }
     return [$ruleIds, $where];
 }
 
 function estimate_segment_size(PDO $pdo, array $ruleIds, string $where): int
 {
-    $baseWhere = $where !== '' ? $where : '1=1';
-    $baseCount = (int)$pdo->query('SELECT COUNT(*) FROM policyholders WHERE ' . $baseWhere)->fetchColumn();
+    try {
+        [$filterSql, $filterParams] = compile_filter_expr($where);
+    } catch (Throwable $e) {
+        $filterSql = '1=1';
+        $filterParams = [];
+    }
+    $stBase = $pdo->prepare('SELECT COUNT(*) FROM policyholders WHERE ' . $filterSql);
+    $stBase->execute($filterParams);
+    $baseCount = (int)$stBase->fetchColumn();
     if (!$ruleIds) {
         return $baseCount;
     }
@@ -2196,8 +2642,8 @@ function estimate_segment_size(PDO $pdo, array $ruleIds, string $where): int
     $count = 0;
     $offsetId = 0;
     while (true) {
-        $st = $pdo->prepare('SELECT * FROM policyholders WHERE id > ? AND ' . $baseWhere . ' ORDER BY id ASC LIMIT 500');
-        $st->execute([$offsetId]);
+        $st = $pdo->prepare('SELECT * FROM policyholders WHERE id > ? AND (' . $filterSql . ') ORDER BY id ASC LIMIT 500');
+        $st->execute(array_merge([$offsetId], $filterParams));
         $rows = $st->fetchAll();
         if (!$rows) {
             break;
@@ -2230,8 +2676,10 @@ function handle_segment_save(PDO $pdo, array $user): void
         flash('error', 'Segment name is required.');
         redirect_to(['tab' => 'segments']);
     }
-    if ($where !== '' && !is_safe_where_expr($where)) {
-        flash('error', 'Unsafe WHERE expression.');
+    try {
+        compile_filter_expr($where);
+    } catch (Throwable $e) {
+        flash('error', 'Unsafe filter expression.');
         redirect_to(['tab' => 'segments', 'edit' => (string)$id]);
     }
     $payload = ['rule_ids' => $ruleIds, 'where' => $where, 'mode' => 'rules_and_where'];
@@ -2266,8 +2714,10 @@ function handle_segment_estimate(PDO $pdo, array $user): void
 {
     $ruleIds = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['rule_ids'] ?? [])), fn($x) => $x > 0)));
     $where = trim((string)($_POST['where'] ?? ''));
-    if ($where !== '' && !is_safe_where_expr($where)) {
-        flash('error', 'Unsafe WHERE expression.');
+    try {
+        compile_filter_expr($where);
+    } catch (Throwable $e) {
+        flash('error', 'Unsafe filter expression.');
         redirect_to(['tab' => 'segments']);
     }
     $count = estimate_segment_size($pdo, $ruleIds, $where);
@@ -2305,7 +2755,12 @@ function export_segment_csv(PDO $pdo): void
         return;
     }
     [$ruleIds, $where] = segment_criteria($seg);
-    $baseWhere = $where !== '' ? $where : '1=1';
+    try {
+        [$filterSql, $filterParams] = compile_filter_expr($where);
+    } catch (Throwable $e) {
+        $filterSql = '1=1';
+        $filterParams = [];
+    }
     $rules = load_rules($pdo);
     $selected = array_values(array_filter($rules, fn($r) => in_array((int)($r['id'] ?? 0), $ruleIds, true)));
 
@@ -2316,8 +2771,8 @@ function export_segment_csv(PDO $pdo): void
 
     $offsetId = 0;
     while (true) {
-        $st = $pdo->prepare('SELECT * FROM policyholders WHERE id > ? AND ' . $baseWhere . ' ORDER BY id ASC LIMIT 500');
-        $st->execute([$offsetId]);
+        $st = $pdo->prepare('SELECT * FROM policyholders WHERE id > ? AND (' . $filterSql . ') ORDER BY id ASC LIMIT 500');
+        $st->execute(array_merge([$offsetId], $filterParams));
         $rows = $st->fetchAll();
         if (!$rows) {
             break;

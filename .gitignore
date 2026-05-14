@@ -1,0 +1,7 @@
+.env
+liteinsurance.db
+liteinsurance_error.log
+liteinsurance_uploads/
+*.db-wal
+*.db-shm
+.trae/
