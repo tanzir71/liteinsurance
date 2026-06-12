@@ -65,6 +65,7 @@ assert.match(landing, /\.pre-block \{[^}]*height: 128px;[^}]*overflow-x: hidden;
 assert.match(landing, /\.flex-copy \{[^}]*display: flex;[^}]*flex-direction: column;[^}]*min-height: 100%;/, 'flexibility section left column should stretch vertically');
 assert.match(landing, /\.flex-support-grid \{[^}]*margin-top: auto;/, 'flexibility section support cards should anchor to the bottom of the right column');
 assert.match(landing, /<div class="flex-copy">[\s\S]*<div class="grid grid-2 flex-support-grid">/, 'flexibility support cards should use the bottom-anchored grid class');
+assert.match(landing, /@media \(min-width: 800px\) \{ \.support-inner \{ flex-direction: row; align-items: flex-start; \} \}/, 'support CTA should align to the top of the content on desktop');
 
 const demo = read('demo.html');
 assert.match(demo, /const POLICY_COUNT = 200/, 'demo should generate a 200-policy sample');
