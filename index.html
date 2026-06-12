@@ -181,11 +181,13 @@
     .paths { display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); }
     @media (min-width: 980px) { .paths { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
     .path { background: var(--panel); padding: 24px 22px; min-width: 0; display: flex; flex-direction: column; }
+    .path-copy { min-height: 164px; }
     .path-tag { align-self: flex-start; border: 1px solid var(--border); color: var(--muted-2); padding: 4px 8px; font: 10.5px/1.4 var(--f-mono); letter-spacing: .16em; text-transform: uppercase; }
     .path-tag.rec { background: var(--acc); border-color: var(--acc); color: #fff; }
     .path h3 { margin: 14px 0 0; font-size: 16px; }
-    .path p { margin: 8px 0 16px; min-height: 88px; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
-    .pre-block { position: relative; width: 100%; height: 128px; margin: 0; padding: 14px; overflow: auto; background: var(--dk-bg); color: var(--dk-ink); font: 12px/1.65 var(--f-mono); white-space: pre; }
+    .path p { margin: 8px 0 0; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
+    .path .link { align-self: flex-start; margin-top: auto; padding-top: 18px; }
+    .pre-block { position: relative; width: 100%; height: 128px; margin: 0; padding: 14px; overflow-x: hidden; overflow-y: auto; background: var(--dk-bg); color: var(--dk-ink); font: 12px/1.65 var(--f-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
     .pre-block .c { color: #76776f; }
     details { border-top: 1px solid var(--border); }
     details:last-child { border-bottom: 1px solid var(--border); }
@@ -214,6 +216,7 @@
       .section { padding: 56px 0; }
       .stat:nth-child(2) { border-right: 0; }
       .stat:nth-child(n+3) { border-top: 1px solid var(--border-soft); }
+      .path-copy { min-height: 0; margin-bottom: 16px; }
     }
   </style>
 </head>
@@ -406,17 +409,21 @@ Preview <span class="a">--&gt;</span> Confirm import</pre>
         </div>
         <div class="paths">
           <div class="path">
-            <span class="path-tag rec">No install</span>
-            <h3>Browser demo</h3>
-            <p>Runs entirely client-side with a deterministic 200-policy seed dataset, local CSV upload for policyholder rows, editable custom fields, and visual or JSON rules saved only in the browser.</p>
+            <div class="path-copy">
+              <span class="path-tag rec">No install</span>
+              <h3>Browser demo</h3>
+              <p>Runs entirely client-side with a deterministic 200-policy seed dataset, local CSV upload for policyholder rows, editable custom fields, and visual or JSON rules saved only in the browser.</p>
+            </div>
             <pre class="pre-block"><span class="c"># nothing to install</span>
 open ./demo.html</pre>
             <a class="link" href="./demo.html">Launch demo</a>
           </div>
           <div class="path">
-            <span class="path-tag">Recommended</span>
-            <h3>Shared hosting</h3>
-            <p>Upload the single PHP file, register the first admin, then use Settings to run the setup doctor before importing real CSVs.</p>
+            <div class="path-copy">
+              <span class="path-tag">Recommended</span>
+              <h3>Shared hosting</h3>
+              <p>Upload the single PHP file, register the first admin, then use Settings to run the setup doctor before importing real CSVs.</p>
+            </div>
             <pre class="pre-block"><span class="c"># public_html/</span>
 liteinsurance.php
 
@@ -425,9 +432,11 @@ https://YOURDOMAIN/liteinsurance.php</pre>
             <a class="link" href="./docs.html#deploy">Deployment docs</a>
           </div>
           <div class="path">
-            <span class="path-tag">Local</span>
-            <h3>Developer run</h3>
-            <p>Use PHP's built-in server to test the same app locally before uploading it.</p>
+            <div class="path-copy">
+              <span class="path-tag">Local</span>
+              <h3>Developer run</h3>
+              <p>Use PHP's built-in server to test the same app locally before uploading it.</p>
+            </div>
             <pre class="pre-block">php -S 127.0.0.1:8000
 open http://127.0.0.1:8000/liteinsurance.php</pre>
             <a class="link" href="./docs.html#local">Local docs</a>

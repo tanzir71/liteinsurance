@@ -59,8 +59,9 @@ assert.match(landing, /href="\.\/compare\.html"/, 'landing should link to compar
 assert.doesNotMatch(landing, /<REPO-NAME>|Vibe-coded|border-radius:\s*(?:6|8|999)px/, 'landing should not contain placeholders or rounded prototype styling');
 assert.doesNotMatch(landing, /grid-template-columns:\s*1fr\s+1\.4fr\s+1fr/, 'evaluation cards should use equal-width columns');
 assert.match(landing, /@media \(min-width: 980px\) \{ \.paths \{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\); \} \}/, 'evaluation cards should align on three equal desktop columns');
-assert.match(landing, /\.path p \{[^}]*min-height: 88px;/, 'evaluation card descriptions should reserve equal vertical space before code blocks');
-assert.match(landing, /\.pre-block \{[^}]*height: 128px;/, 'evaluation code boxes should have equal height');
+assert.match(landing, /\.path-copy \{[^}]*min-height: 164px;/, 'evaluation card copy should reserve equal vertical space before code blocks');
+assert.match(landing, /<div class="path-copy">[\s\S]*<\/div>\s*<pre class="pre-block">/, 'evaluation card copy should be grouped above each code box');
+assert.match(landing, /\.pre-block \{[^}]*height: 128px;[^}]*overflow-x: hidden;[^}]*white-space: pre-wrap;/, 'evaluation code boxes should have equal height and avoid horizontal scrollbars');
 assert.match(landing, /\.flex-copy \{[^}]*display: flex;[^}]*flex-direction: column;[^}]*min-height: 100%;/, 'flexibility section left column should stretch vertically');
 assert.match(landing, /\.flex-support-grid \{[^}]*margin-top: auto;/, 'flexibility section support cards should anchor to the bottom of the right column');
 assert.match(landing, /<div class="flex-copy">[\s\S]*<div class="grid grid-2 flex-support-grid">/, 'flexibility support cards should use the bottom-anchored grid class');
