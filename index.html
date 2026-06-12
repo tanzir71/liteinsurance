@@ -1,500 +1,460 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LiteInsurance</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%F0%9F%9B%A1%EF%B8%8F%3C/text%3E%3C/svg%3E" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
-    <style>
-      :root{
-        --bg:#fff;
-        --text:#09090b;
-        --muted:#52525b;
-        --border:#e4e4e7;
-        --border2:#d4d4d8;
-        --ring:rgba(9,9,11,1);
-        --ringOffset:#fff;
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LiteInsurance -- Insurance LTV and Risk Segmentation in One PHP File</title>
+  <meta name="description" content="Self-hosted PHP and SQLite insurance ops app for CSV import, LTV scoring, risk rules, segments, and campaign simulation.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://tanzir71.github.io/liteinsurance/">
+  <meta property="og:title" content="LiteInsurance -- Insurance LTV and Risk Segmentation">
+  <meta property="og:description" content="Import policyholder CSVs, compute LTV, apply risk rules, build segments, and simulate campaigns in one self-hosted PHP file.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://tanzir71.github.io/liteinsurance/">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="LiteInsurance -- Insurance LTV and Risk Segmentation">
+  <meta name="twitter:description" content="A portable PHP + SQLite dashboard for insurance CSVs, risk rules, LTV, segments, and campaign simulation.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%230a0a0a'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='32' font-family='monospace' fill='%23f4f3ee'%3ELI%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "LiteInsurance",
+    "operatingSystem": "Any server running PHP 8+ with SQLite",
+    "applicationCategory": "BusinessApplication",
+    "description": "Self-hosted PHP and SQLite insurance operations dashboard for policyholder CSV import, missing-field imputation, LTV scoring, JSON risk rules, segment exports, and campaign simulation.",
+    "url": "https://tanzir71.github.io/liteinsurance/",
+    "softwareVersion": "1.0.0",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "author": { "@type": "Person", "name": "Tanzir", "url": "https://tanziro.com" }
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Does LiteInsurance send policyholder data to a cloud service?",
+        "acceptedAnswer": { "@type": "Answer", "text": "No. The production app is a PHP file backed by SQLite on your server. Imported CSV data stays in your hosting account unless you export it." }
+      },
+      {
+        "@type": "Question",
+        "name": "What do I need to run it?",
+        "acceptedAnswer": { "@type": "Answer", "text": "PHP 8 or newer with PDO SQLite enabled. It is designed for shared hosting and cPanel-style deployment." }
+      },
+      {
+        "@type": "Question",
+        "name": "Can I try it without installing PHP?",
+        "acceptedAnswer": { "@type": "Answer", "text": "Yes. The no-install demo runs in the browser with a deterministic 200-policy seed dataset, local CSV upload for policyholder rows, and an editable rules JSON editor for scoring logic." }
+      },
+      {
+        "@type": "Question",
+        "name": "Is it a full agency management system?",
+        "acceptedAnswer": { "@type": "Answer", "text": "No. LiteInsurance focuses on one slice: import, clean, score, segment, and simulate policyholder outreach from CSV data." }
       }
-      html,body{height:100%;}
-      body{
-        margin:0;
-        min-height:100vh;
-        background:var(--bg);
-        color:var(--text);
-        font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
-        -webkit-font-smoothing:antialiased;
-        -moz-osx-font-smoothing:grayscale;
-      }
-      a{color:inherit}
-      .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;}
-      .sr-only{
-        position:absolute;
-        width:1px;
-        height:1px;
-        padding:0;
-        margin:-1px;
-        overflow:hidden;
-        clip:rect(0,0,0,0);
-        white-space:nowrap;
-        border:0;
-      }
-      .skip{
-        outline:none;
-      }
-      .skip:focus{
-        position:fixed;
-        left:16px;
-        top:16px;
-        z-index:9999;
-        width:auto;
-        height:auto;
-        margin:0;
-        clip:auto;
-        white-space:normal;
-        border:1px solid var(--border2);
-        background:#fff;
-        border-radius:6px;
-        padding:10px 12px;
-        font-size:12px;
-      }
-      .header{
-        position:sticky;
-        top:0;
-        z-index:40;
-        border-bottom:1px solid var(--border);
-        background:rgba(255,255,255,0.85);
-        backdrop-filter:blur(10px);
-      }
-      .container{
-        max-width:1152px;
-        margin:0 auto;
-        padding:0 16px;
-      }
-      .bar{
-        display:flex;
-        align-items:center;
-        justify-content:space-between;
-        gap:16px;
-        padding:12px 0;
-      }
-      .brandRow{
-        display:flex;
-        align-items:center;
-        gap:12px;
-      }
-      .logo{
-        display:grid;
-        place-items:center;
-        width:36px;
-        height:36px;
-        border:1px solid var(--border);
-        border-radius:6px;
-        background:#fff;
-      }
-      .logo span{font-size:12px;}
-      .brand{
-        font-size:14px;
-        font-weight:600;
-        letter-spacing:-0.02em;
-      }
-      .nav{
-        display:flex;
-        flex-wrap:wrap;
-        align-items:center;
-        justify-content:flex-end;
-        gap:8px;
-        font-size:14px;
-      }
-      .navLink{
-        display:inline-flex;
-        height:36px;
-        align-items:center;
-        border-radius:6px;
-        padding:0 10px;
-        color:var(--muted);
-        text-decoration:none;
-        outline:none;
-      }
-      .navLink:hover{
-        background:#fafafa;
-        color:var(--text);
-      }
-      .btnPrimary{
-        display:inline-flex;
-        height:36px;
-        align-items:center;
-        border-radius:6px;
-        padding:0 12px;
-        background:var(--text);
-        color:#fff;
-        text-decoration:none;
-        font-size:14px;
-        font-weight:500;
-        outline:none;
-        transition:background .15s ease;
-      }
-      .btnPrimary:hover{background:#18181b;}
-      .btnSecondary{
-        display:inline-flex;
-        height:44px;
-        align-items:center;
-        border-radius:6px;
-        padding:0 16px;
-        border:1px solid var(--border2);
-        background:#fff;
-        color:var(--text);
-        text-decoration:none;
-        font-size:14px;
-        font-weight:500;
-        outline:none;
-        transition:background .15s ease;
-      }
-      .btnSecondary:hover{background:#fafafa;}
-      .btnHeroPrimary{
-        display:inline-flex;
-        height:44px;
-        align-items:center;
-        border-radius:6px;
-        padding:0 16px;
-        background:var(--text);
-        color:#fff;
-        text-decoration:none;
-        font-size:14px;
-        font-weight:500;
-        outline:none;
-        transition:background .15s ease;
-      }
-      .btnHeroPrimary:hover{background:#18181b;}
-      .focusRing:focus-visible{
-        box-shadow:0 0 0 2px var(--ring), 0 0 0 4px var(--ringOffset);
-      }
-      .hero{
-        position:relative;
-        overflow:hidden;
-      }
-      .heroBg{
-        pointer-events:none;
-        position:absolute;
-        inset:0;
-        background:radial-gradient(circle at top, rgba(0,0,0,0.06), transparent 55%);
-      }
-      .heroInner{
-        padding:80px 0 96px;
-      }
-      .pill{
-        display:inline-flex;
-        align-items:center;
-        gap:10px;
-        border:1px solid var(--border);
-        background:#fff;
-        border-radius:999px;
-        padding:6px 12px;
-        font-size:12px;
-        color:var(--muted);
-      }
-      h1{
-        margin:14px 0 0;
-        font-size:36px;
-        line-height:1.1;
-        font-weight:600;
-        letter-spacing:-0.03em;
-      }
-      .lead{
-        margin:16px 0 0;
-        max-width:640px;
-        font-size:16px;
-        line-height:1.6;
-        color:var(--muted);
-      }
-      .ctaRow{
-        margin-top:28px;
-        display:flex;
-        flex-wrap:wrap;
-        align-items:center;
-        gap:12px;
-      }
-      .tagRow{
-        margin-top:32px;
-        display:flex;
-        flex-wrap:wrap;
-        gap:8px;
-      }
-      .tag{
-        display:inline-flex;
-        align-items:center;
-        border:1px solid var(--border);
-        background:#fff;
-        border-radius:6px;
-        padding:6px 10px;
-        font-size:12px;
-        color:#18181b;
-      }
-      .section{
-        padding:64px 0 80px;
-      }
-      .sectionHead{
-        margin-bottom:24px;
-      }
-      .h2{
-        margin:0;
-        font-size:20px;
-        font-weight:600;
-        letter-spacing:-0.02em;
-      }
-      .sub{
-        margin-top:10px;
-        font-size:14px;
-        color:var(--muted);
-        line-height:1.5;
-      }
-      .grid4{
-        display:grid;
-        grid-template-columns:1fr;
-        gap:16px;
-      }
-      .card{
-        border:1px solid var(--border);
-        border-radius:8px;
-        background:#fff;
-        padding:16px;
-        transition:border-color .15s ease;
-      }
-      .card:hover{border-color:var(--border2);}
-      .cardTitle{
-        margin:0;
-        font-size:14px;
-        font-weight:600;
-        letter-spacing:-0.01em;
-      }
-      .cardBody{
-        margin:10px 0 0;
-        font-size:14px;
-        line-height:1.55;
-        color:var(--muted);
-      }
-      .dl{
-        border:1px solid var(--border);
-        border-radius:8px;
-        background:#fff;
-        overflow:hidden;
-      }
-      .dlGrid{
-        display:grid;
-        grid-template-columns:1fr;
-      }
-      .dlItem{
-        padding:16px;
-        border-top:1px solid var(--border);
-      }
-      .dlItem:first-child{border-top:none;}
-      dt{
-        font-size:12px;
-        font-weight:500;
-        letter-spacing:0.08em;
-        text-transform:uppercase;
-        color:var(--muted);
-      }
-      dd{
-        margin:10px 0 0;
-        font-size:14px;
-        color:var(--text);
-      }
-      .contactCard{
-        display:flex;
-        flex-direction:column;
-        align-items:flex-start;
-        justify-content:space-between;
-        gap:16px;
-        border:1px solid var(--border);
-        border-radius:8px;
-        background:#fff;
-        padding:20px;
-      }
-      .footer{
-        border-top:1px solid var(--border);
-      }
-      .footerInner{
-        padding:40px 0;
-        display:flex;
-        flex-direction:column;
-        gap:12px;
-      }
-      .footerText{
-        font-size:12px;
-        color:var(--muted);
-      }
-      .footerLinks{
-        display:flex;
-        flex-wrap:wrap;
-        gap:12px;
-        font-size:12px;
-      }
-      .footerLinks a{
-        color:var(--muted);
-        text-decoration:none;
-      }
-      .footerLinks a:hover{
-        color:var(--text);
-        text-decoration:underline;
-        text-underline-offset:4px;
-      }
-      @media (min-width:640px){
-        h1{font-size:48px;}
-        .grid4{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}
-        .dlGrid{grid-template-columns:repeat(2,minmax(0,1fr));}
-        .dlItem{border-top:none;}
-        .dlItem:nth-child(odd){border-right:1px solid var(--border);}
-        .dlItem:nth-child(n+3){border-top:1px solid var(--border);}
-      }
-      @media (min-width:1024px){
-        .grid4{grid-template-columns:repeat(4,minmax(0,1fr));}
-      }
-    </style>
-  </head>
-  <body>
-    <a href="#content" class="sr-only skip">Skip to content</a>
+    ]
+  }
+  </script>
+  <style>
+    :root {
+      --bg: #f4f3ee;
+      --bg-alt: #ebe9e1;
+      --fg: #0a0a0a;
+      --muted: #6b6b66;
+      --muted-2: #8a877e;
+      --faint: #a8a59c;
+      --border: #cfcdc4;
+      --border-soft: #e3e1d8;
+      --panel: #fbfaf6;
+      --acc: #2540ff;
+      --acc-soft: #c8d0ff;
+      --dk-bg: #0c0d0e;
+      --dk-bg-2: #131416;
+      --dk-ink: #f4f3ee;
+      --dk-mute: #8e8f88;
+      --dk-rule: #232527;
+      --f-sans: "Inter", "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+      --f-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--f-sans);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    a { color: inherit; text-decoration: none; }
+    code, pre, .mono { font-family: var(--f-mono); }
+    .container { max-width: 1152px; margin: 0 auto; padding: 0 20px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+    .skip:focus { position: fixed; left: 16px; top: 16px; z-index: 100; width: auto; height: auto; clip: auto; white-space: normal; border: 1px solid var(--fg); background: var(--bg); padding: 8px 12px; font-size: 14px; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 12px; font-family: var(--f-mono); font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+    .eyebrow::before { content: ""; width: 12px; height: 12px; background: var(--acc); flex: none; }
+    header { position: sticky; top: 0; z-index: 40; border-bottom: 1px solid var(--border); background: rgba(244, 243, 238, .92); backdrop-filter: blur(10px); }
+    header .container { max-width: 1152px; }
+    .header-inner { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .brand { display: inline-flex; align-items: center; gap: 12px; }
+    .logo { display: grid; place-items: center; width: 34px; height: 34px; background: var(--fg); color: var(--bg); font-family: var(--f-mono); font-size: 11px; letter-spacing: .05em; }
+    .brand-name { font-size: 14px; font-weight: 650; letter-spacing: -.02em; }
+    nav { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; font-size: 14px; }
+    .nav-link { display: inline-flex; height: 36px; align-items: center; padding: 0 10px; color: var(--muted); transition: background-color 120ms ease, color 120ms ease; }
+    .nav-link:hover { background: var(--bg-alt); color: var(--fg); }
+    .btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 18px; border: 1px solid var(--fg); background: transparent; color: var(--fg); font-size: 14px; font-weight: 600; font-family: var(--f-sans); transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease; }
+    .btn:hover { background: var(--fg); color: var(--bg); }
+    .header-inner .btn { min-height: 44px; padding: 0 18px; font-size: 14px; font-family: var(--f-sans); }
+    .btn-primary { background: var(--fg); color: var(--bg); }
+    .btn-primary:hover { background: var(--acc); border-color: var(--acc); color: #fff; }
+    .btn-dark { border-color: var(--dk-ink); color: var(--dk-ink); }
+    .btn-dark:hover { background: var(--dk-ink); color: var(--dk-bg); }
+    .hero { border-bottom: 1px solid var(--border); overflow: hidden; }
+    .hero-inner { padding: 86px 0 74px; }
+    .hero-grid { display: grid; grid-template-columns: 1fr; gap: 48px; align-items: start; }
+    @media (min-width: 980px) { .hero-grid { grid-template-columns: minmax(0, 11fr) minmax(0, 9fr); } }
+    h1 { margin: 22px 0 0; max-width: 720px; font-size: 44px; font-weight: 650; letter-spacing: -.035em; line-height: 1.02; text-wrap: balance; }
+    @media (min-width: 640px) { h1 { font-size: 62px; } }
+    .lead { margin: 20px 0 0; max-width: 590px; font-size: 17px; line-height: 1.7; color: var(--muted); text-wrap: pretty; }
+    .cta-row { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .stats { margin-top: 40px; display: grid; grid-template-columns: repeat(2, 1fr); border-top: 1px solid var(--border); }
+    @media (min-width: 640px) { .stats { grid-template-columns: repeat(4, 1fr); } }
+    .stat { padding: 18px 18px 14px; border-right: 1px solid var(--border-soft); }
+    .stat:first-child { padding-left: 0; }
+    .stat:last-child { border-right: 0; }
+    .stat .num { font-size: 24px; font-weight: 650; letter-spacing: -.03em; }
+    .stat .lbl { margin-top: 2px; font: 11px/1.4 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted-2); }
+    .snippet-card { border: 1px solid var(--fg); background: var(--dk-bg); color: var(--dk-ink); }
+    .snippet-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 14px; border-bottom: 1px solid var(--dk-rule); }
+    .snippet-title { color: var(--dk-mute); font: 11px/1.4 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; }
+    .snippet-body { margin: 0; padding: 18px 16px; color: var(--dk-ink); font: 13px/1.75 var(--f-mono); overflow-x: auto; white-space: pre; }
+    .snippet-body .a { color: #8fa3ff; }
+    .snippet-body .v { color: #c8d0ff; }
+    .snippet-body .c { color: #76776f; }
+    .section { padding: 72px 0; border-bottom: 1px solid var(--border); }
+    .section-head { margin-bottom: 32px; }
+    .idx { font: 12px/1.4 var(--f-mono); color: var(--faint); letter-spacing: .18em; text-transform: uppercase; }
+    h2 { margin: 10px 0 0; max-width: 760px; font-size: 28px; font-weight: 650; letter-spacing: -.03em; line-height: 1.1; text-wrap: balance; }
+    @media (min-width: 640px) { h2 { font-size: 34px; } }
+    .sub { margin: 10px 0 0; max-width: 620px; font-size: 15px; line-height: 1.65; color: var(--muted); }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); }
+    @media (min-width: 640px) { .grid-2 { grid-template-columns: repeat(2, 1fr); } }
+    @media (min-width: 980px) { .grid-3 { grid-template-columns: repeat(3, 1fr); } .grid-4 { grid-template-columns: repeat(4, 1fr); } }
+    .cell { background: var(--panel); padding: 20px; min-width: 0; }
+    .cell h3 { margin: 0; font-size: 14.5px; font-weight: 650; letter-spacing: -.01em; }
+    .cell p { margin: 8px 0 0; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
+    .cell .k { display: inline-block; margin-top: 12px; color: var(--acc); font: 11px/1.4 var(--f-mono); letter-spacing: .04em; }
+    .link { color: var(--fg); border-bottom: 1px solid var(--acc); font-weight: 600; }
+    .link:hover { color: var(--acc); }
+    .diagram-wrap { border: 1px solid var(--border); background: var(--panel); overflow-x: auto; }
+    .diagram-wrap svg { display: block; min-width: 860px; width: 100%; height: auto; }
+    .diagram-steps { display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); border-top: 0; }
+    @media (min-width: 640px) { .diagram-steps { grid-template-columns: repeat(4, 1fr); } }
+    .dstep { background: var(--panel); padding: 16px 20px; }
+    .dstep .n { font: 11px/1.4 var(--f-mono); color: var(--acc); letter-spacing: .18em; text-transform: uppercase; }
+    .dstep .t { margin-top: 6px; font-size: 14px; font-weight: 650; }
+    .dstep p { margin: 6px 0 0; font-size: 13px; line-height: 1.55; color: var(--muted); }
+    .paths { display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); }
+    @media (min-width: 980px) { .paths { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    .path { background: var(--panel); padding: 24px 22px; min-width: 0; display: flex; flex-direction: column; }
+    .path-tag { align-self: flex-start; border: 1px solid var(--border); color: var(--muted-2); padding: 4px 8px; font: 10.5px/1.4 var(--f-mono); letter-spacing: .16em; text-transform: uppercase; }
+    .path-tag.rec { background: var(--acc); border-color: var(--acc); color: #fff; }
+    .path h3 { margin: 14px 0 0; font-size: 16px; }
+    .path p { margin: 8px 0 16px; min-height: 88px; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
+    .pre-block { position: relative; width: 100%; height: 128px; margin: 0; padding: 14px; overflow: auto; background: var(--dk-bg); color: var(--dk-ink); font: 12px/1.65 var(--f-mono); white-space: pre; }
+    .pre-block .c { color: #76776f; }
+    details { border-top: 1px solid var(--border); }
+    details:last-child { border-bottom: 1px solid var(--border); }
+    summary { cursor: pointer; list-style: none; padding: 18px 0; font-weight: 650; display: flex; justify-content: space-between; gap: 16px; }
+    summary::-webkit-details-marker { display: none; }
+    summary::after { content: "+"; font-family: var(--f-mono); color: var(--acc); }
+    details[open] summary::after { content: "-"; }
+    details p { margin: -4px 0 18px; max-width: 720px; color: var(--muted); font-size: 14px; line-height: 1.65; }
+    .support { background: var(--dk-bg); color: var(--dk-ink); border-bottom: 1px solid var(--dk-rule); }
+    .support-inner { padding: 64px 0; display: flex; flex-direction: column; gap: 24px; align-items: flex-start; justify-content: space-between; }
+    @media (min-width: 800px) { .support-inner { flex-direction: row; align-items: center; } }
+    .support .eyebrow { color: var(--dk-mute); }
+    .support h2 { color: var(--dk-ink); }
+    .support p { margin: 12px 0 0; max-width: 550px; color: var(--dk-mute); font-size: 15px; line-height: 1.65; }
+    footer { padding: 40px 0 48px; }
+    .footer-inner { display: flex; flex-direction: column; gap: 14px; justify-content: space-between; }
+    @media (min-width: 640px) { .footer-inner { flex-direction: row; align-items: center; } }
+    .footer-note { margin: 0; font-size: 12px; color: var(--muted-2); }
+    .footer-links { display: flex; flex-wrap: wrap; gap: 14px; font: 12px/1.4 var(--f-mono); }
+    .footer-links a { color: var(--muted); }
+    .footer-links a:hover { color: var(--acc); }
+    @media (max-width: 760px) {
+      nav { display: none; }
+      .hero-inner { padding: 64px 0 56px; }
+      h1 { font-size: 40px; }
+      .section { padding: 56px 0; }
+      .stat:nth-child(2) { border-right: 0; }
+      .stat:nth-child(n+3) { border-top: 1px solid var(--border-soft); }
+    }
+  </style>
+</head>
+<body>
+  <a class="sr-only skip" href="#content">Skip to content</a>
+  <header>
+    <div class="container header-inner">
+      <a class="brand" href="./index.html" aria-label="LiteInsurance home">
+        <span class="logo">LI</span>
+        <span class="brand-name">LiteInsurance</span>
+      </a>
+      <nav aria-label="Primary">
+        <a class="nav-link" href="./index.html">Home</a>
+        <a class="nav-link" href="./demo.html">Demo</a>
+        <a class="nav-link" href="./docs.html">Docs</a>
+        <a class="nav-link" href="./compare.html">Compare</a>
+        <a class="btn btn-primary" href="https://github.com/tanzir71/liteinsurance" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </header>
 
-    <header class="header">
-      <div class="container">
-        <div class="bar">
-          <div class="brandRow">
-            <div class="logo"><span class="mono">LI</span></div>
-            <span class="brand">LiteInsurance</span>
-          </div>
-          <nav class="nav" aria-label="Primary">
-            <a class="navLink focusRing" href="#features">Features</a>
-            <a class="navLink focusRing" href="#tech">Tech</a>
-            <a class="navLink focusRing" href="#contact">Contact</a>
-            <a class="btnPrimary focusRing" href="liteinsurance.php">Open app</a>
-          </nav>
-        </div>
-      </div>
-    </header>
-
-    <main id="content">
-      <section class="hero">
-        <div class="heroBg"></div>
-        <div class="container">
-          <div class="heroInner">
-            <p class="pill">
-              <span class="mono">v1</span>
-              <span>Local-first • offline after setup • no cloud required</span>
-            </p>
-            <h1>Local-first risk intelligence for insurance ops.</h1>
-            <p class="lead">
-              Ingest policyholder CSVs, impute missing fields, compute LTV, evaluate JSON rules, build segments, and simulate cross-sell revenue — offline after setup.
-            </p>
-
-            <div class="ctaRow">
-              <a class="btnHeroPrimary focusRing" href="https://github.com/tanzir71/%3CREPO-NAME%3E" target="_blank" rel="noreferrer">View repo</a>
-              <a class="btnSecondary focusRing" href="#features">See workflow</a>
+  <main id="content">
+    <section class="hero">
+      <div class="container hero-inner">
+        <div class="hero-grid">
+          <div>
+            <span class="eyebrow">Insurance ops / self-hosted / PHP + SQLite</span>
+            <h1>Insurance LTV and risk segmentation in one PHP file.</h1>
+            <p class="lead">Import policyholder CSVs, impute missing fields, compute LTV, apply JSON risk rules, build exportable segments, and simulate cross-sell revenue on your own server. No SaaS bill. No customer data egress.</p>
+            <div class="cta-row">
+              <a class="btn btn-primary" href="./demo.html">Try the no-install demo</a>
+              <a class="btn" href="./docs.html">Read setup docs</a>
             </div>
-
-            <div class="tagRow">
-              <span class="tag mono">Local-first</span>
-              <span class="tag mono">Offline</span>
-              <span class="tag mono">SQLite</span>
-              <span class="tag mono">CSRF</span>
-              <span class="tag mono">Rules</span>
-              <span class="tag mono">Segments/Campaigns</span>
+            <div class="stats" aria-label="Product facts">
+              <div class="stat"><div class="num">1</div><div class="lbl">PHP file</div></div>
+              <div class="stat"><div class="num">200</div><div class="lbl">policy demo</div></div>
+              <div class="stat"><div class="num">$0</div><div class="lbl">cloud fees</div></div>
+              <div class="stat"><div class="num">0</div><div class="lbl">vendor DBs</div></div>
             </div>
           </div>
-        </div>
-      </section>
-
-      <section id="features" class="section">
-        <div class="container">
-          <div class="sectionHead">
-            <h2 class="h2">Workflow</h2>
-            <p class="sub">Import → clean → score → segment → simulate. All local by default.</p>
-          </div>
-
-          <div class="grid4">
-            <div class="card">
-              <h3 class="cardTitle">Import + impute</h3>
-              <p class="cardBody">Upload CSV, map columns, preview, and impute missing values (mean/mode/defaults) with confidence scoring.</p>
-            </div>
-            <div class="card">
-              <h3 class="cardTitle">Risk tiers</h3>
-              <p class="cardBody">Create JSON rules, test them against a record, and evaluate in priority order to set tier + tags.</p>
-            </div>
-            <div class="card">
-              <h3 class="cardTitle">Segments</h3>
-              <p class="cardBody">Combine rules and a safe filter expression, estimate size, then export segment CSV with LTV and tier.</p>
-            </div>
-            <div class="card">
-              <h3 class="cardTitle">Campaign simulator</h3>
-              <p class="cardBody">Project conversions, gross, cost, and net revenue from cross-sell assumptions before sending.</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="tech" class="section">
-        <div class="container">
-          <div class="sectionHead">
-            <h2 class="h2">Stack</h2>
-            <p class="sub">Portable single-file architecture with optional cron for scheduled recompute.</p>
-          </div>
-
-          <div class="dl">
-            <div class="dlGrid">
-              <div class="dlItem">
-                <dt>Runtime</dt>
-                <dd class="mono">PHP 8+ + sessions</dd>
+          <div>
+            <div class="snippet-card" aria-label="Fast setup snippet">
+              <div class="snippet-head">
+                <span class="snippet-title">public_html / deploy</span>
               </div>
-              <div class="dlItem">
-                <dt>Database</dt>
-                <dd class="mono">SQLite (PDO, WAL)</dd>
-              </div>
-              <div class="dlItem">
-                <dt>Security</dt>
-                <dd class="mono">CSRF + CSP + rate limits</dd>
-              </div>
-              <div class="dlItem">
-                <dt>Ops</dt>
-                <dd class="mono">cPanel cron (recompute)</dd>
-              </div>
+              <pre class="snippet-body"><span class="c"># upload one file</span>
+liteinsurance.php <span class="a">--&gt;</span> /public_html/
+
+<span class="c"># open in browser</span>
+https://yourdomain.com/<span class="v">liteinsurance.php</span>
+
+<span class="c"># first user becomes admin</span>
+Register <span class="a">--&gt;</span> Import <span class="a">--&gt;</span> Load sample
+Preview <span class="a">--&gt;</span> Confirm import</pre>
             </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="contact" class="section">
-        <div class="container">
-          <div class="sectionHead">
-            <h2 class="h2">Get involved</h2>
-            <p class="sub">Ship the MVP, then iterate with ops teams.</p>
-          </div>
-
-          <div class="contactCard">
-            <div>
-              <p style="margin:0;font-size:14px;font-weight:500;">Want this on your machine?</p>
-              <p style="margin:8px 0 0;font-size:14px;line-height:1.55;color:var(--muted);">Open an issue with your workflow, segment criteria, and target products.</p>
-            </div>
-            <a class="btnSecondary focusRing" href="https://github.com/tanzir71/%3CREPO-NAME%3E/issues" target="_blank" rel="noreferrer">Open an issue</a>
-          </div>
-        </div>
-      </section>
-    </main>
-
-    <footer class="footer">
-      <div class="container">
-        <div class="footerInner">
-          <p class="footerText">Vibe-coded with ♥ by tanziro.com</p>
-          <div class="footerLinks">
-            <a href="https://github.com/tanzir71/%3CREPO-NAME%3E" target="_blank" rel="noreferrer">GitHub</a>
-            <a href="#features">Features</a>
-            <a href="#tech">Tech</a>
-            <a href="#contact">Contact</a>
-            <a href="SETUP.md" target="_blank" rel="noopener">Docs</a>
-            <a href="SECURITY.md" target="_blank" rel="noopener">Security</a>
           </div>
         </div>
       </div>
-    </footer>
-  </body>
+    </section>
+
+    <section id="workflow" class="section">
+      <div class="container">
+        <div class="section-head">
+          <span class="idx">SYS / 01</span>
+          <h2>The whole workflow, from raw policy CSV to outreach math.</h2>
+          <p class="sub">LiteInsurance is intentionally narrow: a local-first dashboard for getting useful segmentation and revenue estimates out of imperfect policyholder exports.</p>
+        </div>
+        <div class="diagram-wrap">
+          <svg viewBox="0 0 1120 360" role="img" aria-labelledby="diagram-title diagram-desc" xmlns="http://www.w3.org/2000/svg">
+            <title id="diagram-title">LiteInsurance workflow diagram</title>
+            <desc id="diagram-desc">CSV import flows through imputation, LTV scoring, JSON risk rules, segment export, and campaign simulation.</desc>
+            <defs>
+              <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#e3e1d8" stroke-width="1"/>
+              </pattern>
+              <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+                <path d="M0,0 L10,5 L0,10 Z" fill="#0a0a0a"/>
+              </marker>
+            </defs>
+            <rect width="1120" height="360" fill="#fbfaf6"/>
+            <rect width="1120" height="360" fill="url(#grid)" opacity=".75"/>
+            <text x="28" y="34" font-family="JetBrains Mono, monospace" font-size="11" letter-spacing="2" fill="#8a877e">LI/SYS/01</text>
+            <text x="1006" y="34" font-family="JetBrains Mono, monospace" font-size="11" letter-spacing="2" fill="#8a877e">NO CLOUD LOOP</text>
+            <g font-family="Inter, Arial, sans-serif">
+              <g transform="translate(54 96)">
+                <rect width="150" height="108" fill="#f4f3ee" stroke="#0a0a0a"/>
+                <text x="18" y="34" font-size="16" font-weight="650">CSV import</text>
+                <text x="18" y="62" font-family="JetBrains Mono, monospace" font-size="11" fill="#6b6b66">map + preview</text>
+                <text x="18" y="84" font-family="JetBrains Mono, monospace" font-size="11" fill="#2540ff">policy_number</text>
+              </g>
+              <path d="M224 150 H302" stroke="#0a0a0a" stroke-width="2" marker-end="url(#arrow)"/>
+              <g transform="translate(322 96)">
+                <rect width="150" height="108" fill="#f4f3ee" stroke="#0a0a0a"/>
+                <text x="18" y="34" font-size="16" font-weight="650">Impute</text>
+                <text x="18" y="62" font-family="JetBrains Mono, monospace" font-size="11" fill="#6b6b66">mean / mode</text>
+                <text x="18" y="84" font-family="JetBrains Mono, monospace" font-size="11" fill="#2540ff">confidence_score</text>
+              </g>
+              <path d="M492 150 H570" stroke="#0a0a0a" stroke-width="2" marker-end="url(#arrow)"/>
+              <g transform="translate(590 96)">
+                <rect width="150" height="108" fill="#f4f3ee" stroke="#0a0a0a"/>
+                <text x="18" y="34" font-size="16" font-weight="650">Score</text>
+                <text x="18" y="62" font-family="JetBrains Mono, monospace" font-size="11" fill="#6b6b66">LTV + rules</text>
+                <text x="18" y="84" font-family="JetBrains Mono, monospace" font-size="11" fill="#2540ff">risk_tier</text>
+              </g>
+              <path d="M760 150 H838" stroke="#0a0a0a" stroke-width="2" marker-end="url(#arrow)"/>
+              <g transform="translate(858 76)">
+                <rect width="184" height="148" fill="#0c0d0e" stroke="#0a0a0a"/>
+                <text x="20" y="42" font-size="18" font-weight="650" fill="#f4f3ee">Segments</text>
+                <text x="20" y="72" font-family="JetBrains Mono, monospace" font-size="11" fill="#8e8f88">rules_and_where</text>
+                <text x="20" y="99" font-family="JetBrains Mono, monospace" font-size="11" fill="#c8d0ff">export CSV</text>
+                <text x="20" y="124" font-family="JetBrains Mono, monospace" font-size="11" fill="#8fa3ff">campaign ROI</text>
+              </g>
+            </g>
+          </svg>
+        </div>
+        <div class="diagram-steps">
+          <div class="dstep"><div class="n">01 / Import</div><div class="t">Map any CSV</div><p>Upload, map columns, preview imputation, then commit rows into SQLite.</p></div>
+          <div class="dstep"><div class="n">02 / Repair</div><div class="t">Expose weak data</div><p>Missing values are imputed and marked, not silently hidden.</p></div>
+          <div class="dstep"><div class="n">03 / Decide</div><div class="t">Run JSON rules</div><p>Priority-ordered rules set tiers, tags, and confidence adjustments.</p></div>
+          <div class="dstep"><div class="n">04 / Act</div><div class="t">Export and simulate</div><p>Build segments, export CSV, and model cross-sell revenue before outreach.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <div class="container">
+        <div class="section-head">
+          <span class="idx">FTR / 02</span>
+          <h2>Eight product surfaces that make the demo feel real.</h2>
+          <p class="sub">The app is compact, but it is not a static mockup. The importer, scorer, rule tester, segment builder, exports, and campaign simulator all use real local state.</p>
+        </div>
+        <div class="grid grid-2 grid-4">
+          <div class="cell"><h3>CSV mapping</h3><p>Header guessing, manual field mapping, preview rows, staged commit, and custom CSV fields preserved locally.</p><span class="k">import_stage</span></div>
+          <div class="cell"><h3>Missing-data repair</h3><p>Numeric mean, categorical mode, imputed flags, bulk repair tools.</p><span class="k">is_imputed</span></div>
+          <div class="cell"><h3>LTV model</h3><p>Premium, tenure, policy type multiplier, and retention adjustment.</p><span class="k">ltv_estimate</span></div>
+          <div class="cell"><h3>Risk rules</h3><p>JSON conditions with operators, nested all/any groups, tags, tiers.</p><span class="k">conditions_json</span></div>
+          <div class="cell"><h3>Rule tester</h3><p>Run a candidate rule against a recent policy before saving it.</p><span class="k">rule_test</span></div>
+          <div class="cell"><h3>Segments</h3><p>Combine selected rules with a validated SQL-ish filter expression.</p><span class="k">rules_and_where</span></div>
+          <div class="cell"><h3>Campaign simulator</h3><p>Model conversion rate, offer value, contact cost, and lift.</p><span class="k">net_revenue</span></div>
+          <div class="cell"><h3>Ops controls</h3><p>Audit log, CSRF, CSP, rate limits, cron recompute, backup-friendly DB, and a setup doctor validates deployment.</p><span class="k">cron_jobs</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="setup" class="section">
+      <div class="container">
+        <div class="section-head">
+          <span class="idx">RUN / 03</span>
+          <h2>Three ways to evaluate it.</h2>
+          <p class="sub">Start in the browser, then deploy the PHP app when you want to test imports, users, exports, and server-side persistence.</p>
+        </div>
+        <div class="paths">
+          <div class="path">
+            <span class="path-tag rec">No install</span>
+            <h3>Browser demo</h3>
+            <p>Runs entirely client-side with a deterministic 200-policy seed dataset, local CSV upload for policyholder rows, and editable rules JSON saved only in the browser.</p>
+            <pre class="pre-block"><span class="c"># nothing to install</span>
+open ./demo.html</pre>
+            <a class="link" href="./demo.html">Launch demo</a>
+          </div>
+          <div class="path">
+            <span class="path-tag">Recommended</span>
+            <h3>Shared hosting</h3>
+            <p>Upload the single PHP file, register the first admin, then use Settings to run the setup doctor before importing real CSVs.</p>
+            <pre class="pre-block"><span class="c"># public_html/</span>
+liteinsurance.php
+
+<span class="c"># then visit</span>
+https://YOURDOMAIN/liteinsurance.php</pre>
+            <a class="link" href="./docs.html#deploy">Deployment docs</a>
+          </div>
+          <div class="path">
+            <span class="path-tag">Local</span>
+            <h3>Developer run</h3>
+            <p>Use PHP's built-in server to test the same app locally before uploading it.</p>
+            <pre class="pre-block">php -S 127.0.0.1:8000
+open http://127.0.0.1:8000/liteinsurance.php</pre>
+            <a class="link" href="./docs.html#local">Local docs</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="trust" class="section">
+      <div class="container">
+        <div class="section-head">
+          <span class="idx">SEC / 04</span>
+          <h2>Built for sensitive policyholder data.</h2>
+          <p class="sub">LiteInsurance assumes CSVs contain private customer data, so the default architecture keeps the app small, self-hosted, and inspectable.</p>
+        </div>
+        <div class="grid grid-3">
+          <div class="cell"><h3>No vendor data loop</h3><p>Production data stays in your SQLite database and upload directory.</p><span class="k">DB_PATH / UPLOAD_DIR</span></div>
+          <div class="cell"><h3>Guarded web surface</h3><p>CSRF checks, nonce-based CSP, rate limits, upload hardening, and security headers.</p><span class="k">csrf_token</span></div>
+          <div class="cell"><h3>Operationally boring</h3><p>Back up one SQLite file, rotate one cron token, and keep uploads out of webroot when possible.</p><span class="k">CRON_TOKEN</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="faq" class="section">
+      <div class="container">
+        <div class="section-head">
+          <span class="idx">FAQ / 05</span>
+          <h2>Questions an evaluator will ask before uploading a real CSV.</h2>
+        </div>
+        <details>
+          <summary>Does LiteInsurance send policyholder data to a cloud service?</summary>
+          <p>No. The production app is a PHP file backed by SQLite on your server. Imported CSV data stays in your hosting account unless you export it.</p>
+        </details>
+        <details>
+          <summary>What are the server requirements?</summary>
+          <p>PHP 8 or newer with PDO SQLite enabled. The default setup is designed for shared hosting and cPanel-style environments.</p>
+        </details>
+        <details>
+          <summary>Can I try it before deploying PHP?</summary>
+          <p>Yes. The no-install demo starts with a deterministic 200-policy dataset, then lets you replace it with a local policyholder CSV and edit risk rules JSON for dashboards, segments, and campaign math.</p>
+        </details>
+        <details>
+          <summary>Is this a full agency management system?</summary>
+          <p>No. LiteInsurance focuses on one slice: importing policyholder exports, cleaning them, scoring LTV and risk, segmenting, and simulating outreach.</p>
+        </details>
+        <details>
+          <summary>What happens with missing CSV fields?</summary>
+          <p>Mapped numeric fields use mean imputation; mapped categorical fields use mode or defaults. Unmapped columns are retained as custom fields, and LTV/risk scoring stays blank or Unknown until the required scoring inputs are mapped.</p>
+        </details>
+        <details>
+          <summary>Can my CSV have custom fields?</summary>
+          <p>Yes. The importer uses Record ID and optional Display name mapping, while custom CSV fields preserved locally can be viewed, exported, and referenced from rules or segments with <code>custom.field_key</code>.</p>
+        </details>
+        <details>
+          <summary>How do risk rules work?</summary>
+          <p>Rules are JSON definitions with conditions and actions. Matching rules can set a risk tier, adjust confidence, and add tags for segment logic.</p>
+        </details>
+      </div>
+    </section>
+
+    <section class="support">
+      <div class="container support-inner">
+        <div>
+          <span class="eyebrow">Demo first / deploy second</span>
+          <h2>See the full insurance workflow before you touch a server.</h2>
+          <p>The browser demo shows the dashboard, policy table, risk segments, and campaign simulator with realistic sample data.</p>
+        </div>
+        <a class="btn btn-dark" href="./demo.html">Open the demo</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container footer-inner">
+      <p class="footer-note">LiteInsurance -- self-hosted insurance ops tooling by <a class="link" href="https://tanziro.com" target="_blank" rel="noopener">tanziro.com</a>.</p>
+      <div class="footer-links">
+        <a href="./docs.html">docs</a>
+        <a href="./compare.html">compare</a>
+        <a href="./demo.html">demo</a>
+        <a href="./SETUP.md">setup</a>
+        <a href="./SECURITY.md">security</a>
+        <a href="https://github.com/tanzir71/liteinsurance" target="_blank" rel="noopener">github</a>
+      </div>
+    </div>
+  </footer>
+</body>
 </html>

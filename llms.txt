@@ -1,0 +1,19 @@
+# LiteInsurance
+
+LiteInsurance is a portable, self-hosted PHP 8 + SQLite insurance operations dashboard. It imports policyholder CSV files, maps columns, imputes missing fields, computes LTV estimates, evaluates JSON risk rules, builds exportable segments, and simulates cross-sell campaign revenue.
+
+Key facts:
+- Single production file: `liteinsurance.php`
+- Runtime: PHP 8+ with PDO SQLite
+- Data store: SQLite on the user's server
+- Demo: `demo.html` runs entirely in the browser with a deterministic 200-policy demo dataset, local CSV upload for policyholder rows, rules JSON editing, and local storage for evaluation
+- Privacy posture: no vendor cloud by default; data stays in the hosting account
+- Security controls: sessions, CSRF, nonce CSP, rate limits, upload checks, audit log, security headers
+- Core workflow: Import -> Impute -> Score LTV -> Apply risk rules -> Build segments -> Export CSV -> Simulate campaign
+
+Important links:
+- Landing page: https://tanzir71.github.io/liteinsurance/
+- Browser demo: https://tanzir71.github.io/liteinsurance/demo.html
+- Docs: https://tanzir71.github.io/liteinsurance/docs.html
+- Compare: https://tanzir71.github.io/liteinsurance/compare.html
+- Source repository: https://github.com/tanzir71/liteinsurance

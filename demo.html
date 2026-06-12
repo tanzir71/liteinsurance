@@ -1,0 +1,1168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LiteInsurance Demo -- Browser-Only Policy Segmentation</title>
+  <meta name="description" content="Try LiteInsurance in the browser with seed data, local CSV upload, editable JSON risk rules, risk segments, LTV scoring, and campaign simulation.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://tanzir71.github.io/liteinsurance/demo.html">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%230a0a0a'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='32' font-family='monospace' fill='%23f4f3ee'%3ELI%3C/text%3E%3C/svg%3E">
+  <style>
+    :root {
+      --bg: #f4f3ee;
+      --bg-alt: #ebe9e1;
+      --fg: #0a0a0a;
+      --muted: #6b6b66;
+      --muted-2: #8a877e;
+      --faint: #a8a59c;
+      --border: #cfcdc4;
+      --border-soft: #e3e1d8;
+      --panel: #fbfaf6;
+      --acc: #2540ff;
+      --dk-bg: #0c0d0e;
+      --dk-bg-2: #131416;
+      --dk-ink: #f4f3ee;
+      --dk-mute: #8e8f88;
+      --dk-rule: #232527;
+      --f-sans: Inter, "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+      --f-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--f-sans); line-height: 1.5; }
+    a { color: inherit; text-decoration: none; }
+    button, input, select, textarea { font: inherit; }
+    .container { width: 100%; max-width: 1180px; margin: 0 auto; padding: 0 20px; }
+    header { position: sticky; top: 0; z-index: 20; border-bottom: 1px solid var(--border); background: rgba(244, 243, 238, .94); backdrop-filter: blur(10px); }
+    header .container { max-width: 1152px; }
+    .header-inner { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .brand { display: inline-flex; align-items: center; gap: 12px; }
+    .logo { display: grid; place-items: center; width: 34px; height: 34px; background: var(--fg); color: var(--bg); font: 11px/1 var(--f-mono); letter-spacing: .05em; }
+    .brand-name { font-size: 14px; font-weight: 650; letter-spacing: -.02em; }
+    nav { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; font-size: 14px; }
+    .nav-link { display: inline-flex; height: 36px; align-items: center; padding: 0 10px; color: var(--muted); }
+    .nav-link:hover { background: var(--bg-alt); color: var(--fg); }
+    .btn { display: inline-flex; align-items: center; justify-content: center; min-height: 38px; padding: 0 14px; border: 1px solid var(--fg); background: transparent; color: var(--fg); cursor: pointer; font-weight: 600; }
+    .btn:hover { background: var(--fg); color: var(--bg); }
+    .header-inner .btn { min-height: 44px; padding: 0 18px; font-size: 14px; font-family: var(--f-sans); }
+    .btn-primary, .btn.primary { background: var(--fg); color: var(--bg); }
+    .btn-primary:hover, .btn.primary:hover { background: var(--acc); border-color: var(--acc); color: #fff; }
+    .notice { background: var(--dk-bg); color: var(--dk-ink); border-bottom: 1px solid var(--dk-rule); }
+    .notice-inner { padding: 12px 0; display: flex; flex-wrap: wrap; gap: 10px 18px; justify-content: space-between; align-items: center; font: 12px/1.5 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; }
+    .notice-inner > * { min-width: 0; overflow-wrap: anywhere; }
+    .notice span { color: var(--dk-mute); }
+    main { padding: 34px 0 72px; }
+    .page-head { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: end; margin-bottom: 28px; }
+    .page-head > * { min-width: 0; }
+    @media (min-width: 900px) { .page-head { grid-template-columns: 1.15fr .85fr; } }
+    .eyebrow { display: inline-flex; align-items: center; gap: 12px; font: 12px/1.4 var(--f-mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+    .eyebrow::before { content: ""; width: 12px; height: 12px; background: var(--acc); }
+    h1 { margin: 18px 0 0; max-width: 720px; font-size: 42px; line-height: 1.04; letter-spacing: -.035em; font-weight: 650; text-wrap: balance; }
+    .lead { margin: 16px 0 0; max-width: 650px; color: var(--muted); line-height: 1.7; }
+    .demo-card { min-width: 0; border: 1px solid var(--border); background: var(--panel); padding: 18px; }
+    .demo-card .label { font: 11px/1.4 var(--f-mono); color: var(--muted-2); letter-spacing: .14em; text-transform: uppercase; }
+    .demo-card .big { margin-top: 10px; font-size: 28px; font-weight: 650; letter-spacing: -.03em; }
+    .tabbar { display: flex; gap: 1px; background: var(--border); border: 1px solid var(--border); overflow-x: auto; }
+    .tab { flex: 1 0 auto; min-height: 44px; border: 0; background: var(--panel); color: var(--muted); cursor: pointer; padding: 0 16px; font: 12px/1 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; }
+    .tab[aria-selected="true"] { color: var(--fg); background: var(--bg); box-shadow: inset 0 -3px 0 var(--acc); }
+    .view { display: none; border: 1px solid var(--border); border-top: 0; background: var(--panel); padding: 22px; }
+    .view.active { display: block; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); }
+    @media (min-width: 720px) { .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+    .cell { background: var(--panel); padding: 18px; min-width: 0; }
+    .metric .n { font-size: 26px; font-weight: 650; letter-spacing: -.03em; }
+    .metric .l { margin-top: 2px; font: 11px/1.4 var(--f-mono); color: var(--muted-2); letter-spacing: .1em; text-transform: uppercase; }
+    .section-title { margin: 0 0 14px; font-size: 18px; font-weight: 650; letter-spacing: -.02em; }
+    .muted { color: var(--muted); }
+    .toolbar { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 16px; }
+    @media (min-width: 760px) { .toolbar { grid-template-columns: 1fr 180px 180px auto; align-items: end; } }
+    label { display: grid; gap: 6px; color: var(--muted-2); font: 11px/1.4 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; }
+    input, select, textarea { width: 100%; min-height: 40px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); padding: 0 10px; outline: none; }
+    textarea { min-height: 300px; padding: 12px; resize: vertical; font: 12px/1.55 var(--f-mono); text-transform: none; letter-spacing: 0; }
+    input:focus, select:focus, textarea:focus { border-color: var(--fg); box-shadow: 0 0 0 2px var(--acc); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 10px 9px; border-bottom: 1px solid var(--border-soft); text-align: left; vertical-align: top; white-space: nowrap; }
+    th { color: var(--muted-2); font: 11px/1.4 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; }
+    td.right, th.right { text-align: right; }
+    .scroll { overflow-x: auto; border: 1px solid var(--border); background: var(--bg); }
+    .badge { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border: 1px solid var(--border); font: 11px/1 var(--f-mono); color: var(--fg); }
+    .badge.high { color: var(--acc); border-color: var(--acc); }
+    .chart { display: grid; gap: 12px; margin-top: 10px; }
+    .bar { display: grid; grid-template-columns: 120px 1fr 44px; gap: 10px; align-items: center; font-size: 13px; }
+    .track { height: 12px; background: var(--bg-alt); border: 1px solid var(--border-soft); }
+    .fill { display: block; height: 100%; background: var(--acc); }
+    .rule-list, .segment-list { display: grid; gap: 1px; background: var(--border); border: 1px solid var(--border); }
+    .rule, .segment { background: var(--panel); padding: 16px; display: grid; gap: 6px; }
+    .rule .code, .segment .code { font: 12px/1.6 var(--f-mono); color: var(--muted); }
+    .range-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+    @media (min-width: 820px) { .range-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+    input[type="range"] { padding: 0; accent-color: var(--acc); }
+    output { color: var(--fg); font: 12px/1.4 var(--f-mono); }
+    .editor-grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
+    @media (min-width: 940px) { .editor-grid { grid-template-columns: .82fr 1.18fr; } }
+    .action-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+    .upload-field { display: grid; gap: 6px; margin-top: 16px; }
+    .upload-label { color: var(--muted-2); font: 11px/1.4 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; }
+    .file-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-height: 54px; border: 1px solid var(--border); background: var(--bg); padding: 8px; }
+    .file-input { position: absolute; width: 1px; height: 1px; min-height: 0; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .file-trigger { min-height: 36px; padding: 0 12px; background: var(--fg); color: var(--bg); font: 13px/1 var(--f-sans); letter-spacing: 0; text-transform: none; }
+    .file-trigger:hover { background: var(--acc); border-color: var(--acc); color: #fff; }
+    .file-input:focus + .file-trigger { box-shadow: 0 0 0 2px var(--acc); }
+    .file-name { min-width: 0; flex: 1 1 180px; color: var(--muted); font: 12px/1.4 var(--f-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .status { min-height: 22px; margin: 12px 0 0; font-size: 13px; color: var(--muted); }
+    .status.success { color: #11633a; }
+    .status.error { color: #a33a2a; }
+    .schema-list { margin: 12px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+    .schema-list code { color: var(--fg); font-family: var(--f-mono); }
+    .data-health { display: grid; grid-template-columns: 1fr; gap: 1px; margin-bottom: 14px; background: var(--border); border: 1px solid var(--border); }
+    @media (min-width: 720px) { .data-health { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    .data-preview-wrap { max-height: 416px; overflow: auto; border: 1px solid var(--border); background: var(--bg); }
+    .data-preview-wrap table { min-width: 620px; }
+    .data-preview-wrap td, .data-preview-wrap th { white-space: nowrap; }
+    .results { margin-top: 18px; }
+    .note { margin: 14px 0 0; font-size: 13px; color: var(--muted); }
+    @media (max-width: 760px) {
+      nav { display: none; }
+      body { overflow-x: hidden; }
+      h1 { font-size: 36px; }
+      .notice-inner { display: grid; justify-content: stretch; letter-spacing: .06em; }
+      .page-head > div,
+      .demo-card,
+      .tabbar,
+      .view { width: calc(100vw - 40px); max-width: calc(100vw - 40px); }
+      .lead,
+      .demo-card p { max-width: calc(100vw - 40px); overflow-wrap: anywhere; }
+      .demo-card .big { font-size: 28px; }
+      .tab { min-width: 112px; }
+      .view { padding: 16px; }
+      .bar { grid-template-columns: 92px 1fr 38px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container header-inner">
+      <a class="brand" href="./index.html">
+        <span class="logo">LI</span>
+        <span class="brand-name">LiteInsurance</span>
+      </a>
+      <nav aria-label="Primary">
+        <a class="nav-link" href="./index.html">Home</a>
+        <a class="nav-link" href="./demo.html">Demo</a>
+        <a class="nav-link" href="./docs.html">Docs</a>
+        <a class="nav-link" href="./compare.html">Compare</a>
+        <a class="btn btn-primary" href="https://github.com/tanzir71/liteinsurance" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="notice">
+    <div class="container notice-inner">
+      <strong>Demo mode</strong>
+      <span>Everything below runs in this browser. No data leaves the page.</span>
+      <span id="demoDatasetLabel">Dataset: deterministic 200-policy seed sample</span>
+    </div>
+  </div>
+
+  <main>
+    <div class="container">
+      <div class="page-head">
+        <div>
+          <span class="eyebrow">No-install evaluation</span>
+          <h1>Run the insurance workflow with seed data or your own local file.</h1>
+          <p class="lead">This demo mirrors the production app's core mechanics: CSV import, missing-field imputation, LTV scoring, editable JSON risk rules, segments, CSV export, and campaign simulation.</p>
+        </div>
+        <div class="demo-card">
+          <div class="label">Evaluation flow</div>
+          <div class="big">Real data replaces the seed sample.</div>
+          <p class="muted">Upload a policyholder CSV in Data, then edit scoring logic in the Rules JSON editor. CSV rows hold people; rules JSON holds conditions and actions. The browser saves demo state locally until you reset it.</p>
+        </div>
+      </div>
+
+      <div class="tabbar" role="tablist" aria-label="Demo views">
+        <button class="tab" role="tab" aria-selected="true" data-tab="dashboard">Dashboard</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="profiles">Profiles</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="data">Data</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="rules">Rules</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="segments">Segments</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="simulator">Simulator</button>
+      </div>
+
+      <section class="view active" id="dashboard" role="tabpanel">
+        <div class="grid grid-4" id="kpis"></div>
+        <div class="grid grid-2" style="margin-top:18px;">
+          <div class="cell">
+            <h2 class="section-title">Risk tier distribution</h2>
+            <div class="chart" id="riskChart"></div>
+          </div>
+          <div class="cell">
+            <h2 class="section-title">Policy type mix</h2>
+            <div class="chart" id="typeChart"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="profiles" role="tabpanel">
+        <div class="toolbar">
+          <label>Search <input id="searchInput" type="search" placeholder="Policy number, masked name, or region"></label>
+          <label>Risk tier <select id="tierSelect"></select></label>
+          <label>Region <select id="regionSelect"></select></label>
+          <button class="btn" id="resetFilters" type="button">Reset</button>
+        </div>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>Policy</th><th>Name</th><th>Age</th><th>Type</th><th>Region</th><th class="right">Premium</th><th class="right">LTV</th><th>Tier</th><th class="right">Conf</th><th>Imputed</th></tr></thead>
+            <tbody id="policyRows"></tbody>
+          </table>
+        </div>
+        <p class="note" id="rowCount"></p>
+      </section>
+
+      <section class="view" id="data" role="tabpanel">
+        <div class="editor-grid">
+          <div>
+            <h2 class="section-title">Local data source</h2>
+            <div class="grid grid-2" id="dataSource"></div>
+            <p class="note">Real policyholder data replaces the seed sample for every dashboard, table, segment, export, and simulator result. Custom fields preserved locally. Files never leave this browser; local storage is only for this demo.</p>
+            <div class="upload-field">
+              <div class="upload-label">Upload CSV</div>
+              <div class="file-picker">
+                <input class="file-input" id="dataFile" type="file" accept=".csv,text/csv">
+                <label class="btn file-trigger" for="dataFile">Choose file</label>
+                <span class="file-name" id="dataFileName">No file selected</span>
+              </div>
+            </div>
+            <ul class="schema-list">
+              <li>Use any CSV headers. Known fields such as <code>customer_id</code>, <code>account_label</code>, <code>premium_amount</code>, and <code>tenure_months</code> map into the app; every other column is kept under <code>custom_fields</code>.</li>
+              <li>Rules can reference custom columns with <code>custom.agent_code</code> or another generated field key.</li>
+            </ul>
+            <div class="action-row">
+              <button class="btn" id="downloadDataCsv" type="button">Download current CSV</button>
+              <button class="btn" id="resetDemoData" type="button">Reset to seed</button>
+            </div>
+            <p class="status" id="dataStatus">Ready for a local CSV file. Uploaded CSV rows replace the seed sample for this browser demo.</p>
+          </div>
+          <div>
+            <h2 class="section-title">Active data preview</h2>
+            <div class="data-health" id="dataHealth"></div>
+            <div class="data-preview-wrap">
+              <table>
+                <thead><tr><th>Policy</th><th>Name</th><th>Region</th><th class="right">Premium</th><th>Tier</th></tr></thead>
+                <tbody id="dataPreview"></tbody>
+              </table>
+            </div>
+            <p class="note">Preview uses the same active rows as Profiles, Segments, exports, and the simulator.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="rules" role="tabpanel">
+        <div class="editor-grid">
+          <div>
+            <h2 class="section-title">Editable JSON risk rules</h2>
+            <div class="rule-list" id="ruleList"></div>
+            <p class="note">Apply rules JSON to rerun risk tiers against the current local CSV dataset. This editor is for scoring rules only; policyholder names belong in the uploaded CSV and table, not in rules JSON.</p>
+          </div>
+          <div>
+            <h2 class="section-title">Rules JSON editor</h2>
+            <textarea id="rulesEditor" spellcheck="false" aria-label="Rules JSON editor"></textarea>
+            <div class="action-row">
+              <button class="btn primary" id="applyRulesJson" type="button">Apply rules</button>
+              <button class="btn" id="resetRulesJson" type="button">Reset rules</button>
+            </div>
+            <p class="status" id="rulesStatus">Edit conditions and actions, then apply to recompute the demo.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="segments" role="tabpanel">
+        <h2 class="section-title">Saved segments</h2>
+        <div class="segment-list" id="segmentList"></div>
+        <p class="note">Exports use the same policy rows shown in this demo. The PHP app streams real CSV from SQLite.</p>
+      </section>
+
+      <section class="view" id="simulator" role="tabpanel">
+        <h2 class="section-title">Campaign simulator</h2>
+        <div class="range-grid">
+          <label>Segment <select id="simSegment"></select></label>
+          <label>Cross-sell rate <input id="simRate" type="range" min="1" max="18" value="6"><output id="simRateOut"></output></label>
+          <label>Offer value <input id="simValue" type="range" min="250" max="2500" step="50" value="1200"><output id="simValueOut"></output></label>
+          <label>Contact cost <input id="simCost" type="range" min="1" max="12" step="0.5" value="2.5"><output id="simCostOut"></output></label>
+        </div>
+        <div class="grid grid-4 results" id="simResults"></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+  (function () {
+    'use strict';
+
+    const POLICY_COUNT = 200;
+    const LOCAL_DEMO_STORAGE_KEY = 'liteinsurance.demo.localData.v1';
+    const LOCAL_RULES_STORAGE_KEY = 'liteinsurance.demo.rules.v1';
+    const EXPECTED_POLICY_TERM_MONTHS = 120;
+    const RETENTION_ADJUSTMENT = 0.85;
+    const MULTIPLIER_BY_TYPE = { term: 1.06, health: 1.10, auto: 1.04, life: 1.08 };
+    const POLICY_FIELDS = ['policy_number', 'name', 'dob', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured'];
+    const NUMERIC_FIELDS = new Set(['age', 'premium_amount', 'tenure_months', 'sum_assured']);
+    const HEADER_ALIASES = {
+      policy: 'policy_number',
+      id: 'policy_number',
+      customer_id: 'policy_number',
+      client_id: 'policy_number',
+      account_id: 'policy_number',
+      member_id: 'policy_number',
+      policy_id: 'policy_number',
+      policy_no: 'policy_number',
+      policy_number: 'policy_number',
+      customer: 'name',
+      customer_name: 'name',
+      account_label: 'name',
+      full_name: 'name',
+      client_name: 'name',
+      date_of_birth: 'dob',
+      birth_date: 'dob',
+      product: 'policy_type',
+      type: 'policy_type',
+      plan: 'policy_type',
+      state: 'region',
+      territory: 'region',
+      premium: 'premium_amount',
+      monthly_premium: 'premium_amount',
+      tenure: 'tenure_months',
+      term_months: 'tenure_months',
+      months_active: 'tenure_months',
+      sum_insured: 'sum_assured',
+      face_amount: 'sum_assured',
+      coverage_amount: 'sum_assured'
+    };
+    const DEFAULT_RULES = [
+      {
+        id: 1,
+        name: 'High premium + long tenure = Low',
+        priority: 50,
+        enabled: true,
+        logic: 'AND',
+        conditions: [
+          { field: 'premium_amount', op: '>=', value: 140 },
+          { field: 'tenure_months', op: '>=', value: 36 }
+        ],
+        actions: { set_risk_tier: 'Low', score_delta: -10, add_tag: 'high_value_loyal' }
+      },
+      {
+        id: 2,
+        name: 'Low premium + short tenure = Review',
+        priority: 70,
+        enabled: true,
+        logic: 'AND',
+        conditions: [
+          { field: 'premium_amount', op: '<', value: 75 },
+          { field: 'tenure_months', op: '<', value: 8 }
+        ],
+        actions: { set_risk_tier: 'Review', score_delta: -15, add_tag: 'thin_file_review' }
+      },
+      {
+        id: 3,
+        name: 'Large exposure term/life = Medium',
+        priority: 90,
+        enabled: true,
+        logic: 'AND',
+        conditions: [
+          { field: 'sum_assured', op: '>=', value: 90000 },
+          { field: 'policy_type', op: 'in', value: ['term', 'life'] }
+        ],
+        actions: { set_risk_tier: 'Medium', score_delta: 5, add_tag: 'large_exposure' }
+      },
+      {
+        id: 4,
+        name: 'Senior + short tenure = High',
+        priority: 120,
+        enabled: true,
+        logic: 'AND',
+        conditions: [
+          { field: 'age', op: '>=', value: 58 },
+          { field: 'tenure_months', op: '<', value: 24 },
+          { field: 'policy_type', op: 'in', value: ['term', 'health'] }
+        ],
+        actions: { set_risk_tier: 'High', score_delta: 20, add_tag: 'senior_short_tenure' }
+      }
+    ];
+
+    let seed = 71371n;
+    function rand() {
+      seed = (seed * 1103515245n + 12345n) % 2147483648n;
+      return Number(seed) / 2147483648;
+    }
+    function pick(list) {
+      return list[Math.floor(rand() * list.length)];
+    }
+    function chance(pct) {
+      return rand() < pct;
+    }
+    function money(n) {
+      return '$' + Math.round(Number(n) || 0).toLocaleString();
+    }
+    function exactMoney(n) {
+      if (n === null || n === undefined || n === '') return '';
+      return '$' + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    function pct(n) {
+      return (n * 100).toFixed(1) + '%';
+    }
+    function maskName(name) {
+      return String(name || 'Unknown').split(' ').map((part) => part.slice(0, 1) + '*'.repeat(Math.max(2, part.length - 1))).join(' ');
+    }
+    function esc(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+    function setStatus(id, message, type) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.className = 'status' + (type ? ' ' + type : '');
+      el.textContent = message;
+    }
+    function dobFromAge(age, i) {
+      const month = String((i % 12) + 1).padStart(2, '0');
+      const day = String((i % 27) + 1).padStart(2, '0');
+      return `${2026 - age}-${month}-${day}`;
+    }
+    function mode(values) {
+      const counts = new Map();
+      values.filter(Boolean).forEach((v) => counts.set(v, (counts.get(v) || 0) + 1));
+      return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    }
+    function mean(values) {
+      const nums = values.filter((v) => Number.isFinite(v));
+      return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
+    }
+    function safeJsonParse(text) {
+      try {
+        return JSON.parse(text);
+      } catch (error) {
+        return null;
+      }
+    }
+    function storageGet(key) {
+      try {
+        return window.localStorage.getItem(key);
+      } catch (error) {
+        return null;
+      }
+    }
+    function storageSet(key, value) {
+      try {
+        window.localStorage.setItem(key, value);
+        return true;
+      } catch (error) {
+        return false;
+      }
+    }
+    function storageRemove(key) {
+      try {
+        window.localStorage.removeItem(key);
+      } catch (error) {
+        return false;
+      }
+      return true;
+    }
+    function numberOrNull(value) {
+      if (value === null || value === undefined || value === '') return null;
+      const n = Number(String(value).replace(/[$,]/g, '').trim());
+      return Number.isFinite(n) ? n : null;
+    }
+    function normalizeKey(key) {
+      return String(key || '').replace(/^\uFEFF/, '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    }
+    function customFieldKey(key, used = {}) {
+      let base = normalizeKey(key) || 'custom_field';
+      const reserved = new Set([...POLICY_FIELDS, 'custom', 'metadata', 'risk_tier', 'ltv_estimate', 'confidence_score', 'is_imputed']);
+      if (reserved.has(base)) base = 'csv_' + base;
+      let out = base;
+      let i = 2;
+      while (used[out]) {
+        out = `${base}_${i}`;
+        i += 1;
+      }
+      used[out] = true;
+      return out;
+    }
+    function inferCustomFieldType(value) {
+      const raw = String(value ?? '').trim();
+      if (!raw) return null;
+      if (/^(true|false|yes|no)$/i.test(raw)) return 'bool';
+      if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return 'date';
+      if (numberOrNull(raw) !== null) return 'number';
+      return 'text';
+    }
+    function mergeCustomType(current, next) {
+      if (!next) return current || 'text';
+      if (!current || current === next) return next;
+      return 'text';
+    }
+    function parseCustomValue(value, type) {
+      const raw = String(value ?? '').trim();
+      if (!raw) return '';
+      if (type === 'number') return numberOrNull(raw);
+      if (type === 'bool') return /^(true|yes|1)$/i.test(raw);
+      return raw;
+    }
+    function resolveField(key) {
+      const normalized = normalizeKey(key);
+      return HEADER_ALIASES[normalized] || (POLICY_FIELDS.includes(normalized) ? normalized : '');
+    }
+    function normalizePolicyRow(row, index) {
+      const mapped = {};
+      Object.entries(row || {}).forEach(([key, value]) => {
+        if (key === 'custom_fields') return;
+        const field = resolveField(key);
+        if (field) mapped[field] = value;
+      });
+      const custom_fields = row && typeof row.custom_fields === 'object' && row.custom_fields ? { ...row.custom_fields } : {};
+      const policyNumber = String(mapped.policy_number ?? '').trim() || 'LOCAL-' + String(index + 1).padStart(4, '0');
+      const out = {
+        policy_number: policyNumber,
+        name: String(mapped.name ?? '').trim() || policyNumber,
+        dob: String(mapped.dob ?? '').trim(),
+        gender: String(mapped.gender ?? '').trim(),
+        policy_type: String(mapped.policy_type ?? '').trim().toLowerCase(),
+        region: String(mapped.region ?? '').trim(),
+        age: numberOrNull(mapped.age),
+        premium_amount: numberOrNull(mapped.premium_amount),
+        tenure_months: numberOrNull(mapped.tenure_months),
+        sum_assured: numberOrNull(mapped.sum_assured),
+        custom_fields
+      };
+      if (out.age !== null) out.age = Math.round(out.age);
+      if (out.tenure_months !== null) out.tenure_months = Math.round(out.tenure_months);
+      return out;
+    }
+    function normalizePolicyRows(rows) {
+      if (!Array.isArray(rows)) {
+        throw new Error('Expected policy data to be an array of rows.');
+      }
+      return rows.map((row, index) => normalizePolicyRow(row, index)).filter((row) => row.policy_number || row.name);
+    }
+
+    function generatePolicies() {
+      seed = 71371n;
+      const first = ['Asha', 'Noah', 'Maria', 'Li', 'Sam', 'Nadia', 'Omar', 'Priya', 'Ethan', 'Mina', 'Jon', 'Sara', 'Imran', 'Elena', 'Grace', 'Kenji'];
+      const last = ['Rahman', 'Kim', 'Silva', 'Wei', 'Patel', 'Chowdhury', 'Hassan', 'Mitra', 'Brooks', 'Sato', 'Reed', 'Stone', 'Khan', 'Garcia', 'Miller', 'Tan'];
+      const types = ['term', 'term', 'health', 'health', 'auto', 'life', 'life'];
+      const regions = ['West', 'West', 'North', 'South', 'South', 'East', 'Central'];
+      const genders = ['F', 'M', 'F', 'M', ''];
+      const rows = [];
+      for (let i = 1; i <= POLICY_COUNT; i++) {
+        const policy_type = pick(types);
+        const region = pick(regions);
+        const age = 22 + Math.floor(Math.min(rand(), rand()) * 55);
+        const tenure = Math.floor(Math.min(rand(), rand()) * 96);
+        const typeBase = { term: 118, health: 104, auto: 82, life: 150 }[policy_type];
+        const premium = Math.max(38, typeBase + (age - 42) * 0.9 + tenure * 0.45 + Math.floor(rand() * 42) - 18);
+        const sumAssured = { term: 72000, health: 34000, auto: 21000, life: 98000 }[policy_type] + Math.floor(rand() * 36000);
+        rows.push({
+          policy_number: 'P-' + String(3000 + i).padStart(4, '0'),
+          name: pick(first) + ' ' + pick(last),
+          dob: chance(0.08) ? '' : dobFromAge(age, i),
+          age: chance(0.07) ? null : age,
+          gender: chance(0.10) ? '' : pick(genders),
+          policy_type: chance(0.08) ? '' : policy_type,
+          region: chance(0.11) ? '' : region,
+          premium_amount: chance(0.09) ? null : Math.round(premium * 100) / 100,
+          tenure_months: chance(0.08) ? null : tenure,
+          sum_assured: chance(0.06) ? null : sumAssured
+        });
+      }
+      return rows;
+    }
+
+    function preparePolicies(raw) {
+      const hasValue = (field) => raw.some((r) => r[field] !== null && r[field] !== undefined && r[field] !== '');
+      const defaults = {
+        premium_amount: hasValue('premium_amount') ? mean(raw.map((r) => r.premium_amount)) : null,
+        tenure_months: hasValue('tenure_months') ? Math.round(mean(raw.map((r) => r.tenure_months))) : null,
+        sum_assured: hasValue('sum_assured') ? mean(raw.map((r) => r.sum_assured)) : null,
+        policy_type: hasValue('policy_type') ? (mode(raw.map((r) => r.policy_type)) || 'term') : '',
+        region: hasValue('region') ? (mode(raw.map((r) => r.region)) || 'Unknown') : '',
+        gender: hasValue('gender') ? (mode(raw.map((r) => r.gender)) || 'F') : ''
+      };
+      const hasAgeSignal = hasValue('age') || hasValue('dob');
+      return raw.map((row) => {
+        const p = { ...row, imputed_fields: [] };
+        if (p.age == null && p.dob) {
+          p.age = 2026 - Number(String(p.dob).slice(0, 4));
+          p.imputed_fields.push('age');
+        }
+        ['premium_amount', 'tenure_months', 'sum_assured', 'policy_type', 'region', 'gender'].forEach((field) => {
+          if ((p[field] == null || p[field] === '') && defaults[field] !== null && defaults[field] !== '') {
+            p[field] = defaults[field];
+            p.imputed_fields.push(field);
+          }
+        });
+        if (p.age == null && hasAgeSignal) {
+          p.age = 44;
+          p.imputed_fields.push('age');
+        }
+        p.premium_amount = p.premium_amount == null || p.premium_amount === '' ? null : Number(p.premium_amount);
+        p.tenure_months = p.tenure_months == null || p.tenure_months === '' ? null : Number(p.tenure_months);
+        p.sum_assured = p.sum_assured == null || p.sum_assured === '' ? null : Number(p.sum_assured);
+        p.confidence_score = Math.max(0, Math.min(100, 100 - p.imputed_fields.length * 10));
+        p.ltv_estimate = computeLtv(p);
+        const riskOut = evaluateRulesForRecord(p);
+        p.risk_tier = riskOut.risk_tier || 'Unknown';
+        p.rule_hits = riskOut.rule_hits;
+        p.tags = riskOut.tags;
+        p.confidence_score = Math.max(0, Math.min(100, p.confidence_score + Math.min(20, p.rule_hits.length * 4)));
+        p.is_imputed = p.imputed_fields.length > 0 ? 1 : 0;
+        p.masked_name = maskName(p.name);
+        return p;
+      });
+    }
+
+    function computeLtv(p) {
+      if (p.premium_amount == null || p.tenure_months == null || !p.policy_type) return null;
+      const remaining = Math.max(0, EXPECTED_POLICY_TERM_MONTHS - p.tenure_months);
+      const mult = MULTIPLIER_BY_TYPE[p.policy_type] || 1.05;
+      return Math.round(p.premium_amount * remaining * mult * RETENTION_ADJUSTMENT * 100) / 100;
+    }
+
+    const SEGMENTS = [
+      { name: 'High-risk senior review', code: "risk_tier = 'High' OR age >= 63", filter: (p) => p.risk_tier === 'High' || p.age >= 63 },
+      { name: 'Health cross-sell candidates', code: "policy_type = 'health' AND ltv_estimate > 6000", filter: (p) => p.policy_type === 'health' && p.ltv_estimate > 6000 },
+      { name: 'Data repair queue', code: 'confidence_score < 80 OR is_imputed = 1', filter: (p) => p.confidence_score < 80 || p.imputed_fields.length > 0 },
+      { name: 'High LTV loyalists', code: "ltv_estimate > 9000 AND tenure_months >= 30", filter: (p) => p.ltv_estimate > 9000 && p.tenure_months >= 30 }
+    ];
+    let rawPolicies = [];
+    let policies = [];
+    let rules = cloneRules(DEFAULT_RULES);
+    let datasetMeta = {
+      source: 'seed',
+      label: 'Seed sample data',
+      filename: 'deterministic seed',
+      savedAt: ''
+    };
+
+    function cloneRules(input) {
+      return JSON.parse(JSON.stringify(input));
+    }
+    function sortedRules() {
+      return cloneRules(rules).sort((a, b) => Number(a.priority || 0) - Number(b.priority || 0) || Number(a.id || 0) - Number(b.id || 0));
+    }
+    function extractRulesFromJson(value) {
+      if (Array.isArray(value)) return value;
+      if (value && Array.isArray(value.rules)) return value.rules;
+      throw new Error('Rules JSON must be an array, or contain a rules array.');
+    }
+    function parseCsv(text) {
+      const rows = [];
+      let row = [];
+      let field = '';
+      let inQuotes = false;
+      const input = String(text || '').replace(/^\uFEFF/, '');
+      for (let i = 0; i < input.length; i++) {
+        const ch = input[i];
+        if (ch === '"') {
+          if (inQuotes && input[i + 1] === '"') {
+            field += '"';
+            i++;
+          } else {
+            inQuotes = !inQuotes;
+          }
+          continue;
+        }
+        if (ch === ',' && !inQuotes) {
+          row.push(field);
+          field = '';
+          continue;
+        }
+        if ((ch === '\n' || ch === '\r') && !inQuotes) {
+          if (ch === '\r' && input[i + 1] === '\n') i++;
+          row.push(field);
+          if (row.some((cell) => String(cell).trim() !== '')) rows.push(row);
+          row = [];
+          field = '';
+          continue;
+        }
+        field += ch;
+      }
+      row.push(field);
+      if (row.some((cell) => String(cell).trim() !== '')) rows.push(row);
+      return rows;
+    }
+    function csvToRows(text) {
+      const matrix = parseCsv(text);
+      if (matrix.length < 2) throw new Error('CSV needs a header row and at least one policy row.');
+      const rawHeaders = matrix[0].map((header) => String(header || '').replace(/^\uFEFF/, '').trim());
+      const used = {};
+      const columns = rawHeaders.map((header) => {
+        const field = resolveField(header);
+        return { header, field, customKey: field ? '' : customFieldKey(header, used), type: null };
+      });
+      matrix.slice(1).forEach((line) => {
+        columns.forEach((col, index) => {
+          if (!col.customKey) return;
+          col.type = mergeCustomType(col.type, inferCustomFieldType(line[index] ?? ''));
+        });
+      });
+      return matrix.slice(1).map((line) => {
+        const row = {};
+        const custom = {};
+        columns.forEach((col, index) => {
+          const value = line[index] ?? '';
+          if (col.field) {
+            row[col.field] = value;
+          } else if (String(value).trim() !== '') {
+            custom[col.customKey] = parseCustomValue(value, col.type);
+          }
+        });
+        row.custom_fields = custom;
+        return row;
+      });
+    }
+    function normalizeRule(rule, index) {
+      const parsedConditions = typeof rule.conditions_json === 'string' ? safeJsonParse(rule.conditions_json) : rule.conditions_json;
+      const parsedActions = typeof rule.actions_json === 'string' ? safeJsonParse(rule.actions_json) : rule.actions_json;
+      const conditionsPayload = parsedConditions && typeof parsedConditions === 'object' ? parsedConditions : {};
+      const conditions = Array.isArray(rule.conditions) ? rule.conditions : (Array.isArray(conditionsPayload.conditions) ? conditionsPayload.conditions : []);
+      const actions = rule.actions && typeof rule.actions === 'object' ? rule.actions : (parsedActions && typeof parsedActions === 'object' ? parsedActions : {});
+      return {
+        id: Number(rule.id) || index + 1,
+        name: String(rule.name || 'Local rule ' + String(index + 1)),
+        priority: Number(rule.priority ?? ((index + 1) * 10)),
+        enabled: rule.enabled === undefined ? true : !(rule.enabled === false || Number(rule.enabled) === 0),
+        logic: String(rule.logic || conditionsPayload.logic || 'AND').toUpperCase() === 'OR' ? 'OR' : 'AND',
+        conditions,
+        actions
+      };
+    }
+    function normalizeRules(input) {
+      const normalized = extractRulesFromJson(input).map(normalizeRule);
+      if (!normalized.length) throw new Error('At least one rule is required.');
+      return normalized;
+    }
+    function compareScalar(a, b) {
+      const an = numberOrNull(a);
+      const bn = numberOrNull(b);
+      if (an !== null && bn !== null) return an === bn ? 0 : (an > bn ? 1 : -1);
+      return String(a ?? '').trim().toLowerCase().localeCompare(String(b ?? '').trim().toLowerCase());
+    }
+    function valueForField(record, field) {
+      if (String(field || '').startsWith('custom.')) {
+        const key = String(field).slice(7);
+        return record.custom_fields ? record.custom_fields[key] : undefined;
+      }
+      return record[field];
+    }
+    function evalConditionLeaf(record, condition) {
+      const field = String(condition.field || '');
+      const op = String(condition.op || '').trim().toLowerCase();
+      const value = condition.value;
+      if (!field || !op) return false;
+      const left = valueForField(record, field);
+      if (op === '=' || op === '==') return compareScalar(left, value) === 0;
+      if (op === '!=') return compareScalar(left, value) !== 0;
+      if (op === '>') return Number(left) > Number(value);
+      if (op === '<') return Number(left) < Number(value);
+      if (op === '>=') return Number(left) >= Number(value);
+      if (op === '<=') return Number(left) <= Number(value);
+      if (op === 'in') return Array.isArray(value) && value.map((v) => String(v).toLowerCase()).includes(String(left ?? '').toLowerCase());
+      if (op === 'contains') return String(left ?? '').toLowerCase().includes(String(value ?? '').toLowerCase());
+      if (op === 'regex') {
+        try {
+          return new RegExp(String(value), 'i').test(String(left ?? ''));
+        } catch (error) {
+          return false;
+        }
+      }
+      return false;
+    }
+    function evalConditions(record, payload) {
+      const logic = String(payload.logic || 'AND').toUpperCase();
+      const items = Array.isArray(payload) ? payload : (Array.isArray(payload.conditions) ? payload.conditions : []);
+      if (!items.length) return false;
+      const results = items.map((condition) => {
+        if (condition && Array.isArray(condition.all)) return evalConditions(record, { logic: 'AND', conditions: condition.all });
+        if (condition && Array.isArray(condition.any)) return evalConditions(record, { logic: 'OR', conditions: condition.any });
+        return evalConditionLeaf(record, condition || {});
+      });
+      return logic === 'OR' ? results.some(Boolean) : results.every(Boolean);
+    }
+    function evaluateRulesForRecord(record) {
+      let riskTier = 'Medium';
+      const hits = [];
+      const tags = [];
+      sortedRules().forEach((rule) => {
+        if (!rule.enabled) return;
+        if (!evalConditions(record, { logic: rule.logic, conditions: rule.conditions })) return;
+        hits.push(rule.id);
+        if (typeof rule.actions.set_risk_tier === 'string' && rule.actions.set_risk_tier) riskTier = rule.actions.set_risk_tier;
+        if (typeof rule.actions.add_tag === 'string' && rule.actions.add_tag) tags.push(rule.actions.add_tag);
+      });
+      return { risk_tier: riskTier, rule_hits: hits, tags: Array.from(new Set(tags)) };
+    }
+    function conditionToCode(condition) {
+      if (condition && Array.isArray(condition.all)) return '(' + condition.all.map(conditionToCode).join(' AND ') + ')';
+      if (condition && Array.isArray(condition.any)) return '(' + condition.any.map(conditionToCode).join(' OR ') + ')';
+      const value = Array.isArray(condition.value) ? '(' + condition.value.join(', ') + ')' : JSON.stringify(condition.value);
+      return `${condition.field || '?'} ${String(condition.op || '?').toUpperCase()} ${value}`;
+    }
+    function ruleCode(rule) {
+      const joiner = rule.logic === 'OR' ? ' OR ' : ' AND ';
+      return (rule.conditions || []).map(conditionToCode).join(joiner) || 'No conditions';
+    }
+    function persistDemoData() {
+      return storageSet(LOCAL_DEMO_STORAGE_KEY, JSON.stringify({ rows: rawPolicies, datasetMeta }));
+    }
+    function persistRules() {
+      return storageSet(LOCAL_RULES_STORAGE_KEY, JSON.stringify(rules));
+    }
+    function recomputePolicies() {
+      policies = preparePolicies(rawPolicies);
+    }
+    function syncRulesEditor() {
+      document.getElementById('rulesEditor').value = JSON.stringify(sortedRules(), null, 2);
+    }
+    function applyUserRows(rows, meta) {
+      const normalized = normalizePolicyRows(rows);
+      if (!normalized.length) throw new Error('No usable policy rows found.');
+      rawPolicies = normalized;
+      datasetMeta = {
+        source: 'local',
+        label: meta?.label || 'Local real data',
+        filename: meta?.filename || 'uploaded CSV',
+        savedAt: new Date().toISOString()
+      };
+      recomputePolicies();
+      const saved = persistDemoData();
+      renderAll({ preserveFilters: false });
+      setStatus('dataStatus', `Applied ${policies.length.toLocaleString()} policies. Real policyholder data replaces the seed sample; custom CSV fields are preserved locally${saved ? ' and saved for this browser.' : ' for this page; local storage is unavailable.'}`, saved ? 'success' : '');
+    }
+    function resetDemoData() {
+      storageRemove(LOCAL_DEMO_STORAGE_KEY);
+      rawPolicies = generatePolicies();
+      datasetMeta = { source: 'seed', label: 'Seed sample data', filename: 'deterministic seed', savedAt: '' };
+      recomputePolicies();
+      renderAll({ preserveFilters: false });
+      setStatus('dataStatus', 'Reset complete. The deterministic seed sample is active again.', 'success');
+    }
+    function applyRules(inputRules, message) {
+      rules = normalizeRules(inputRules);
+      recomputePolicies();
+      const saved = persistRules();
+      syncRulesEditor();
+      renderAll({ preserveFilters: true });
+      setStatus('rulesStatus', message || `Applied ${rules.length} rules and recomputed current policies${saved ? '.' : '; local storage is unavailable.'}`, saved ? 'success' : '');
+    }
+    function resetRules() {
+      storageRemove(LOCAL_RULES_STORAGE_KEY);
+      rules = cloneRules(DEFAULT_RULES);
+      recomputePolicies();
+      syncRulesEditor();
+      renderAll({ preserveFilters: true });
+      setStatus('rulesStatus', 'Rules reset to the production-style sample set.', 'success');
+    }
+    function initState() {
+      const savedRules = safeJsonParse(storageGet(LOCAL_RULES_STORAGE_KEY) || '');
+      if (savedRules) {
+        try {
+          rules = normalizeRules(savedRules);
+        } catch (error) {
+          rules = cloneRules(DEFAULT_RULES);
+        }
+      }
+      const savedData = safeJsonParse(storageGet(LOCAL_DEMO_STORAGE_KEY) || '');
+      if (savedData && Array.isArray(savedData.rows)) {
+        try {
+          rawPolicies = normalizePolicyRows(savedData.rows);
+          datasetMeta = {
+            source: 'local',
+            label: savedData.datasetMeta?.label || 'Local real data',
+            filename: savedData.datasetMeta?.filename || 'saved browser data',
+            savedAt: savedData.datasetMeta?.savedAt || ''
+          };
+        } catch (error) {
+          rawPolicies = generatePolicies();
+        }
+      } else {
+        rawPolicies = generatePolicies();
+      }
+      recomputePolicies();
+    }
+
+    function countBy(rows, field) {
+      return rows.reduce((acc, row) => {
+        acc[row[field]] = (acc[row[field]] || 0) + 1;
+        return acc;
+      }, {});
+    }
+
+    function renderKpis() {
+      const scored = policies.filter((p) => p.ltv_estimate != null);
+      const avgLtv = scored.length ? scored.reduce((sum, p) => sum + p.ltv_estimate, 0) / scored.length : null;
+      const high = policies.filter((p) => p.risk_tier === 'High').length;
+      const imputed = policies.filter((p) => p.imputed_fields.length > 0).length;
+      const html = [
+        ['Policyholders', policies.length.toLocaleString()],
+        ['Average LTV', avgLtv == null ? 'Not scored' : money(avgLtv)],
+        ['High-risk', high.toLocaleString()],
+        ['Imputed records', imputed.toLocaleString()]
+      ].map(([label, value]) => `<div class="cell metric"><div class="n">${value}</div><div class="l">${label}</div></div>`).join('');
+      document.getElementById('kpis').innerHTML = html;
+    }
+
+    function renderChart(id, data) {
+      const max = Math.max(...Object.values(data), 1);
+      document.getElementById(id).innerHTML = Object.entries(data)
+        .sort((a, b) => b[1] - a[1])
+        .map(([label, value]) => `<div class="bar"><span>${esc(label)}</span><div class="track"><span class="fill" style="width:${Math.round(value / max * 100)}%"></span></div><strong>${value}</strong></div>`)
+        .join('');
+    }
+
+    function unique(field) {
+      return Array.from(new Set(policies.map((p) => p[field]))).sort();
+    }
+
+    function populateFilters(options = {}) {
+      const tierSelect = document.getElementById('tierSelect');
+      const regionSelect = document.getElementById('regionSelect');
+      const prevTier = options.preserveFilters ? tierSelect.value : '';
+      const prevRegion = options.preserveFilters ? regionSelect.value : '';
+      tierSelect.innerHTML = '<option value="">All tiers</option>' + unique('risk_tier').map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+      regionSelect.innerHTML = '<option value="">All regions</option>' + unique('region').map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+      if (prevTier && unique('risk_tier').includes(prevTier)) tierSelect.value = prevTier;
+      if (prevRegion && unique('region').includes(prevRegion)) regionSelect.value = prevRegion;
+      const simSegment = document.getElementById('simSegment');
+      const prevSegment = options.preserveFilters ? simSegment.value : '';
+      simSegment.innerHTML = SEGMENTS.map((s, i) => `<option value="${i}">${esc(s.name)}</option>`).join('');
+      if (prevSegment) simSegment.value = prevSegment;
+    }
+
+    function filteredPolicies() {
+      const q = document.getElementById('searchInput').value.trim().toLowerCase();
+      const tier = document.getElementById('tierSelect').value;
+      const region = document.getElementById('regionSelect').value;
+      return policies.filter((p) => {
+        const customHay = Object.values(p.custom_fields || {}).join(' ');
+        const hay = [p.policy_number, p.masked_name, p.region, p.policy_type, customHay].join(' ').toLowerCase();
+        return (!q || hay.includes(q)) && (!tier || p.risk_tier === tier) && (!region || p.region === region);
+      });
+    }
+
+    function renderPolicies() {
+      const rows = filteredPolicies();
+      document.getElementById('policyRows').innerHTML = rows.slice(0, 35).map((p) => `
+        <tr>
+          <td>${p.policy_number}</td>
+          <td>${esc(p.masked_name)}</td>
+          <td>${p.age ?? ''}</td>
+          <td>${esc(p.policy_type)}</td>
+          <td>${esc(p.region)}</td>
+          <td class="right">${exactMoney(p.premium_amount)}</td>
+          <td class="right">${exactMoney(p.ltv_estimate)}</td>
+          <td><span class="badge ${p.risk_tier === 'High' ? 'high' : ''}">${esc(p.risk_tier)}</span></td>
+          <td class="right">${p.confidence_score}</td>
+          <td>${p.imputed_fields.length ? esc(p.imputed_fields.join(', ')) : 'No'}</td>
+        </tr>
+      `).join('');
+      document.getElementById('rowCount').textContent = `Showing ${Math.min(rows.length, 35)} of ${rows.length} matching policies.`;
+    }
+
+    function renderRules() {
+      document.getElementById('ruleList').innerHTML = sortedRules().map((rule, i) => {
+        const hits = policies.filter((p) => evalConditions(p, { logic: rule.logic, conditions: rule.conditions })).length;
+        const action = rule.actions.set_risk_tier ? `sets ${rule.actions.set_risk_tier}` : 'no tier action';
+        return `<div class="rule"><strong>${String(i + 1).padStart(2, '0')} / ${esc(rule.name)}</strong><span class="code">${esc(ruleCode(rule))}</span><span class="muted">${hits} policies match / priority ${esc(rule.priority)} / ${esc(action)}${rule.enabled ? '' : ' / disabled'}.</span></div>`;
+      }).join('');
+    }
+
+    function segmentRows(index) {
+      return policies.filter(SEGMENTS[index].filter);
+    }
+
+    function customFieldKeysFromRows(rows) {
+      return Array.from(rows.reduce((set, row) => {
+        Object.keys(row.custom_fields || {}).forEach((key) => set.add(key));
+        return set;
+      }, new Set())).sort();
+    }
+
+    function exportValue(row, header) {
+      if (header.startsWith('custom.')) {
+        return row.custom_fields ? row.custom_fields[header.slice(7)] : '';
+      }
+      return row[header] ?? '';
+    }
+
+    function downloadSegmentCsv(index) {
+      const rows = segmentRows(index);
+      const customKeys = customFieldKeysFromRows(rows);
+      const headers = ['policy_number', 'name', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'ltv_estimate', 'risk_tier', 'confidence_score'].concat(customKeys.map((key) => 'custom.' + key));
+      const csv = [headers.join(',')].concat(rows.map((p) => headers.map((h) => JSON.stringify(exportValue(p, h))).join(','))).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = SEGMENTS[index].name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+    window.downloadSegmentCsv = downloadSegmentCsv;
+
+    function renderSegments() {
+      document.getElementById('segmentList').innerHTML = SEGMENTS.map((segment, i) => {
+        const rows = segmentRows(i);
+        const scored = rows.filter((p) => p.ltv_estimate != null);
+        const avg = scored.length ? scored.reduce((sum, p) => sum + p.ltv_estimate, 0) / scored.length : null;
+        return `<div class="segment">
+          <strong>${segment.name}</strong>
+          <span class="code">${esc(segment.code)}</span>
+          <span class="muted">${rows.length} policies / average LTV ${avg == null ? 'not scored' : money(avg)}</span>
+          <span><button class="btn" type="button" data-export-segment="${i}">Export CSV</button></span>
+        </div>`;
+      }).join('');
+    }
+
+    function renderSimulator() {
+      const segmentIndex = Number(document.getElementById('simSegment').value || 0);
+      const rate = Number(document.getElementById('simRate').value) / 100;
+      const offer = Number(document.getElementById('simValue').value);
+      const cost = Number(document.getElementById('simCost').value);
+      const rows = segmentRows(segmentIndex);
+      const contacts = rows.length;
+      const conversions = contacts * rate;
+      const gross = conversions * offer;
+      const totalCost = contacts * cost;
+      const net = gross - totalCost;
+      document.getElementById('simRateOut').value = pct(rate);
+      document.getElementById('simValueOut').value = money(offer);
+      document.getElementById('simCostOut').value = exactMoney(cost);
+      document.getElementById('simResults').innerHTML = [
+        ['Contacts', contacts.toLocaleString()],
+        ['Expected conversions', conversions.toFixed(1)],
+        ['Gross revenue', money(gross)],
+        ['Net revenue', money(net)]
+      ].map(([label, value]) => `<div class="cell metric"><div class="n">${value}</div><div class="l">${label}</div></div>`).join('');
+    }
+    function renderDataSource() {
+      const source = datasetMeta.source === 'seed' ? 'Seed sample' : 'Local real data';
+      const saved = datasetMeta.savedAt ? new Date(datasetMeta.savedAt).toLocaleString() : 'Not saved';
+      document.getElementById('dataSource').innerHTML = [
+        ['Source', source],
+        ['Rows active', policies.length.toLocaleString()],
+        ['File', datasetMeta.filename || 'None'],
+        ['Saved', saved]
+      ].map(([label, value]) => `<div class="cell metric"><div class="n">${esc(value)}</div><div class="l">${esc(label)}</div></div>`).join('');
+      document.getElementById('demoDatasetLabel').textContent = datasetMeta.source === 'seed'
+        ? 'Dataset: deterministic 200-policy seed sample'
+        : `Dataset: local real data (${policies.length.toLocaleString()} policies)`;
+    }
+    function renderDataPreview() {
+      const imputed = policies.filter((p) => p.imputed_fields.length > 0).length;
+      const highRisk = policies.filter((p) => p.risk_tier === 'High').length;
+      const avgConfidence = policies.length ? Math.round(policies.reduce((sum, p) => sum + p.confidence_score, 0) / policies.length) : 0;
+      const customCount = customFieldKeysFromRows(policies).length;
+      document.getElementById('dataHealth').innerHTML = [
+        ['Imputed', imputed.toLocaleString()],
+        ['High risk', highRisk.toLocaleString()],
+        ['Avg conf', String(avgConfidence)],
+        ['Custom fields', customCount.toLocaleString()]
+      ].map(([label, value]) => `<div class="cell metric"><div class="n">${esc(value)}</div><div class="l">${esc(label)}</div></div>`).join('');
+      document.getElementById('dataPreview').innerHTML = policies.slice(0, 10).map((p) => `
+        <tr>
+          <td>${esc(p.policy_number)}</td>
+          <td>${esc(p.masked_name)}</td>
+          <td>${esc(p.region)}</td>
+          <td class="right">${exactMoney(p.premium_amount)}</td>
+          <td><span class="badge ${p.risk_tier === 'High' ? 'high' : ''}">${esc(p.risk_tier)}</span></td>
+        </tr>
+      `).join('');
+    }
+    function renderAll(options = {}) {
+      renderKpis();
+      renderChart('riskChart', countBy(policies, 'risk_tier'));
+      renderChart('typeChart', countBy(policies, 'policy_type'));
+      populateFilters(options);
+      renderPolicies();
+      renderRules();
+      renderSegments();
+      renderSimulator();
+      renderDataSource();
+      renderDataPreview();
+    }
+    async function handleDataFile(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      document.getElementById('dataFileName').textContent = file.name;
+      try {
+        const text = await file.text();
+        const rows = csvToRows(text);
+        applyUserRows(rows, { label: 'Uploaded real data', filename: file.name });
+      } catch (error) {
+        setStatus('dataStatus', error.message || 'Could not load file.', 'error');
+      } finally {
+        event.target.value = '';
+      }
+    }
+    function downloadCurrentCsv() {
+      const customKeys = customFieldKeysFromRows(rawPolicies);
+      const headers = POLICY_FIELDS.concat(customKeys.map((key) => 'custom.' + key));
+      const csv = [headers.join(',')]
+        .concat(rawPolicies.map((p) => headers.map((field) => JSON.stringify(exportValue(p, field))).join(',')))
+        .join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = datasetMeta.source === 'seed' ? 'liteinsurance_seed_policies.csv' : 'liteinsurance_local_policies.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+    function applyRulesEditor() {
+      try {
+        const parsed = JSON.parse(document.getElementById('rulesEditor').value);
+        applyRules(parsed);
+      } catch (error) {
+        setStatus('rulesStatus', error.message || 'Invalid rules JSON.', 'error');
+      }
+    }
+
+    function bindEvents() {
+      document.querySelectorAll('.tab').forEach((tab) => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', 'false'));
+          document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
+          tab.setAttribute('aria-selected', 'true');
+          document.getElementById(tab.dataset.tab).classList.add('active');
+        });
+      });
+      ['searchInput', 'tierSelect', 'regionSelect'].forEach((id) => document.getElementById(id).addEventListener('input', renderPolicies));
+      document.getElementById('resetFilters').addEventListener('click', () => {
+        document.getElementById('searchInput').value = '';
+        document.getElementById('tierSelect').value = '';
+        document.getElementById('regionSelect').value = '';
+        renderPolicies();
+      });
+      ['simSegment', 'simRate', 'simValue', 'simCost'].forEach((id) => document.getElementById(id).addEventListener('input', renderSimulator));
+      document.getElementById('dataFile').addEventListener('change', handleDataFile);
+      document.getElementById('resetDemoData').addEventListener('click', resetDemoData);
+      document.getElementById('downloadDataCsv').addEventListener('click', downloadCurrentCsv);
+      document.getElementById('applyRulesJson').addEventListener('click', applyRulesEditor);
+      document.getElementById('resetRulesJson').addEventListener('click', resetRules);
+      document.getElementById('segmentList').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-export-segment]');
+        if (!button) return;
+        downloadSegmentCsv(Number(button.dataset.exportSegment));
+      });
+    }
+
+    initState();
+    syncRulesEditor();
+    renderAll();
+    bindEvents();
+  })();
+  </script>
+</body>
+</html>

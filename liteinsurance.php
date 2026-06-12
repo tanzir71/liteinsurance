@@ -21,7 +21,7 @@ Customize here
 const APP_NAME = 'LiteInsurance';
 const DB_PATH = __DIR__ . DIRECTORY_SEPARATOR . 'liteinsurance.db';
 const UPLOAD_DIR = __DIR__ . DIRECTORY_SEPARATOR . 'liteinsurance_uploads';
-const ACCENT_COLOR = '#1A73E8';
+const ACCENT_COLOR = '#2540ff';
 const CURRENCY_SYMBOL = '$';
 const SESSION_TIMEOUT_SECONDS = 30 * 60;
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -45,13 +45,8 @@ const REGISTER_RATE_LIMIT_MAX = 4;
 const REGISTER_RATE_LIMIT_WINDOW_SECONDS = 60 * 60;
 const IMPORT_RATE_LIMIT_MAX = 6;
 const IMPORT_RATE_LIMIT_WINDOW_SECONDS = 10 * 60;
-
-const SAMPLE_CSV = "policy_number,name,dob,gender,policy_type,region,premium_amount,tenure_months,sum_assured\n"
-    . "P-1001,Asha Rahman,1962-03-11,F,term,West,120.50,14,50000\n"
-    . "P-1002,Noah Kim,1987-10-05,M,health,North,89.00,8,25000\n"
-    . "P-1003,Maria Silva,,F,life,East,145.25,40,75000\n"
-    . "P-1004,Li Wei,1959-07-21,M,term,,110.00,6,45000\n"
-    . "P-1005,Sam Patel,1994-01-17,,auto,South,,12,18000\n";
+const SAMPLE_POLICY_COUNT = 200;
+const SAMPLE_RANDOM_SEED = 71371;
 
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
@@ -103,10 +98,6 @@ if (PHP_SAPI !== 'cli') {
     send_security_headers((string)$GLOBALS['CSP_NONCE']);
 }
 
-session_init();
-$pdo = db();
-migrate($pdo);
-
 $action = (string)($_GET['action'] ?? ($_POST['action'] ?? ''));
 if ($action === '' && PHP_SAPI === 'cli') {
     $map = cli_kv($argv ?? []);
@@ -117,9 +108,25 @@ if ($action === '' && PHP_SAPI === 'cli') {
 }
 
 if ($action === 'download_sample_csv') {
-    download_text('liteinsurance_sample.csv', SAMPLE_CSV, 'text/csv; charset=utf-8');
+    download_text('liteinsurance_sample.csv', sample_csv(), 'text/csv; charset=utf-8');
     exit;
 }
+
+session_init();
+try {
+    $pdo = db();
+    migrate($pdo);
+} catch (Throwable $e) {
+    li_log('setup.boot_error', [
+        'type' => get_class($e),
+        'message' => $e->getMessage(),
+        'db_path' => db_path(),
+        'upload_dir' => upload_dir(),
+    ]);
+    render_boot_setup_error($e);
+    exit;
+}
+
 if ($action === 'cron_jobs') {
     run_cron_jobs($pdo);
     exit;
@@ -162,7 +169,18 @@ function session_init(): void
 
 function db(): PDO
 {
-    $pdo = new PDO('sqlite:' . db_path(), null, null, [
+    if (!extension_loaded('pdo') || !extension_loaded('pdo_sqlite')) {
+        throw new RuntimeException('PDO SQLite is not enabled for this PHP runtime.');
+    }
+    $path = db_path();
+    $dir = dirname($path);
+    if (!is_dir($dir)) {
+        throw new RuntimeException('SQLite database directory does not exist: ' . $dir);
+    }
+    if ((is_file($path) && !is_writable($path)) || (!is_file($path) && !is_writable($dir))) {
+        throw new RuntimeException('SQLite database path is not writable: ' . $path);
+    }
+    $pdo = new PDO('sqlite:' . $path, null, null, [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES => false,
@@ -248,6 +266,17 @@ function migrate(PDO $pdo): void
         . "created_at TEXT NOT NULL\n"
         . ")");
 
+    $pdo->exec("CREATE TABLE IF NOT EXISTS custom_field_defs (\n"
+        . "id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+        . "field_key TEXT UNIQUE NOT NULL,\n"
+        . "label TEXT NOT NULL,\n"
+        . "source_header TEXT NOT NULL,\n"
+        . "field_type TEXT NOT NULL DEFAULT 'text',\n"
+        . "enabled INTEGER NOT NULL DEFAULT 1,\n"
+        . "created_at TEXT NOT NULL,\n"
+        . "updated_at TEXT NOT NULL\n"
+        . ")");
+
     $pdo->exec("CREATE TABLE IF NOT EXISTS rate_limits (\n"
         . "bucket TEXT PRIMARY KEY,\n"
         . "hits INTEGER NOT NULL,\n"
@@ -258,6 +287,7 @@ function migrate(PDO $pdo): void
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_policyholders_risk_tier ON policyholders(risk_tier)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_policyholders_region ON policyholders(region)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_custom_field_defs_enabled ON custom_field_defs(enabled, field_key)');
 }
 
 function route_web(PDO $pdo): void
@@ -629,13 +659,13 @@ function render_tab_dashboard(PDO $pdo): void
 {
     $total = (int)$pdo->query('SELECT COUNT(*) FROM policyholders')->fetchColumn();
     $segments = (int)$pdo->query('SELECT COUNT(*) FROM segments')->fetchColumn();
-    $avgLtv = (float)$pdo->query('SELECT COALESCE(AVG(ltv_estimate), 0) FROM policyholders')->fetchColumn();
+    $avgLtvRaw = $pdo->query('SELECT AVG(ltv_estimate) FROM policyholders')->fetchColumn();
     $highRisk = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE risk_tier = 'High'")->fetchColumn();
 
     echo '<div class="kpiGrid">';
     echo kpi('Total policyholders', (string)$total);
     echo kpi('Segments', (string)$segments);
-    echo kpi('Avg LTV', CURRENCY_SYMBOL . number_format($avgLtv, 2));
+    echo kpi('Avg LTV', money_or_blank($avgLtvRaw === null ? null : (float)$avgLtvRaw));
     echo kpi('High-risk', (string)$highRisk);
     echo '</div>';
 
@@ -655,7 +685,7 @@ function render_tab_dashboard(PDO $pdo): void
     $top = $pdo->query('SELECT policy_number, name, region, ltv_estimate, risk_tier, confidence_score FROM policyholders ORDER BY ltv_estimate DESC LIMIT 8')->fetchAll();
     echo '<table class="table"><thead><tr><th>Policy</th><th>Name</th><th>Region</th><th class="right">LTV</th><th>Tier</th><th class="right">Conf</th></tr></thead><tbody>';
     foreach ($top as $r) {
-        echo '<tr><td>' . h((string)$r['policy_number']) . '</td><td>' . h(mask_name((string)$r['name'])) . '</td><td>' . h((string)($r['region'] ?? '')) . '</td><td class="right">' . h(CURRENCY_SYMBOL . number_format((float)($r['ltv_estimate'] ?? 0), 2)) . '</td><td>' . h((string)($r['risk_tier'] ?? 'Unknown')) . '</td><td class="right">' . h((string)($r['confidence_score'] ?? 0)) . '</td></tr>';
+        echo '<tr><td>' . h((string)$r['policy_number']) . '</td><td>' . h(mask_name((string)$r['name'])) . '</td><td>' . h((string)($r['region'] ?? '')) . '</td><td class="right">' . h(money_or_blank($r['ltv_estimate'] ?? null)) . '</td><td>' . h((string)($r['risk_tier'] ?? 'Unknown')) . '</td><td class="right">' . h((string)($r['confidence_score'] ?? 0)) . '</td></tr>';
     }
     if (!$top) {
         echo '<tr><td colspan="6" class="muted">No data yet.</td></tr>';
@@ -704,7 +734,7 @@ function render_tab_import(PDO $pdo): void
     echo '<input class="input" type="file" name="csv" accept=".csv,text/csv" required>';
     echo '<button class="btn" type="submit">Upload</button>';
     echo '</form></div>';
-    echo '<div class="card"><div class="h2">Missing data strategy</div><ul class="list"><li>Numeric: mean</li><li>Categorical: mode</li><li>Imputed tracked in metadata + <code>is_imputed</code></li></ul></div>';
+    echo '<div class="card"><div class="h2">Missing data strategy</div><ul class="list"><li>Mapped numeric fields: mean imputation</li><li>Mapped categorical fields: mode imputation</li><li>Unmapped CSV columns: preserved in <code>metadata.custom_fields</code></li><li>Scoring requires mapped premium, tenure, and policy type; otherwise LTV stays blank and risk remains Unknown.</li></ul></div>';
     echo '</div>';
 
     if (is_array($stage) && isset($stage['headers'], $stage['path'])) {
@@ -753,9 +783,10 @@ function render_tab_profiles(PDO $pdo): void
     $st->execute($args);
     $total = (int)$st->fetchColumn();
 
-    $st = $pdo->prepare('SELECT policy_number, name, age, policy_type, region, ltv_estimate, risk_tier, confidence_score, is_imputed FROM policyholders ' . $whereSql . ' ORDER BY id DESC LIMIT ' . (int)$limit . ' OFFSET ' . (int)$offset);
+    $st = $pdo->prepare('SELECT policy_number, name, age, policy_type, region, ltv_estimate, risk_tier, confidence_score, is_imputed, metadata FROM policyholders ' . $whereSql . ' ORDER BY id DESC LIMIT ' . (int)$limit . ' OFFSET ' . (int)$offset);
     $st->execute($args);
     $rows = $st->fetchAll();
+    $customDefs = $pdo->query('SELECT field_key, label FROM custom_field_defs WHERE enabled = 1 ORDER BY field_key ASC LIMIT 4')->fetchAll();
 
     echo '<div class="card"><div class="h2">Policyholders</div>';
     echo '<form method="get" class="form"><input type="hidden" name="tab" value="profiles">';
@@ -766,23 +797,33 @@ function render_tab_profiles(PDO $pdo): void
     echo '</form>';
 
     echo '<div class="muted">Showing ' . h((string)count($rows)) . ' of ' . h((string)$total) . '.</div>';
-    echo '<div class="scrollX"><table class="table"><thead><tr><th>Policy</th><th>Name</th><th>Age</th><th>Type</th><th>Region</th><th class="right">LTV</th><th>Tier</th><th class="right">Conf</th><th>Imputed</th></tr></thead><tbody>';
+    echo '<div class="scrollX"><table class="table"><thead><tr><th>Record / Policy ID</th><th>Display name</th><th>Age</th><th>Type</th><th>Region</th><th class="right">LTV</th><th>Tier</th><th class="right">Conf</th><th>Imputed</th>';
+    foreach ($customDefs as $def) {
+        echo '<th>' . h((string)$def['label']) . '</th>';
+    }
+    echo '</tr></thead><tbody>';
     foreach ($rows as $r) {
         $low = (int)$r['confidence_score'] < 60;
+        $meta = safe_json((string)($r['metadata'] ?? '{}'));
+        $custom = is_array($meta['custom_fields'] ?? null) ? (array)$meta['custom_fields'] : [];
         echo '<tr class="' . ($low ? 'rowLow' : '') . '">';
         echo '<td>' . h((string)$r['policy_number']) . '</td>';
         echo '<td>' . h(mask_name((string)$r['name'])) . '</td>';
         echo '<td>' . h((string)($r['age'] ?? '')) . '</td>';
         echo '<td>' . h((string)($r['policy_type'] ?? '')) . '</td>';
         echo '<td>' . h((string)($r['region'] ?? '')) . '</td>';
-        echo '<td class="right">' . h(CURRENCY_SYMBOL . number_format((float)($r['ltv_estimate'] ?? 0), 2)) . '</td>';
+        echo '<td class="right">' . h(money_or_blank($r['ltv_estimate'] ?? null)) . '</td>';
         echo '<td>' . h((string)($r['risk_tier'] ?? 'Unknown')) . '</td>';
         echo '<td class="right">' . h((string)($r['confidence_score'] ?? 0)) . '</td>';
         echo '<td>' . ((int)$r['is_imputed'] === 1 ? '<span class="badge">Yes</span>' : '<span class="badge mutedBadge">No</span>') . '</td>';
+        foreach ($customDefs as $def) {
+            $v = $custom[(string)$def['field_key']] ?? '';
+            echo '<td>' . h(is_bool($v) ? ($v ? 'true' : 'false') : (string)$v) . '</td>';
+        }
         echo '</tr>';
     }
     if (!$rows) {
-        echo '<tr><td colspan="9" class="muted">No policyholders found.</td></tr>';
+        echo '<tr><td colspan="' . h((string)(9 + count($customDefs))) . '" class="muted">No policyholders found.</td></tr>';
     }
     echo '</tbody></table></div>';
 
@@ -862,7 +903,7 @@ function render_tab_rules(PDO $pdo): void
     echo '<div class="grid2"><div><label class="label">Priority</label><input class="input" type="number" name="priority" min="0" max="1000" value="' . h((string)$priority) . '"></div>';
     echo '<div><label class="label">Enabled</label><select class="select" name="enabled"><option value="1"' . ($enabled === 1 ? ' selected' : '') . '>Yes</option><option value="0"' . ($enabled === 0 ? ' selected' : '') . '>No</option></select></div></div>';
     echo '<label class="label">Rule JSON</label><textarea class="textarea" name="definition_json" rows="12" spellcheck="false">' . h((string)$json) . '</textarea>';
-    echo '<div class="muted tiny">Ops: =, !=, &gt;, &lt;, &gt;=, &lt;=, in, contains, regex. Group: {"all": [...]} / {"any": [...]} in conditions.</div>';
+    echo '<div class="muted tiny">Ops: =, !=, &gt;, &lt;, &gt;=, &lt;=, in, contains, regex. Use custom CSV fields as custom.agent_code. Group: {"all": [...]} / {"any": [...]} in conditions.</div>';
     echo '<button class="btn" type="submit">Save rule</button>';
 
     echo '<div class="divider"></div><div class="h2">Test a rule</div>';
@@ -941,7 +982,7 @@ function render_tab_segments(PDO $pdo): void
     }
     echo '</div>';
     echo '<label class="label">Optional WHERE-style filter</label><input class="input" name="where" maxlength="400" value="' . h((string)$criteria['where']) . '">';
-    echo '<div class="muted tiny">Allowed fields: risk_tier, region, policy_type, premium_amount, tenure_months, age, ltv_estimate, confidence_score.</div>';
+    echo '<div class="muted tiny">Allowed fields: risk_tier, region, policy_type, premium_amount, tenure_months, age, ltv_estimate, confidence_score, plus custom.field_key such as custom.renewal_probability.</div>';
     echo '<div class="actionsRow"><button class="btn" type="submit" name="action" value="segment_save">Save segment</button><button class="btnSecondary" type="submit" name="action" value="segment_estimate">Estimate size</button></div>';
     echo '</form></div>';
     echo '</div>';
@@ -1012,6 +1053,125 @@ function render_tab_settings(PDO $pdo): void
     echo '<div class="muted tiny">If <code>CRON_TOKEN</code> is blank, cron runs only via CLI.</div>';
     echo '</div>';
     echo '</div>';
+
+    echo '<div class="card"><div class="h2">Setup doctor</div><div class="muted">Checks the self-hosted PHP workflow: PHP, PDO SQLite, DB path, upload path, upload limits, .env, CRON_TOKEN, and cron readiness.</div>';
+    echo render_setup_doctor_table(setup_doctor_report());
+    echo '</div>';
+}
+
+function setup_doctor_report(?Throwable $bootError = null): array
+{
+    $checks = [];
+    $add = static function (string $label, string $status, string $detail, string $fix = '') use (&$checks): void {
+        $checks[] = ['label' => $label, 'status' => $status, 'detail' => $detail, 'fix' => $fix];
+    };
+
+    if ($bootError) {
+        $add('App boot', 'fail', $bootError->getMessage(), 'Fix the failed requirement below, then reload the app.');
+    } else {
+        $add('App boot', 'ok', 'The PHP app booted and connected to SQLite.');
+    }
+
+    $add('PHP version', PHP_VERSION_ID >= 80000 ? 'ok' : 'fail', PHP_VERSION, 'Use PHP 8.0 or newer.');
+    $add('PDO SQLite', extension_loaded('pdo_sqlite') ? 'ok' : 'fail', extension_loaded('pdo_sqlite') ? 'Enabled' : 'Missing', 'Enable the pdo_sqlite extension in your hosting control panel.');
+
+    $db = db_path();
+    $dbDir = dirname($db);
+    $dbWritable = is_file($db) ? is_writable($db) : (is_dir($dbDir) && is_writable($dbDir));
+    $add('SQLite path', $dbWritable ? 'ok' : 'fail', $db, 'Make the directory writable, or set DB_PATH in .env.');
+    $add('SQLite location', path_inside_app_dir($db) ? 'warn' : 'ok', path_inside_app_dir($db) ? 'Database is inside the app folder.' : 'Database is outside the app folder.', 'Move DB_PATH outside public_html when hosting allows.');
+
+    $up = upload_dir();
+    $upWritable = (is_dir($up) && is_writable($up)) || (!is_dir($up) && is_dir(dirname($up)) && is_writable(dirname($up)));
+    $add('Upload path', $upWritable ? 'ok' : 'fail', $up, 'Make this directory writable, or set UPLOAD_DIR in .env.');
+    $add('Upload location', path_inside_app_dir($up) ? 'warn' : 'ok', path_inside_app_dir($up) ? 'Uploads are inside the app folder.' : 'Uploads are outside the app folder.', 'Move UPLOAD_DIR outside public_html when hosting allows.');
+
+    $uploadMax = ini_bytes((string)ini_get('upload_max_filesize'));
+    $postMax = ini_bytes((string)ini_get('post_max_size'));
+    $limit = min($uploadMax > 0 ? $uploadMax : MAX_UPLOAD_BYTES, $postMax > 0 ? $postMax : MAX_UPLOAD_BYTES);
+    $uploadOk = $limit >= MAX_UPLOAD_BYTES;
+    $add('Upload limits', $uploadOk ? 'ok' : 'warn', 'upload_max_filesize=' . (string)ini_get('upload_max_filesize') . ', post_max_size=' . (string)ini_get('post_max_size'), 'Raise both limits above ' . bytes_label(MAX_UPLOAD_BYTES) . ' for large CSV imports.');
+
+    $envPath = __DIR__ . DIRECTORY_SEPARATOR . '.env';
+    $add('.env file', is_file($envPath) ? 'ok' : 'warn', is_file($envPath) ? 'Found' : 'Not found', 'Copy .env.example to .env when you need DB_PATH, UPLOAD_DIR, or CRON_TOKEN overrides.');
+    $cron = cfg('CRON_TOKEN', CRON_TOKEN);
+    $cronOk = strlen($cron) >= 24 && $cron !== 'change-me-please-32chars-min';
+    $add('CRON_TOKEN', $cronOk ? 'ok' : 'warn', $cronOk ? 'Configured' : 'Blank or placeholder', 'Set a long random CRON_TOKEN before enabling web cron.');
+    $add('Cron command', 'ok', 'php /home/USER/public_html/liteinsurance.php action=cron_jobs cron_token=YOUR_TOKEN');
+
+    return $checks;
+}
+
+function render_setup_doctor_table(array $checks): string
+{
+    $out = '<table class="table"><thead><tr><th>Check</th><th>Status</th><th>Detail</th><th>Fix</th></tr></thead><tbody>';
+    foreach ($checks as $c) {
+        $status = (string)($c['status'] ?? 'warn');
+        $badge = $status === 'ok' ? 'badge' : ($status === 'fail' ? 'badge rowLow' : 'badge mutedBadge');
+        $out .= '<tr><td>' . h((string)($c['label'] ?? '')) . '</td><td><span class="' . h($badge) . '">' . h(strtoupper($status)) . '</span></td><td class="muted"><code>' . h((string)($c['detail'] ?? '')) . '</code></td><td class="muted">' . h((string)($c['fix'] ?? '')) . '</td></tr>';
+    }
+    $out .= '</tbody></table>';
+    return $out;
+}
+
+function render_boot_setup_error(Throwable $e): void
+{
+    if (PHP_SAPI === 'cli') {
+        fwrite(STDERR, "LiteInsurance setup error: " . $e->getMessage() . "\n");
+        foreach (setup_doctor_report($e) as $check) {
+            fwrite(STDERR, strtoupper((string)$check['status']) . ' ' . (string)$check['label'] . ': ' . (string)$check['detail'] . "\n");
+        }
+        exit(1);
+    }
+    if (!headers_sent()) {
+        http_response_code(500);
+    }
+    echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>LiteInsurance setup doctor</title>';
+    echo '<style>body{margin:0;background:#f4f3ee;color:#0a0a0a;font-family:Inter,system-ui,-apple-system,"Segoe UI",Arial,sans-serif}.wrap{max-width:980px;margin:40px auto;padding:0 20px}.card{border:1px solid #cfcdc4;background:#fbfaf6;padding:18px}h1{margin:0 0 10px;font-size:28px}.muted{color:#6b6b66}.table{width:100%;border-collapse:collapse;margin-top:16px;font-size:13px}th,td{padding:10px;border-bottom:1px solid #e3e1d8;text-align:left;vertical-align:top}.badge{display:inline-block;border:1px solid #0a0a0a;padding:3px 7px;font:11px/1 ui-monospace,Menlo,Consolas,monospace}.rowLow{color:#a33a2a;border-color:#a33a2a}.mutedBadge{color:#8a877e;border-color:#cfcdc4}code{font-family:ui-monospace,Menlo,Consolas,monospace}</style></head><body><main class="wrap"><section class="card">';
+    echo '<h1>LiteInsurance setup doctor</h1><p class="muted">The app could not finish booting. Fix the failed check below and reload.</p>';
+    echo render_setup_doctor_table(setup_doctor_report($e));
+    echo '</section></main></body></html>';
+}
+
+function path_inside_app_dir(string $path): bool
+{
+    $base = realpath(__DIR__);
+    $real = realpath($path);
+    if (!$real) {
+        $real = realpath(dirname($path));
+    }
+    return is_string($base) && is_string($real) && str_starts_with(strtolower($real), strtolower($base));
+}
+
+function ini_bytes(string $value): int
+{
+    $value = trim($value);
+    if ($value === '') {
+        return 0;
+    }
+    $unit = strtolower(substr($value, -1));
+    $num = (float)$value;
+    if ($unit === 'g') {
+        return (int)($num * 1024 * 1024 * 1024);
+    }
+    if ($unit === 'm') {
+        return (int)($num * 1024 * 1024);
+    }
+    if ($unit === 'k') {
+        return (int)($num * 1024);
+    }
+    return (int)$num;
+}
+
+function bytes_label(int $bytes): string
+{
+    if ($bytes >= 1024 * 1024) {
+        return round($bytes / 1024 / 1024, 1) . ' MB';
+    }
+    if ($bytes >= 1024) {
+        return round($bytes / 1024, 1) . ' KB';
+    }
+    return $bytes . ' bytes';
 }
 
 function run_cron_jobs(PDO $pdo): void
@@ -1043,6 +1203,7 @@ function run_cron_jobs(PDO $pdo): void
             if (!is_array($meta)) {
                 $meta = [];
             }
+            $metadata = $meta;
             $imputed = is_array($meta['imputed_fields'] ?? null) ? (array)$meta['imputed_fields'] : [];
             $score = compute_confidence($rec, $imputed);
             $riskOut = evaluate_rules_for_record($rec, $rules);
@@ -1050,6 +1211,9 @@ function run_cron_jobs(PDO $pdo): void
             $score = min(100, (int)round($score + min(20, count($ruleHits) * 4)));
             $ltv = compute_ltv($rec);
             $newMeta = ['imputed_fields' => $imputed, 'rule_hits' => $ruleHits, 'tags' => (array)($riskOut['tags'] ?? [])];
+            if (isset($metadata['custom_fields']) && is_array($metadata['custom_fields'])) {
+                $newMeta['custom_fields'] = $metadata['custom_fields'];
+            }
             $upd->execute([$ltv, (string)($riskOut['risk_tier'] ?? 'Unknown'), $score, json_encode($newMeta, JSON_UNESCAPED_SLASHES), (int)$ph['id']]);
             $updated++;
             $offsetId = (int)$ph['id'];
@@ -1090,6 +1254,14 @@ function nav_item(string $label, string $tab, string $current): string
 function kpi(string $label, string $value): string
 {
     return '<div class="kpi"><div class="kpiLabel">' . h($label) . '</div><div class="kpiValue">' . h($value) . '</div></div>';
+}
+
+function money_or_blank($value): string
+{
+    if ($value === null || $value === '') {
+        return '';
+    }
+    return CURRENCY_SYMBOL . number_format((float)$value, 2);
 }
 
 function htmlEscape(string $s): string { return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
@@ -1135,74 +1307,77 @@ function app_css(): string
     $accent = h(ACCENT_COLOR);
     $nonce = h((string)($GLOBALS['CSP_NONCE'] ?? ''));
     return '<style nonce="' . $nonce . '">'
-        . ':root{--bg:#fff;--text:#111;--muted:#555;--border:#e6e6e6;--accent:' . $accent . ';}'
-        . 'html,body{height:100%;}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;}'
-        . '.appShell{display:grid;grid-template-columns:240px 1fr;grid-template-rows:56px 1fr;min-height:100vh;}'
-        . '.topBar{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid var(--border);background:#fff;position:sticky;top:0;z-index:5;}'
-        . '.brand{font-weight:600;letter-spacing:-0.02em;}'
-        . '.topRight{display:flex;align-items:center;gap:12px;}'
-        . '.userPill{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--border);border-radius:999px;font-size:12px;}'
-        . '.pillRole{padding:2px 8px;border:1px solid var(--border);border-radius:999px;color:var(--muted);}'
-        . '.sideNav{border-right:1px solid var(--border);padding:12px;display:flex;flex-direction:column;gap:6px;}'
-        . '.navItem{padding:10px 10px;border-radius:10px;text-decoration:none;color:var(--text);border:1px solid transparent;}'
-        . '.navItem:hover{border-color:var(--border);background:#fafafa;}'
-        . '.navOn{border-color:var(--border);background:#fff;box-shadow:0 1px 0 rgba(0,0,0,.03);font-weight:600;}'
-        . '.main{padding:16px 16px 40px;max-width:1120px;}'
-        . '.footer{grid-column:1/-1;border-top:1px solid var(--border);padding:14px 16px;color:var(--muted);font-size:12px;display:flex;gap:8px;align-items:center;}'
-        . '.pageHead{margin-bottom:12px;}'
-        . '.h1{margin:0 0 4px;font-size:20px;line-height:28px;}'
-        . '.h2{font-size:14px;font-weight:600;margin:0 0 10px;}'
+        . ':root{--bg:#f4f3ee;--bgAlt:#ebe9e1;--panel:#fbfaf6;--text:#0a0a0a;--muted:#6b6b66;--muted2:#8a877e;--faint:#a8a59c;--border:#cfcdc4;--borderSoft:#e3e1d8;--accent:' . $accent . ';--dark:#0c0d0e;--darkInk:#f4f3ee;--darkMute:#8e8f88;--darkRule:#232527;--mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;}'
+        . '*{box-sizing:border-box;}html,body{height:100%;}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased;}'
+        . 'a{color:inherit;}code{font-family:var(--mono);font-size:.95em;}'
+        . '.appShell{display:grid;grid-template-columns:248px minmax(0,1fr);grid-template-rows:60px 1fr auto;min-height:100vh;}'
+        . '.topBar{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;padding:0 20px;border-bottom:1px solid var(--border);background:rgba(244,243,238,.94);backdrop-filter:blur(10px);position:sticky;top:0;z-index:5;}'
+        . '.brand{display:inline-flex;align-items:center;gap:12px;font-weight:650;letter-spacing:-0.02em;}'
+        . '.brand:before{content:"LI";display:grid;place-items:center;width:34px;height:34px;background:var(--text);color:var(--bg);font:11px/1 var(--mono);letter-spacing:.05em;}'
+        . '.topRight{display:flex;align-items:center;gap:12px;min-width:0;}'
+        . '.userPill{display:flex;align-items:center;gap:8px;min-width:0;padding:7px 10px;border:1px solid var(--border);background:var(--panel);font-size:12px;}'
+        . '.pillRole{padding:2px 7px;border:1px solid var(--border);color:var(--muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:.08em;font-size:10px;}'
+        . '.sideNav{border-right:1px solid var(--border);background:var(--panel);padding:12px;display:flex;flex-direction:column;gap:1px;}'
+        . '.navItem{padding:11px 10px;text-decoration:none;color:var(--muted);border:1px solid transparent;font:12px/1.2 var(--mono);letter-spacing:.08em;text-transform:uppercase;}'
+        . '.navItem:hover{border-color:var(--border);background:var(--bgAlt);color:var(--text);}'
+        . '.navOn{border-color:var(--border);background:var(--bg);color:var(--text);box-shadow:inset 3px 0 0 var(--accent);font-weight:700;}'
+        . '.main{padding:22px 22px 44px;max-width:1180px;width:100%;}'
+        . '.footer{grid-column:1/-1;border-top:1px solid var(--border);padding:14px 20px;color:var(--muted);font-size:12px;display:flex;gap:8px;align-items:center;font-family:var(--mono);}'
+        . '.pageHead{margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:14px;}'
+        . '.h1{margin:0 0 4px;font-size:24px;line-height:30px;letter-spacing:-.03em;}'
+        . '.h2{font-size:14px;font-weight:650;margin:0 0 10px;letter-spacing:-.01em;}'
         . '.muted{color:var(--muted);font-size:13px;line-height:18px;}'
         . '.tiny{font-size:12px;}'
-        . '.card{border:1px solid var(--border);border-radius:12px;padding:14px;background:#fff;}'
-        . '.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}'
-        . '.kpiGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:12px 0;}'
-        . '.kpi{border:1px solid var(--border);border-radius:12px;padding:12px;background:#fff;}'
-        . '.kpiLabel{color:var(--muted);font-size:12px;}'
-        . '.kpiValue{font-size:18px;font-weight:600;margin-top:4px;}'
+        . '.card{border:1px solid var(--border);padding:15px;background:var(--panel);margin-bottom:12px;}'
+        . '.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}'
+        . '.kpiGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--border);border:1px solid var(--border);margin:12px 0;}'
+        . '.kpi{padding:14px;background:var(--panel);}'
+        . '.kpiLabel{color:var(--muted2);font:11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;}'
+        . '.kpiValue{font-size:20px;font-weight:650;margin-top:4px;letter-spacing:-.03em;}'
         . '.form{display:flex;flex-direction:column;gap:10px;margin-top:12px;}'
-        . '.label{font-size:12px;color:var(--muted);margin-bottom:-6px;}'
-        . '.input,.select,.textarea{width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:10px;padding:10px 10px;font-size:14px;outline:none;background:#fff;}'
-        . '.input:focus,.select:focus,.textarea:focus{border-color:#111;box-shadow:0 0 0 2px rgba(0,0,0,.06);}'
+        . '.label{font:11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted2);margin-bottom:-5px;}'
+        . '.input,.select,.textarea{width:100%;box-sizing:border-box;border:1px solid var(--border);padding:10px 10px;font-size:14px;outline:none;background:var(--bg);color:var(--text);}'
+        . '.input:focus,.select:focus,.textarea:focus{border-color:var(--text);box-shadow:0 0 0 2px var(--accent);}'
         . '.textarea{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;font-size:12px;}'
-        . '.btn{border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:10px;padding:10px 12px;font-weight:600;cursor:pointer;}'
-        . '.btn:hover{filter:brightness(.95);}'
-        . '.btnSecondary{border:1px solid var(--border);background:#fff;color:var(--text);border-radius:10px;padding:10px 12px;font-weight:600;cursor:pointer;}'
-        . '.btnSecondary:hover{background:#fafafa;}'
+        . '.btn{border:1px solid var(--text);background:var(--text);color:var(--bg);padding:10px 12px;font-weight:650;cursor:pointer;}'
+        . '.btn:hover{background:var(--accent);border-color:var(--accent);color:#fff;}'
+        . '.btnSecondary{border:1px solid var(--text);background:transparent;color:var(--text);padding:10px 12px;font-weight:650;cursor:pointer;}'
+        . '.btnSecondary:hover{background:var(--text);color:var(--bg);}'
         . '.inline{display:inline;}'
         . '.actionsRow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0;}'
         . '.list{margin:10px 0 0;padding-left:18px;color:var(--muted);font-size:13px;}'
-        . '.table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;}'
-        . '.table th,.table td{border-bottom:1px solid var(--border);padding:10px 8px;text-align:left;vertical-align:top;white-space:nowrap;}'
-        . '.table th{color:var(--muted);font-weight:600;font-size:12px;}'
+        . '.table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;background:var(--panel);}'
+        . '.table th,.table td{border-bottom:1px solid var(--borderSoft);padding:10px 8px;text-align:left;vertical-align:top;white-space:nowrap;}'
+        . '.table th{color:var(--muted2);font:11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;}'
         . '.right{text-align:right;}'
-        . '.badge{display:inline-block;padding:2px 8px;border:1px solid var(--border);border-radius:999px;font-size:12px;}'
+        . '.badge{display:inline-block;padding:2px 8px;border:1px solid var(--border);font:11px/1.4 var(--mono);}'
         . '.mutedBadge{color:var(--muted);}'
-        . '.scrollX{overflow:auto;border:1px solid var(--border);border-radius:12px;}'
-        . '.rowLow{background:#fafafa;}'
+        . '.scrollX{overflow:auto;border:1px solid var(--border);background:var(--panel);}'
+        . '.rowLow{background:var(--bgAlt);}'
         . '.gridMap{display:grid;grid-template-columns:1fr 1fr;gap:10px;}'
         . '.mapRow{display:flex;flex-direction:column;gap:8px;}'
         . '.divider{height:1px;background:var(--border);margin:12px 0;}'
         . '.linkBtn{border:none;background:transparent;color:var(--accent);font-weight:600;cursor:pointer;padding:0;}'
         . '.linkBtn:hover{text-decoration:underline;}'
-        . '.checkGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;border:1px solid var(--border);border-radius:12px;padding:10px;}'
+        . '.checkGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;border:1px solid var(--border);padding:10px;background:var(--bg);}'
         . '.check{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:var(--text);}'
-        . '.codeBlock{border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff;overflow:auto;font-size:12px;}'
+        . '.codeBlock{border:1px solid var(--darkRule);padding:10px;background:var(--dark);color:var(--darkInk);overflow:auto;font-size:12px;}'
         . '.pager{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;}'
-        . '.pagerOn,.pagerOff{padding:6px 10px;border-radius:10px;border:1px solid var(--border);text-decoration:none;color:var(--text);font-size:12px;}'
-        . '.pagerOn{background:#fff;font-weight:700;}'
-        . '.pagerOff{background:#fafafa;}'
-        . '.swatch{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid var(--border);vertical-align:-2px;margin-right:6px;}'
+        . '.pagerOn,.pagerOff{padding:6px 10px;border:1px solid var(--border);text-decoration:none;color:var(--text);font-size:12px;font-family:var(--mono);}'
+        . '.pagerOn{background:var(--text);color:var(--bg);font-weight:700;}'
+        . '.pagerOff{background:var(--panel);}'
+        . '.swatch{display:inline-block;width:12px;height:12px;border:1px solid var(--border);vertical-align:-2px;margin-right:6px;}'
         . '.link{color:var(--accent);text-decoration:none;font-weight:600;}'
         . '.link:hover{text-decoration:underline;}'
-        . '.flash{border:1px solid var(--border);border-left:4px solid #111;background:#fff;border-radius:12px;padding:10px 12px;margin:10px 0;font-size:13px;}'
+        . '.flash{border:1px solid var(--border);border-left:4px solid var(--text);background:var(--panel);padding:10px 12px;margin:10px 0;font-size:13px;}'
         . '.flashOk{border-left-color:var(--accent);}'
-        . '.flashErr{border-left-color:#111;}'
-        . '.authWrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}'
-        . '.authCard{width:100%;max-width:420px;border:1px solid var(--border);border-radius:16px;padding:18px;background:#fff;}'
-        . '.authBrand{font-weight:700;letter-spacing:-0.02em;margin-bottom:6px;}'
+        . '.flashErr{border-left-color:var(--text);}'
+        . '.authWrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg);}'
+        . '.authCard{width:100%;max-width:430px;border:1px solid var(--border);padding:20px;background:var(--panel);}'
+        . '.authBrand{display:flex;align-items:center;gap:12px;font-weight:700;letter-spacing:-0.02em;margin-bottom:6px;}'
+        . '.authBrand:before{content:"LI";display:grid;place-items:center;width:34px;height:34px;background:var(--text);color:var(--bg);font:11px/1 var(--mono);}'
         . '.authFooter{margin-top:14px;display:flex;flex-direction:column;gap:8px;}'
-        . '@media (max-width:900px){.appShell{grid-template-columns:1fr;grid-template-rows:56px auto 1fr;}.sideNav{flex-direction:row;overflow:auto;white-space:nowrap;border-right:none;border-bottom:1px solid var(--border);} .grid2{grid-template-columns:1fr;} .kpiGrid{grid-template-columns:repeat(2,minmax(0,1fr));} .gridMap{grid-template-columns:1fr;} .checkGrid{grid-template-columns:1fr;}}'
+        . '@media (max-width:900px){.appShell{grid-template-columns:1fr;grid-template-rows:60px auto 1fr;}.topBar{padding:0 12px;}.userPill{max-width:48vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.sideNav{flex-direction:row;overflow:auto;white-space:nowrap;border-right:none;border-bottom:1px solid var(--border);} .main{padding:16px 12px 36px;} .grid2{grid-template-columns:1fr;} .kpiGrid{grid-template-columns:repeat(2,minmax(0,1fr));} .gridMap{grid-template-columns:1fr;} .checkGrid{grid-template-columns:1fr;}}'
         . '</style>';
 }
 
@@ -1436,7 +1611,7 @@ function detect_mime(string $path): string
 
 function tokenize_filter_expr(string $expr): array
 {
-    $pattern = "/\\G\\s*(?:(?<lp>\\()|(?<rp>\\))|(?<comma>,)|(?<op>>=|<=|!=|=|>|<)|(?<kw>AND|OR|NOT|LIKE|IN|IS|NULL)\\b|(?<num>-?\\d+(?:\\.\\d+)?)|(?<str>'(?:''|[^'])*')|(?<id>[A-Za-z_][A-Za-z0-9_]*))\\s*/Ai";
+    $pattern = "/\\G\\s*(?:(?<lp>\\()|(?<rp>\\))|(?<comma>,)|(?<op>>=|<=|!=|=|>|<)|(?<kw>AND|OR|NOT|LIKE|IN|IS|NULL)\\b|(?<num>-?\\d+(?:\\.\\d+)?)|(?<str>'(?:''|[^'])*')|(?<id>[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)?))\\s*/Ai";
     $tokens = [];
     $pos = 0;
     $len = strlen($expr);
@@ -1520,8 +1695,8 @@ function render_import_mapping(PDO $pdo, array $stage): void
     $headers = array_values(array_filter(array_map('trim', (array)$stage['headers']), fn($x) => $x !== ''));
     $filename = (string)($stage['filename'] ?? 'upload.csv');
     $defaults = [
-        'policy_number' => guess_header($headers, ['policy_number', 'policy', 'policy no', 'policy#']),
-        'name' => guess_header($headers, ['name', 'full name']),
+        'record_id' => guess_header($headers, ['policy_number', 'policy_id', 'policy', 'policy no', 'policy#', 'customer_id', 'client_id', 'account_id', 'member_id', 'certificate_number', 'id']),
+        'display_name' => guess_header($headers, ['name', 'full name', 'customer', 'customer_name', 'client_name', 'insured_name', 'account_label', 'label']),
         'dob' => guess_header($headers, ['dob', 'date_of_birth', 'birthdate']),
         'age' => guess_header($headers, ['age']),
         'gender' => guess_header($headers, ['gender', 'sex']),
@@ -1532,8 +1707,8 @@ function render_import_mapping(PDO $pdo, array $stage): void
         'sum_assured' => guess_header($headers, ['sum_assured', 'coverage', 'sum']),
     ];
     $fields = [
-        'policy_number' => 'Policy number (required)',
-        'name' => 'Name (required)',
+        'record_id' => 'Record ID (required)',
+        'display_name' => 'Display name',
         'dob' => 'DOB (YYYY-MM-DD)',
         'age' => 'Age',
         'gender' => 'Gender',
@@ -1544,13 +1719,16 @@ function render_import_mapping(PDO $pdo, array $stage): void
         'sum_assured' => 'Sum assured',
     ];
 
-    echo '<div class="card"><div class="h2">Map columns</div><div class="muted">Staged file: <strong>' . h($filename) . '</strong></div>';
+    echo '<div class="card"><div class="h2">Map columns</div><div class="muted">Staged file: <strong>' . h($filename) . '</strong>. Map the fields you have; unmapped CSV columns are preserved as typed custom fields in <code>metadata.custom_fields</code>.</div>';
     echo '<form method="post" class="form">';
     echo '<input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="import_preview">';
     echo '<div class="gridMap">';
     foreach ($fields as $key => $label) {
         echo '<div class="mapRow"><div class="label">' . h($label) . '</div><select class="select" name="map[' . h($key) . ']">';
-        echo '<option value="">— not provided —</option>';
+        echo '<option value="">' . h($key === 'display_name' ? 'Default from Record ID' : 'Not provided') . '</option>';
+        if ($key === 'record_id') {
+            echo '<option value="__generate__"' . ($defaults[$key] === '' ? ' selected' : '') . '>Generate from row number</option>';
+        }
         foreach ($headers as $hname) {
             $sel = ($defaults[$key] === $hname) ? ' selected' : '';
             echo '<option value="' . h($hname) . '"' . $sel . '>' . h($hname) . '</option>';
@@ -1566,11 +1744,15 @@ function render_import_mapping(PDO $pdo, array $stage): void
         $stats = (array)($stage['preview']['stats'] ?? []);
         $rows = (array)($stage['preview']['rows'] ?? []);
         echo '<div class="card"><div class="h2">Preview</div><div class="muted">First ' . h((string)IMPORT_PREVIEW_ROWS) . ' rows after imputation.</div>';
-        echo '<div class="kpiGrid">' . kpi('Rows detected', (string)($stats['rows_total'] ?? 0)) . kpi('Hard rejects (preview)', (string)($stats['hard_rejects_preview'] ?? 0)) . kpi('Soft warnings (preview)', (string)($stats['soft_warnings_preview'] ?? 0)) . kpi('Mean premium', CURRENCY_SYMBOL . number_format((float)($stats['mean_premium'] ?? 0), 2)) . '</div>';
+        echo '<div class="kpiGrid">' . kpi('Rows detected', (string)($stats['rows_total'] ?? 0)) . kpi('Hard rejects (preview)', (string)($stats['hard_rejects_preview'] ?? 0)) . kpi('Custom fields', (string)($stats['custom_fields'] ?? 0)) . kpi('Mean premium', CURRENCY_SYMBOL . number_format((float)($stats['mean_premium'] ?? 0), 2)) . '</div>';
         $cols = ['policy_number', 'name', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'ltv_estimate', 'risk_tier', 'confidence_score', 'is_imputed'];
+        $customCols = array_values(array_filter(array_slice(array_map(fn($d) => (string)($d['field_key'] ?? ''), (array)($stage['preview']['analysis']['custom_fields'] ?? [])), 0, 4)));
         echo '<div class="scrollX"><table class="table"><thead><tr>';
         foreach ($cols as $c) {
             echo '<th>' . h($c) . '</th>';
+        }
+        foreach ($customCols as $c) {
+            echo '<th>' . h('custom.' . $c) . '</th>';
         }
         echo '</tr></thead><tbody>';
         foreach ($rows as $r) {
@@ -1579,14 +1761,19 @@ function render_import_mapping(PDO $pdo, array $stage): void
             foreach ($cols as $c) {
                 $v = $r[$c] ?? '';
                 if (in_array($c, ['premium_amount', 'sum_assured', 'ltv_estimate'], true)) {
-                    $v = CURRENCY_SYMBOL . number_format((float)$v, 2);
+                    $v = ($v === '' || $v === null) ? '' : CURRENCY_SYMBOL . number_format((float)$v, 2);
                 }
                 echo '<td>' . h((string)$v) . '</td>';
+            }
+            $custom = is_array($r['custom_fields'] ?? null) ? (array)$r['custom_fields'] : [];
+            foreach ($customCols as $c) {
+                $v = $custom[$c] ?? '';
+                echo '<td>' . h(is_bool($v) ? ($v ? 'true' : 'false') : (string)$v) . '</td>';
             }
             echo '</tr>';
         }
         if (!$rows) {
-            echo '<tr><td colspan="' . h((string)count($cols)) . '" class="muted">No rows to preview.</td></tr>';
+            echo '<tr><td colspan="' . h((string)(count($cols) + count($customCols))) . '" class="muted">No rows to preview.</td></tr>';
         }
         echo '</tbody></table></div>';
         echo '<form method="post" class="inline"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="import_commit"><button class="btn" type="submit">Confirm & import</button></form>';
@@ -1629,17 +1816,181 @@ function header_index_map(array $headers): array
     return $map;
 }
 
+function core_import_field_keys(): array
+{
+    return ['record_id', 'display_name', 'dob', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured'];
+}
+
+function storage_field_for_import(string $field): string
+{
+    if ($field === 'record_id') {
+        return 'policy_number';
+    }
+    if ($field === 'display_name') {
+        return 'name';
+    }
+    return $field;
+}
+
+function field_was_mapped(array $analysis, string $field): bool
+{
+    $mapped = is_array($analysis['mapped_fields'] ?? null) ? (array)$analysis['mapped_fields'] : [];
+    return !empty($mapped[$field]);
+}
+
+function custom_field_key(string $header, array &$used = []): string
+{
+    $base = strtolower(trim(preg_replace('/[^a-zA-Z0-9]+/', '_', $header) ?? ''));
+    $base = trim($base, '_');
+    if ($base === '') {
+        $base = 'custom_field';
+    }
+    $reserved = ['id', 'custom', 'metadata', 'policy_number', 'name', 'record_id', 'display_name', 'dob', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'ltv_estimate', 'risk_tier', 'confidence_score', 'is_imputed'];
+    if (in_array($base, $reserved, true)) {
+        $base = 'csv_' . $base;
+    }
+    $key = $base;
+    $i = 2;
+    while (isset($used[$key])) {
+        $key = $base . '_' . $i;
+        $i++;
+    }
+    $used[$key] = true;
+    return $key;
+}
+
+function infer_custom_value_type(string $raw): ?string
+{
+    $v = trim($raw);
+    if ($v === '') {
+        return null;
+    }
+    $lower = strtolower($v);
+    if (in_array($lower, ['true', 'false', 'yes', 'no'], true)) {
+        return 'bool';
+    }
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) {
+        return 'date';
+    }
+    if (parse_number($v) !== null) {
+        return 'number';
+    }
+    return 'text';
+}
+
+function merge_custom_type(?string $current, ?string $next): ?string
+{
+    if ($next === null) {
+        return $current;
+    }
+    if ($current === null || $current === $next) {
+        return $next;
+    }
+    return 'text';
+}
+
+function parse_custom_value(string $raw, string $type)
+{
+    $raw = trim($raw);
+    if ($raw === '') {
+        return '';
+    }
+    if ($type === 'number') {
+        return parse_number($raw);
+    }
+    if ($type === 'bool') {
+        $v = strtolower($raw);
+        if (in_array($v, ['true', 'yes', '1'], true)) {
+            return true;
+        }
+        if (in_array($v, ['false', 'no', '0'], true)) {
+            return false;
+        }
+    }
+    return $raw;
+}
+
+function mapped_header_names(array $mapping): array
+{
+    $out = [];
+    foreach ($mapping as $field => $hname) {
+        $field = (string)$field;
+        $hname = (string)$hname;
+        if (!in_array($field, core_import_field_keys(), true) || $hname === '' || $hname === '__generate__') {
+            continue;
+        }
+        $out[$hname] = true;
+    }
+    return $out;
+}
+
+function custom_field_definitions(array $headers, array $mapping, array $types = []): array
+{
+    $mapped = mapped_header_names($mapping);
+    $used = [];
+    $defs = [];
+    foreach ($headers as $header) {
+        $label = trim((string)$header);
+        if ($label === '' || isset($mapped[$label])) {
+            continue;
+        }
+        $key = custom_field_key($label, $used);
+        $defs[] = [
+            'field_key' => $key,
+            'label' => $label,
+            'source_header' => $label,
+            'field_type' => in_array(($types[$label] ?? 'text'), ['text', 'number', 'date', 'bool'], true) ? (string)($types[$label] ?? 'text') : 'text',
+        ];
+    }
+    return $defs;
+}
+
+function extract_custom_fields(array $headers, array $row, array $customDefs): array
+{
+    $idx = header_index_map($headers);
+    $out = [];
+    foreach ($customDefs as $def) {
+        $header = (string)($def['source_header'] ?? '');
+        $key = (string)($def['field_key'] ?? '');
+        if ($header === '' || $key === '' || !isset($idx[$header])) {
+            continue;
+        }
+        $raw = (string)($row[(int)$idx[$header]] ?? '');
+        if (trim($raw) === '') {
+            continue;
+        }
+        $out[$key] = parse_custom_value($raw, (string)($def['field_type'] ?? 'text'));
+    }
+    return $out;
+}
+
+function upsert_custom_field_defs(PDO $pdo, array $defs): void
+{
+    if (!$defs) {
+        return;
+    }
+    $st = $pdo->prepare('INSERT INTO custom_field_defs (field_key, label, source_header, field_type, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?) ON CONFLICT(field_key) DO UPDATE SET label = excluded.label, source_header = excluded.source_header, field_type = excluded.field_type, enabled = 1, updated_at = excluded.updated_at');
+    $now = now_iso();
+    foreach ($defs as $def) {
+        $st->execute([(string)$def['field_key'], (string)$def['label'], (string)$def['source_header'], (string)$def['field_type'], $now, $now]);
+    }
+}
+
 function map_row(array $headers, array $row, array $mapping): array
 {
     $idx = header_index_map($headers);
     $out = [];
     foreach ($mapping as $field => $hname) {
         $hname = (string)$hname;
+        $storeField = storage_field_for_import((string)$field);
+        if ($hname === '__generate__') {
+            continue;
+        }
         if ($hname === '' || !isset($idx[$hname])) {
             continue;
         }
         $pos = (int)$idx[$hname];
-        $out[$field] = $row[$pos] ?? '';
+        $out[$storeField] = $row[$pos] ?? '';
     }
     return $out;
 }
@@ -1719,10 +2070,7 @@ function mode_from_freq(array $freq): string
 function validate_policyholder_hard(array $r): ?string
 {
     if ((string)($r['policy_number'] ?? '') === '') {
-        return 'Missing policy_number';
-    }
-    if ((string)($r['name'] ?? '') === '') {
-        return 'Missing name';
+        return 'Missing Record ID';
     }
     return null;
 }
@@ -1757,8 +2105,11 @@ function compute_confidence(array $r, array $imputedFields): int
     return max(0, min(100, $base));
 }
 
-function compute_ltv(array $r): float
+function compute_ltv(array $r): ?float
 {
+    if (($r['premium_amount'] ?? null) === null || ($r['tenure_months'] ?? null) === null || trim((string)($r['policy_type'] ?? '')) === '') {
+        return null;
+    }
     $premium = (float)($r['premium_amount'] ?? 0);
     $tenure = (int)($r['tenure_months'] ?? 0);
     $remaining = max(0, EXPECTED_POLICY_TERM_MONTHS_DEFAULT - $tenure);
@@ -1782,10 +2133,20 @@ function analyze_csv(string $path, array $headers, array $mapping): array
     foreach ($catFields as $f) {
         $freq[$f] = [];
     }
+    $mappedFields = [];
+    foreach ($mapping as $field => $hname) {
+        $storeField = storage_field_for_import((string)$field);
+        if ((string)$hname !== '') {
+            $mappedFields[$storeField] = true;
+        }
+    }
+    $customTypeByHeader = [];
+    $customDefsForScan = custom_field_definitions($headers, $mapping);
+    $headerIndex = header_index_map($headers);
     $rowsTotal = 0;
     $fh = fopen($path, 'rb');
     if (!$fh) {
-        return ['rows_total' => 0];
+        return ['rows_total' => 0, 'mapped_fields' => $mappedFields, 'custom_fields' => []];
     }
     fgetcsv($fh);
     while (($row = fgetcsv($fh)) !== false) {
@@ -1811,6 +2172,14 @@ function analyze_csv(string $path, array $headers, array $mapping): array
                 $freq[$f][$k] = ($freq[$f][$k] ?? 0) + 1;
             }
         }
+        foreach ($customDefsForScan as $def) {
+            $header = (string)($def['source_header'] ?? '');
+            if ($header === '' || !isset($headerIndex[$header])) {
+                continue;
+            }
+            $raw = (string)($row[(int)$headerIndex[$header]] ?? '');
+            $customTypeByHeader[$header] = merge_custom_type($customTypeByHeader[$header] ?? null, infer_custom_value_type($raw));
+        }
     }
     fclose($fh);
     $means = [];
@@ -1821,14 +2190,24 @@ function analyze_csv(string $path, array $headers, array $mapping): array
     foreach ($catFields as $f) {
         $modes[$f] = mode_from_freq($freq[$f]);
     }
-    return ['rows_total' => $rowsTotal, 'means' => $means, 'modes' => $modes, 'mean_premium' => $means['premium_amount'] ?? 0];
+    $customFields = custom_field_definitions($headers, $mapping, $customTypeByHeader);
+    return ['rows_total' => $rowsTotal, 'means' => $means, 'modes' => $modes, 'mean_premium' => $means['premium_amount'] ?? 0, 'mapped_fields' => $mappedFields, 'custom_fields' => $customFields];
 }
 
-function normalize_and_impute(array $rec, array $defaults, array $analysis, array &$imputedFields): array
+function normalize_and_impute(array $rec, array $defaults, array $analysis, array &$imputedFields, int $rowNumber = 0, string $filename = ''): array
 {
     $out = [];
     $out['policy_number'] = trim((string)($rec['policy_number'] ?? ''));
+    if ($out['policy_number'] === '') {
+        $seed = substr(sha1($filename !== '' ? $filename : 'import'), 0, 6);
+        $out['policy_number'] = 'AUTO-' . strtoupper($seed) . '-' . str_pad((string)max(1, $rowNumber), 6, '0', STR_PAD_LEFT);
+        $imputedFields[] = 'record_id';
+    }
     $out['name'] = trim((string)($rec['name'] ?? ''));
+    if ($out['name'] === '') {
+        $out['name'] = $out['policy_number'];
+        $imputedFields[] = 'display_name';
+    }
     $out['dob'] = trim((string)($rec['dob'] ?? ''));
     $out['gender'] = normalize_gender(trim((string)($rec['gender'] ?? '')));
     $out['age'] = parse_int((string)($rec['age'] ?? ''));
@@ -1845,29 +2224,29 @@ function normalize_and_impute(array $rec, array $defaults, array $analysis, arra
     $out['policy_type'] = trim((string)($rec['policy_type'] ?? ''));
     $out['region'] = trim((string)($rec['region'] ?? ''));
 
-    if ($out['premium_amount'] === null) {
+    if ($out['premium_amount'] === null && field_was_mapped($analysis, 'premium_amount')) {
         $out['premium_amount'] = (float)($analysis['means']['premium_amount'] ?? 0);
         $imputedFields[] = 'premium_amount';
     }
-    if ($out['tenure_months'] === null) {
+    if ($out['tenure_months'] === null && field_was_mapped($analysis, 'tenure_months')) {
         $out['tenure_months'] = (int)round((float)($analysis['means']['tenure_months'] ?? 0));
         $imputedFields[] = 'tenure_months';
     }
-    if ($out['sum_assured'] === null && (float)($analysis['means']['sum_assured'] ?? 0) > 0) {
+    if ($out['sum_assured'] === null && field_was_mapped($analysis, 'sum_assured') && (float)($analysis['means']['sum_assured'] ?? 0) > 0) {
         $out['sum_assured'] = (float)($analysis['means']['sum_assured'] ?? 0);
         $imputedFields[] = 'sum_assured';
     }
-    if ($out['policy_type'] === '') {
+    if ($out['policy_type'] === '' && field_was_mapped($analysis, 'policy_type')) {
         $mode = (string)($analysis['modes']['policy_type'] ?? '');
         $out['policy_type'] = $mode !== '' ? $mode : (string)($defaults['policy_type'] ?? 'term');
         $imputedFields[] = 'policy_type';
     }
-    if ($out['region'] === '') {
+    if ($out['region'] === '' && field_was_mapped($analysis, 'region')) {
         $mode = (string)($analysis['modes']['region'] ?? '');
         $out['region'] = $mode !== '' ? $mode : (string)($defaults['region'] ?? 'Unknown');
         $imputedFields[] = 'region';
     }
-    if ($out['gender'] === '') {
+    if ($out['gender'] === '' && field_was_mapped($analysis, 'gender')) {
         $mode = (string)($analysis['modes']['gender'] ?? '');
         if ($mode !== '') {
             $out['gender'] = normalize_gender($mode);
@@ -1888,10 +2267,15 @@ function preview_csv(string $path, array $headers, array $mapping, array $defaul
     $rows = [];
     $soft = 0;
     $hard = 0;
+    $rowNumber = 0;
+    $customDefs = is_array($analysis['custom_fields'] ?? null) ? (array)$analysis['custom_fields'] : [];
     while (($row = fgetcsv($fh)) !== false) {
+        $rowNumber++;
         $rec = map_row($headers, $row, $mapping);
         $imputed = [];
-        $validated = normalize_and_impute($rec, $defaults, $analysis, $imputed);
+        $validated = normalize_and_impute($rec, $defaults, $analysis, $imputed, $rowNumber, basename($path));
+        $customFields = extract_custom_fields($headers, $row, $customDefs);
+        $validated['custom'] = $customFields;
         $hardMsg = validate_policyholder_hard($validated);
         if ($hardMsg !== null) {
             $hard++;
@@ -1910,20 +2294,21 @@ function preview_csv(string $path, array $headers, array $mapping, array $defaul
             'gender' => (string)($validated['gender'] ?? ''),
             'policy_type' => (string)($validated['policy_type'] ?? ''),
             'region' => (string)($validated['region'] ?? ''),
-            'premium_amount' => (float)($validated['premium_amount'] ?? 0),
-            'tenure_months' => (int)($validated['tenure_months'] ?? 0),
-            'sum_assured' => (float)($validated['sum_assured'] ?? 0),
-            'ltv_estimate' => (float)$ltv,
+            'premium_amount' => $validated['premium_amount'],
+            'tenure_months' => $validated['tenure_months'],
+            'sum_assured' => $validated['sum_assured'],
+            'ltv_estimate' => $ltv,
             'risk_tier' => (string)($riskOut['risk_tier'] ?? 'Unknown'),
             'confidence_score' => $score,
             'is_imputed' => count($imputed) > 0 ? 1 : 0,
+            'custom_fields' => $customFields,
         ];
         if (count($rows) >= IMPORT_PREVIEW_ROWS) {
             break;
         }
     }
     fclose($fh);
-    return ['analysis' => $analysis, 'stats' => ['rows_total' => (int)($analysis['rows_total'] ?? 0), 'hard_rejects_preview' => $hard, 'soft_warnings_preview' => $soft, 'mean_premium' => (float)($analysis['mean_premium'] ?? 0)], 'rows' => $rows];
+    return ['analysis' => $analysis, 'stats' => ['rows_total' => (int)($analysis['rows_total'] ?? 0), 'hard_rejects_preview' => $hard, 'soft_warnings_preview' => $soft, 'mean_premium' => (float)($analysis['mean_premium'] ?? 0), 'custom_fields' => count($customDefs)], 'rows' => $rows];
 }
 
 function policy_number_exists(PDO $pdo, string $policyNumber): bool
@@ -1935,6 +2320,11 @@ function policy_number_exists(PDO $pdo, string $policyNumber): bool
 
 function policyholder_record_from_row(array $ph): array
 {
+    $meta = safe_json((string)($ph['metadata'] ?? '{}'));
+    if (!is_array($meta)) {
+        $meta = [];
+    }
+    $customFields = is_array($meta['custom_fields'] ?? null) ? (array)$meta['custom_fields'] : [];
     return [
         'policy_number' => (string)($ph['policy_number'] ?? ''),
         'name' => (string)($ph['name'] ?? ''),
@@ -1949,6 +2339,7 @@ function policyholder_record_from_row(array $ph): array
         'ltv_estimate' => ($ph['ltv_estimate'] !== null) ? (float)$ph['ltv_estimate'] : null,
         'risk_tier' => (string)($ph['risk_tier'] ?? ''),
         'confidence_score' => (int)($ph['confidence_score'] ?? 0),
+        'custom' => $customFields,
     ];
 }
 
@@ -2043,7 +2434,7 @@ function eval_condition_leaf(array $record, array $c): bool
     if ($field === '' || $op === '') {
         return false;
     }
-    $left = $record[$field] ?? null;
+    $left = value_for_rule_field($record, $field);
     $leftStr = is_string($left) ? trim($left) : $left;
     if ($op === '=' || $op === '==') {
         return compare_scalar($leftStr, $value) === 0;
@@ -2091,6 +2482,17 @@ function eval_condition_leaf(array $record, array $c): bool
     return false;
 }
 
+function value_for_rule_field(array $record, string $field)
+{
+    $field = trim($field);
+    if (str_starts_with($field, 'custom.')) {
+        $key = substr($field, 7);
+        $custom = is_array($record['custom'] ?? null) ? (array)$record['custom'] : [];
+        return $custom[$key] ?? null;
+    }
+    return $record[$field] ?? null;
+}
+
 function compare_scalar($a, $b): int
 {
     if (is_numeric($a) && is_numeric($b)) {
@@ -2102,6 +2504,7 @@ function compare_scalar($a, $b): int
 function handle_load_sample(PDO $pdo, array $user): void
 {
     $hasRules = (int)$pdo->query('SELECT COUNT(*) FROM rules')->fetchColumn() > 0;
+    $rulesSeeded = false;
     if (!$hasRules) {
         foreach (sample_rules_seed() as $r) {
             $def = (array)$r['definition'];
@@ -2111,19 +2514,75 @@ function handle_load_sample(PDO $pdo, array $user): void
             $st = $pdo->prepare('INSERT INTO rules (name, conditions_json, actions_json, priority, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?)');
             $st->execute([(string)$r['name'], $condsJson, $actsJson, (int)$r['priority'], (int)$r['enabled'], now_iso()]);
         }
+        $rulesSeeded = true;
     }
+    $segmentsSeeded = sample_segments_seed($pdo);
     if (!ensure_upload_dir()) {
         flash('error', 'Upload directory is not writable.');
         redirect_to(['tab' => 'import']);
     }
     $path = upload_dir() . DIRECTORY_SEPARATOR . 'sample_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.csv';
-    file_put_contents($path, SAMPLE_CSV);
-    $lines = preg_split('/\r?\n/', trim(SAMPLE_CSV));
+    $sampleCsv = sample_csv();
+    file_put_contents($path, $sampleCsv);
+    $lines = preg_split('/\r?\n/', trim($sampleCsv));
     $headers = $lines ? str_getcsv($lines[0]) : [];
     $_SESSION['import_stage'] = ['path' => $path, 'filename' => 'liteinsurance_sample.csv', 'headers' => $headers, 'defaults' => ['region' => 'Unknown', 'policy_type' => 'term']];
-    audit($pdo, (int)$user['id'], 'sample.load', ['rules_seeded' => !$hasRules]);
-    flash('success', 'Sample staged. Go to Preview → Confirm to import.');
+    audit($pdo, (int)$user['id'], 'sample.load', ['rules_seeded' => $rulesSeeded, 'segments_seeded' => $segmentsSeeded, 'rows' => SAMPLE_POLICY_COUNT]);
+    flash('success', 'Sample staged with ' . SAMPLE_POLICY_COUNT . ' policies. Preview, then confirm to import.');
     redirect_to(['tab' => 'import']);
+}
+
+function sample_csv(): string
+{
+    $firstNames = ['Asha', 'Noah', 'Maria', 'Li', 'Sam', 'Nadia', 'Omar', 'Priya', 'Ethan', 'Mina', 'Jon', 'Sara', 'Imran', 'Elena', 'Grace', 'Kenji'];
+    $lastNames = ['Rahman', 'Kim', 'Silva', 'Wei', 'Patel', 'Chowdhury', 'Hassan', 'Mitra', 'Brooks', 'Sato', 'Reed', 'Stone', 'Khan', 'Garcia', 'Miller', 'Tan'];
+    $types = ['term', 'term', 'health', 'health', 'auto', 'life', 'life'];
+    $regions = ['West', 'West', 'North', 'South', 'South', 'East', 'Central'];
+    $genders = ['F', 'M', 'F', 'M', ''];
+    $basePremium = ['term' => 118.0, 'health' => 104.0, 'auto' => 82.0, 'life' => 150.0];
+    $baseAssured = ['term' => 72000, 'health' => 34000, 'auto' => 21000, 'life' => 98000];
+
+    $seed = SAMPLE_RANDOM_SEED;
+    $rand = static function () use (&$seed): float {
+        $seed = (int)(($seed * 1103515245 + 12345) % 2147483648);
+        return $seed / 2147483648;
+    };
+    $pick = static function (array $items) use ($rand) {
+        return $items[(int)floor($rand() * count($items))];
+    };
+    $chance = static function (float $p) use ($rand): bool {
+        return $rand() < $p;
+    };
+
+    $fh = fopen('php://temp', 'r+');
+    if (!$fh) {
+        return '';
+    }
+    fputcsv($fh, ['policy_number', 'name', 'dob', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured']);
+    for ($i = 1; $i <= SAMPLE_POLICY_COUNT; $i++) {
+        $type = (string)$pick($types);
+        $region = (string)$pick($regions);
+        $age = 22 + (int)floor(min($rand(), $rand()) * 55);
+        $tenure = (int)floor(min($rand(), $rand()) * 96);
+        $premium = max(38.0, (float)$basePremium[$type] + (($age - 42) * 0.9) + ($tenure * 0.45) + floor($rand() * 42) - 18);
+        $sumAssured = (int)$baseAssured[$type] + (int)floor($rand() * 36000);
+        $dob = sprintf('%04d-%02d-%02d', 2026 - $age, ($i % 12) + 1, ($i % 27) + 1);
+        fputcsv($fh, [
+            'P-' . str_pad((string)(3000 + $i), 4, '0', STR_PAD_LEFT),
+            (string)$pick($firstNames) . ' ' . (string)$pick($lastNames),
+            $chance(0.08) ? '' : $dob,
+            $chance(0.10) ? '' : (string)$pick($genders),
+            $chance(0.08) ? '' : $type,
+            $chance(0.11) ? '' : $region,
+            $chance(0.09) ? '' : number_format($premium, 2, '.', ''),
+            $chance(0.08) ? '' : (string)$tenure,
+            $chance(0.06) ? '' : (string)$sumAssured,
+        ]);
+    }
+    rewind($fh);
+    $csv = stream_get_contents($fh);
+    fclose($fh);
+    return is_string($csv) ? str_replace("\r\n", "\n", $csv) : '';
 }
 
 function sample_rules_seed(): array
@@ -2131,13 +2590,13 @@ function sample_rules_seed(): array
     return [
         [
             'name' => 'Senior + short tenure = High',
-            'priority' => 10,
+            'priority' => 120,
             'enabled' => 1,
             'definition' => [
                 'logic' => 'AND',
                 'conditions' => [
-                    ['field' => 'age', 'op' => '>=', 'value' => 60],
-                    ['field' => 'tenure_months', 'op' => '<', 'value' => 12],
+                    ['field' => 'age', 'op' => '>=', 'value' => 58],
+                    ['field' => 'tenure_months', 'op' => '<', 'value' => 24],
                     ['field' => 'policy_type', 'op' => 'in', 'value' => ['term', 'health']],
                 ],
                 'actions' => ['set_risk_tier' => 'High', 'score_delta' => 20, 'add_tag' => 'senior_short_tenure'],
@@ -2156,7 +2615,77 @@ function sample_rules_seed(): array
                 'actions' => ['set_risk_tier' => 'Low', 'score_delta' => -10, 'add_tag' => 'high_value_loyal'],
             ],
         ],
+        [
+            'name' => 'Low premium + short tenure = Review',
+            'priority' => 70,
+            'enabled' => 1,
+            'definition' => [
+                'logic' => 'AND',
+                'conditions' => [
+                    ['field' => 'premium_amount', 'op' => '<', 'value' => 75],
+                    ['field' => 'tenure_months', 'op' => '<', 'value' => 8],
+                ],
+                'actions' => ['set_risk_tier' => 'Review', 'score_delta' => -15, 'add_tag' => 'thin_file_review'],
+            ],
+        ],
+        [
+            'name' => 'Large exposure term/life = Medium',
+            'priority' => 90,
+            'enabled' => 1,
+            'definition' => [
+                'logic' => 'AND',
+                'conditions' => [
+                    ['field' => 'sum_assured', 'op' => '>=', 'value' => 90000],
+                    ['field' => 'policy_type', 'op' => 'in', 'value' => ['term', 'life']],
+                ],
+                'actions' => ['set_risk_tier' => 'Medium', 'score_delta' => 5, 'add_tag' => 'large_exposure'],
+            ],
+        ],
     ];
+}
+
+function sample_segments_seed(PDO $pdo): bool
+{
+    $hasSegments = (int)$pdo->query('SELECT COUNT(*) FROM segments')->fetchColumn() > 0;
+    if ($hasSegments) {
+        return false;
+    }
+
+    $rulesByName = [];
+    $rows = $pdo->query('SELECT id, name FROM rules ORDER BY id ASC')->fetchAll();
+    foreach ($rows as $r) {
+        $rulesByName[(string)$r['name']] = (int)$r['id'];
+    }
+
+    $segments = [
+        [
+            'name' => 'High-risk senior review',
+            'rule_ids' => array_filter([(int)($rulesByName['Senior + short tenure = High'] ?? 0)]),
+            'where' => "risk_tier = 'High' OR age >= 63",
+        ],
+        [
+            'name' => 'Health cross-sell candidates',
+            'rule_ids' => [],
+            'where' => "policy_type = 'health' AND ltv_estimate > 6000",
+        ],
+        [
+            'name' => 'Data repair queue',
+            'rule_ids' => [],
+            'where' => 'confidence_score < 80',
+        ],
+        [
+            'name' => 'High LTV loyalists',
+            'rule_ids' => array_filter([(int)($rulesByName['High premium + long tenure = Low'] ?? 0)]),
+            'where' => 'ltv_estimate > 9000 AND tenure_months >= 30',
+        ],
+    ];
+
+    $st = $pdo->prepare('INSERT INTO segments (name, rule_ids, last_run_at) VALUES (?, ?, NULL)');
+    foreach ($segments as $seg) {
+        $payload = ['rule_ids' => array_values((array)$seg['rule_ids']), 'where' => (string)$seg['where'], 'mode' => 'rules_and_where'];
+        $st->execute([(string)$seg['name'], json_encode($payload, JSON_UNESCAPED_SLASHES)]);
+    }
+    return true;
 }
 
 function handle_import_upload(PDO $pdo, array $user): void
@@ -2253,6 +2782,8 @@ function handle_import_commit(PDO $pdo, array $user): void
     }
     $filename = (string)($stage['filename'] ?? 'upload.csv');
     $analysis = (array)$stage['preview']['analysis'];
+    $customDefs = is_array($analysis['custom_fields'] ?? null) ? (array)$analysis['custom_fields'] : [];
+    upsert_custom_field_defs($pdo, $customDefs);
 
     $pdo->beginTransaction();
     $insImp = $pdo->prepare('INSERT INTO imports (filename, rows_total, rows_imported, errors_json, created_at) VALUES (?, ?, 0, ?, ?)');
@@ -2284,7 +2815,9 @@ function handle_import_commit(PDO $pdo, array $user): void
         $rowsTotal++;
         $rec = map_row($headers, $row, (array)$stage['mapping']);
         $imputed = [];
-        $validated = normalize_and_impute($rec, (array)$stage['defaults'], $analysis, $imputed);
+        $validated = normalize_and_impute($rec, (array)$stage['defaults'], $analysis, $imputed, $rowsTotal, $filename);
+        $customFields = extract_custom_fields($headers, $row, $customDefs);
+        $validated['custom'] = $customFields;
         $hard = validate_policyholder_hard($validated);
         if ($hard !== null) {
             if (count($errors) < 50) {
@@ -2311,7 +2844,7 @@ function handle_import_commit(PDO $pdo, array $user): void
         $ruleHits = (array)($riskOut['rule_hits'] ?? []);
         $score = min(100, (int)round($score + min(20, count($ruleHits) * 4)));
         $ltv = compute_ltv($validated);
-        $meta = ['imputed_fields' => array_values($imputed), 'rule_hits' => $ruleHits, 'tags' => (array)($riskOut['tags'] ?? [])];
+        $meta = ['imputed_fields' => array_values($imputed), 'rule_hits' => $ruleHits, 'tags' => (array)($riskOut['tags'] ?? []), 'custom_fields' => $customFields];
         $ins->execute([
             $policyNumber,
             (string)$validated['name'],
@@ -2341,10 +2874,52 @@ function handle_import_commit(PDO $pdo, array $user): void
 
     $upd = $pdo->prepare('UPDATE imports SET rows_total = ?, rows_imported = ?, errors_json = ? WHERE id = ?');
     $upd->execute([$rowsTotal, $rowsImported, json_encode($errors, JSON_UNESCAPED_SLASHES), $importId]);
+    if ($filename === 'liteinsurance_sample.csv' && $rowsImported > 0) {
+        seed_sample_campaigns($pdo);
+    }
     audit($pdo, (int)$user['id'], 'import.commit', ['filename' => $filename, 'rows_total' => $rowsTotal, 'rows_imported' => $rowsImported, 'import_id' => $importId]);
     $_SESSION['import_stage'] = null;
     flash('success', 'Import completed: ' . $rowsImported . ' row(s) imported.');
     redirect_to(['tab' => 'import']);
+}
+
+function seed_sample_campaigns(PDO $pdo): void
+{
+    $hasCampaigns = (int)$pdo->query('SELECT COUNT(*) FROM campaigns')->fetchColumn() > 0;
+    if ($hasCampaigns) {
+        return;
+    }
+    $segments = $pdo->query('SELECT * FROM segments ORDER BY id ASC LIMIT 2')->fetchAll();
+    if (!$segments) {
+        return;
+    }
+    $ins = $pdo->prepare('INSERT INTO campaigns (name, segment_id, assumptions, projected_revenue, created_at) VALUES (?, ?, ?, ?, ?)');
+    foreach ($segments as $idx => $seg) {
+        [$ruleIds, $where] = segment_criteria($seg);
+        $segmentSize = estimate_segment_size($pdo, $ruleIds, $where);
+        if ($segmentSize <= 0) {
+            continue;
+        }
+        $rate = $idx === 0 ? 0.045 : 0.065;
+        $avg = $idx === 0 ? 950.0 : 1250.0;
+        $cost = 2.5;
+        $lift = $idx === 0 ? 0.0 : 0.08;
+        $gross = $segmentSize * $rate * $avg * (1 + $lift);
+        $estCost = $segmentSize * $cost;
+        $assumptions = [
+            'segment_size' => $segmentSize,
+            'cross_sell_rate' => $rate,
+            'avg_offer_value' => $avg,
+            'campaign_cost_per_contact' => $cost,
+            'conversion_lift' => $lift,
+            'contacts' => $segmentSize,
+            'expected_conversions' => $segmentSize * $rate,
+            'gross_revenue' => $gross,
+            'estimated_cost' => $estCost,
+            'net_revenue' => $gross - $estCost,
+        ];
+        $ins->execute(['Sample simulation - ' . (string)$seg['name'], (int)$seg['id'], json_encode($assumptions, JSON_UNESCAPED_SLASHES), $gross, now_iso()]);
+    }
 }
 
 function export_rules_json(PDO $pdo): void
@@ -2387,7 +2962,7 @@ function json_rule_test(PDO $pdo): void
     $rule = ['id' => 0, 'conditions' => ['logic' => (string)($def['logic'] ?? 'AND'), 'conditions' => (array)$def['conditions']], 'actions' => (array)$def['actions']];
     $out = evaluate_rules_for_record($rec, [$rule]);
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['ok' => true, 'record' => ['policy_number' => $rec['policy_number'], 'region' => $rec['region'], 'age' => $rec['age'], 'policy_type' => $rec['policy_type']], 'result' => $out], JSON_UNESCAPED_SLASHES);
+    echo json_encode(['ok' => true, 'record' => ['policy_number' => $rec['policy_number'], 'region' => $rec['region'], 'age' => $rec['age'], 'policy_type' => $rec['policy_type'], 'custom' => $rec['custom']], 'result' => $out], JSON_UNESCAPED_SLASHES);
 }
 
 function handle_rule_save(PDO $pdo, array $user): void
@@ -2609,6 +3184,245 @@ function compile_filter_expr(string $expr): array
     return [$out['sql'], $out['params']];
 }
 
+function filter_field_type(string $field): ?string
+{
+    $allowedFields = [
+        'risk_tier' => 'text',
+        'region' => 'text',
+        'policy_type' => 'text',
+        'premium_amount' => 'num',
+        'tenure_months' => 'num',
+        'age' => 'num',
+        'ltv_estimate' => 'num',
+        'confidence_score' => 'num',
+    ];
+    $field = strtolower(trim($field));
+    if (isset($allowedFields[$field])) {
+        return $allowedFields[$field];
+    }
+    if (preg_match('/^custom\.[a-z_][a-z0-9_]*$/', $field)) {
+        return 'custom';
+    }
+    return null;
+}
+
+function filter_expr_uses_custom(string $expr): bool
+{
+    return preg_match('/\bcustom\.[a-z_][a-z0-9_]*\b/i', $expr) === 1;
+}
+
+function validate_filter_expr(string $expr): void
+{
+    parse_filter_expr_ast($expr);
+}
+
+function parse_filter_expr_ast(string $expr): array
+{
+    $expr = trim($expr);
+    if ($expr === '') {
+        return ['type' => 'true'];
+    }
+    $tokens = tokenize_filter_expr($expr);
+    $i = 0;
+    $parseExpr = null;
+    $parseTerm = null;
+    $parseFactor = null;
+
+    $expect = static function (string $type, ?string $value = null) use (&$tokens, &$i): array {
+        $t = $tokens[$i] ?? null;
+        if (!$t || $t['type'] !== $type || ($value !== null && strtoupper((string)$t['value']) !== strtoupper($value))) {
+            throw new RuntimeException('Invalid filter syntax.');
+        }
+        $i++;
+        return $t;
+    };
+    $peek = static function () use (&$tokens, &$i): ?array {
+        return $tokens[$i] ?? null;
+    };
+    $parseValue = static function () use (&$expect, &$peek): array {
+        $t = $peek();
+        if (!$t) {
+            throw new RuntimeException('Missing value.');
+        }
+        if ($t['type'] === 'NUMBER') {
+            return $expect('NUMBER');
+        }
+        if ($t['type'] === 'STRING') {
+            return $expect('STRING');
+        }
+        throw new RuntimeException('Invalid value.');
+    };
+    $parseComparison = static function () use (&$expect, &$peek, &$parseValue): array {
+        $fieldTok = $expect('IDENT');
+        $field = strtolower((string)$fieldTok['value']);
+        $fieldType = filter_field_type($field);
+        if ($fieldType === null) {
+            throw new RuntimeException('Field not allowed.');
+        }
+        $kw = $peek();
+        if ($kw && $kw['type'] === 'KW' && strtoupper((string)$kw['value']) === 'IS') {
+            $expect('KW', 'IS');
+            $not = false;
+            $p = $peek();
+            if ($p && $p['type'] === 'KW' && strtoupper((string)$p['value']) === 'NOT') {
+                $expect('KW', 'NOT');
+                $not = true;
+            }
+            $expect('KW', 'NULL');
+            return ['type' => 'cmp', 'field' => $field, 'op' => $not ? 'is_not_null' : 'is_null'];
+        }
+        if ($kw && $kw['type'] === 'KW' && strtoupper((string)$kw['value']) === 'IN') {
+            $expect('KW', 'IN');
+            $expect('LPAREN');
+            $vals = [];
+            while (true) {
+                $vals[] = $parseValue()['parsed'];
+                $p = $peek();
+                if ($p && $p['type'] === 'COMMA') {
+                    $expect('COMMA');
+                    continue;
+                }
+                break;
+            }
+            $expect('RPAREN');
+            if (count($vals) === 0 || count($vals) > 50) {
+                throw new RuntimeException('Invalid IN list.');
+            }
+            return ['type' => 'cmp', 'field' => $field, 'op' => 'in', 'value' => $vals];
+        }
+        if ($kw && $kw['type'] === 'KW' && strtoupper((string)$kw['value']) === 'LIKE') {
+            $expect('KW', 'LIKE');
+            return ['type' => 'cmp', 'field' => $field, 'op' => 'like', 'value' => $parseValue()['parsed']];
+        }
+        $op = (string)$expect('OP')['value'];
+        if (!in_array($op, ['=', '!=', '>', '<', '>=', '<='], true)) {
+            throw new RuntimeException('Operator not allowed.');
+        }
+        $value = $parseValue()['parsed'];
+        if ($fieldType === 'num' && !is_numeric($value)) {
+            throw new RuntimeException('Numeric value required.');
+        }
+        return ['type' => 'cmp', 'field' => $field, 'op' => $op, 'value' => $value];
+    };
+    $parseFactor = static function () use (&$peek, &$expect, &$parseComparison, &$parseExpr, &$parseFactor): array {
+        $t = $peek();
+        if (!$t) {
+            throw new RuntimeException('Unexpected end.');
+        }
+        if ($t['type'] === 'KW' && strtoupper((string)$t['value']) === 'NOT') {
+            $expect('KW', 'NOT');
+            return ['type' => 'not', 'item' => $parseFactor()];
+        }
+        if ($t['type'] === 'LPAREN') {
+            $expect('LPAREN');
+            $inner = $parseExpr();
+            $expect('RPAREN');
+            return $inner;
+        }
+        return $parseComparison();
+    };
+    $parseTerm = static function () use (&$peek, &$expect, &$parseFactor): array {
+        $left = $parseFactor();
+        while (true) {
+            $t = $peek();
+            if (!$t || $t['type'] !== 'KW' || strtoupper((string)$t['value']) !== 'AND') {
+                break;
+            }
+            $expect('KW', 'AND');
+            $left = ['type' => 'and', 'left' => $left, 'right' => $parseFactor()];
+        }
+        return $left;
+    };
+    $parseExpr = static function () use (&$peek, &$expect, &$parseTerm): array {
+        $left = $parseTerm();
+        while (true) {
+            $t = $peek();
+            if (!$t || $t['type'] !== 'KW' || strtoupper((string)$t['value']) !== 'OR') {
+                break;
+            }
+            $expect('KW', 'OR');
+            $left = ['type' => 'or', 'left' => $left, 'right' => $parseTerm()];
+        }
+        return $left;
+    };
+
+    $out = $parseExpr();
+    if (($tokens[$i] ?? null) !== null) {
+        throw new RuntimeException('Unexpected token.');
+    }
+    return $out;
+}
+
+function eval_filter_expr_for_record(array $record, string $expr): bool
+{
+    return eval_filter_ast(parse_filter_expr_ast($expr), $record);
+}
+
+function eval_filter_ast(array $ast, array $record): bool
+{
+    $type = (string)($ast['type'] ?? '');
+    if ($type === 'true') {
+        return true;
+    }
+    if ($type === 'and') {
+        return eval_filter_ast((array)$ast['left'], $record) && eval_filter_ast((array)$ast['right'], $record);
+    }
+    if ($type === 'or') {
+        return eval_filter_ast((array)$ast['left'], $record) || eval_filter_ast((array)$ast['right'], $record);
+    }
+    if ($type === 'not') {
+        return !eval_filter_ast((array)$ast['item'], $record);
+    }
+    if ($type !== 'cmp') {
+        return false;
+    }
+    $left = value_for_rule_field($record, (string)$ast['field']);
+    $op = (string)($ast['op'] ?? '');
+    $value = $ast['value'] ?? null;
+    if ($op === 'is_null') {
+        return $left === null || $left === '';
+    }
+    if ($op === 'is_not_null') {
+        return !($left === null || $left === '');
+    }
+    if ($op === 'in') {
+        foreach ((array)$value as $v) {
+            if (compare_scalar($left, $v) === 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if ($op === 'like') {
+        return sql_like_match((string)$left, (string)$value);
+    }
+    if ($op === '=' || $op === '==') {
+        return compare_scalar($left, $value) === 0;
+    }
+    if ($op === '!=') {
+        return compare_scalar($left, $value) !== 0;
+    }
+    if ($op === '>') {
+        return (float)$left > (float)$value;
+    }
+    if ($op === '<') {
+        return (float)$left < (float)$value;
+    }
+    if ($op === '>=') {
+        return (float)$left >= (float)$value;
+    }
+    if ($op === '<=') {
+        return (float)$left <= (float)$value;
+    }
+    return false;
+}
+
+function sql_like_match(string $left, string $pattern): bool
+{
+    $regex = '/^' . str_replace(['%', '_'], ['.*', '.'], preg_quote($pattern, '/')) . '$/i';
+    return preg_match($regex, $left) === 1;
+}
+
 function segment_criteria(array $segRow): array
 {
     $criteria = safe_json((string)($segRow['rule_ids'] ?? ''));
@@ -2622,21 +3436,28 @@ function segment_criteria(array $segRow): array
 
 function estimate_segment_size(PDO $pdo, array $ruleIds, string $where): int
 {
-    try {
-        [$filterSql, $filterParams] = compile_filter_expr($where);
-    } catch (Throwable $e) {
+    $usesCustom = filter_expr_uses_custom($where);
+    if (!$usesCustom) {
+        try {
+            [$filterSql, $filterParams] = compile_filter_expr($where);
+        } catch (Throwable $e) {
+            $filterSql = '1=1';
+            $filterParams = [];
+        }
+        $stBase = $pdo->prepare('SELECT COUNT(*) FROM policyholders WHERE ' . $filterSql);
+        $stBase->execute($filterParams);
+        $baseCount = (int)$stBase->fetchColumn();
+        if (!$ruleIds) {
+            return $baseCount;
+        }
+    } else {
+        validate_filter_expr($where);
         $filterSql = '1=1';
         $filterParams = [];
     }
-    $stBase = $pdo->prepare('SELECT COUNT(*) FROM policyholders WHERE ' . $filterSql);
-    $stBase->execute($filterParams);
-    $baseCount = (int)$stBase->fetchColumn();
-    if (!$ruleIds) {
-        return $baseCount;
-    }
     $rules = load_rules($pdo);
     $selected = array_values(array_filter($rules, fn($r) => in_array((int)($r['id'] ?? 0), $ruleIds, true)));
-    if (!$selected) {
+    if ($ruleIds && !$selected) {
         return 0;
     }
     $count = 0;
@@ -2650,6 +3471,10 @@ function estimate_segment_size(PDO $pdo, array $ruleIds, string $where): int
         }
         foreach ($rows as $ph) {
             $rec = policyholder_record_from_row($ph);
+            if ($usesCustom && !eval_filter_expr_for_record($rec, $where)) {
+                $offsetId = (int)$ph['id'];
+                continue;
+            }
             $ok = true;
             foreach ($selected as $rule) {
                 if (!eval_conditions($rec, (array)($rule['conditions'] ?? []))) {
@@ -2677,7 +3502,7 @@ function handle_segment_save(PDO $pdo, array $user): void
         redirect_to(['tab' => 'segments']);
     }
     try {
-        compile_filter_expr($where);
+        validate_filter_expr($where);
     } catch (Throwable $e) {
         flash('error', 'Unsafe filter expression.');
         redirect_to(['tab' => 'segments', 'edit' => (string)$id]);
@@ -2715,7 +3540,7 @@ function handle_segment_estimate(PDO $pdo, array $user): void
     $ruleIds = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['rule_ids'] ?? [])), fn($x) => $x > 0)));
     $where = trim((string)($_POST['where'] ?? ''));
     try {
-        compile_filter_expr($where);
+        validate_filter_expr($where);
     } catch (Throwable $e) {
         flash('error', 'Unsafe filter expression.');
         redirect_to(['tab' => 'segments']);
@@ -2755,19 +3580,31 @@ function export_segment_csv(PDO $pdo): void
         return;
     }
     [$ruleIds, $where] = segment_criteria($seg);
-    try {
-        [$filterSql, $filterParams] = compile_filter_expr($where);
-    } catch (Throwable $e) {
+    $usesCustom = filter_expr_uses_custom($where);
+    if ($usesCustom) {
+        validate_filter_expr($where);
         $filterSql = '1=1';
         $filterParams = [];
+    } else {
+        try {
+            [$filterSql, $filterParams] = compile_filter_expr($where);
+        } catch (Throwable $e) {
+            $filterSql = '1=1';
+            $filterParams = [];
+        }
     }
     $rules = load_rules($pdo);
     $selected = array_values(array_filter($rules, fn($r) => in_array((int)($r['id'] ?? 0), $ruleIds, true)));
+    $customDefs = $pdo->query('SELECT field_key, label FROM custom_field_defs WHERE enabled = 1 ORDER BY field_key ASC')->fetchAll();
 
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="segment_' . (int)$seg['id'] . '_export.csv"');
     $out = fopen('php://output', 'wb');
-    fputcsv($out, ['policy_number', 'name', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'ltv_estimate', 'risk_tier', 'confidence_score']);
+    $headers = ['policy_number', 'name', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'ltv_estimate', 'risk_tier', 'confidence_score'];
+    foreach ($customDefs as $def) {
+        $headers[] = 'custom.' . (string)$def['field_key'];
+    }
+    fputcsv($out, $headers);
 
     $offsetId = 0;
     while (true) {
@@ -2779,6 +3616,10 @@ function export_segment_csv(PDO $pdo): void
         }
         foreach ($rows as $ph) {
             $rec = policyholder_record_from_row($ph);
+            if ($usesCustom && !eval_filter_expr_for_record($rec, $where)) {
+                $offsetId = (int)$ph['id'];
+                continue;
+            }
             $ok = true;
             foreach ($selected as $rule) {
                 if (!eval_conditions($rec, (array)($rule['conditions'] ?? []))) {
@@ -2787,11 +3628,17 @@ function export_segment_csv(PDO $pdo): void
                 }
             }
             if ($ok) {
-                fputcsv($out, [
+                $line = [
                     $rec['policy_number'], $rec['name'], (string)($rec['age'] ?? ''), $rec['gender'], $rec['policy_type'], $rec['region'],
                     (string)($rec['premium_amount'] ?? ''), (string)($rec['tenure_months'] ?? ''), (string)($rec['sum_assured'] ?? ''),
                     (string)($rec['ltv_estimate'] ?? ''), $rec['risk_tier'], (string)$rec['confidence_score'],
-                ]);
+                ];
+                $custom = is_array($rec['custom'] ?? null) ? (array)$rec['custom'] : [];
+                foreach ($customDefs as $def) {
+                    $v = $custom[(string)$def['field_key']] ?? '';
+                    $line[] = is_bool($v) ? ($v ? 'true' : 'false') : (string)$v;
+                }
+                fputcsv($out, $line);
             }
             $offsetId = (int)$ph['id'];
         }
@@ -2884,6 +3731,7 @@ function handle_recompute_now(PDO $pdo, array $user): void
             if (!is_array($meta)) {
                 $meta = [];
             }
+            $metadata = $meta;
             $imputed = is_array($meta['imputed_fields'] ?? null) ? (array)$meta['imputed_fields'] : [];
             $score = compute_confidence($rec, $imputed);
             $riskOut = evaluate_rules_for_record($rec, $rules);
@@ -2891,6 +3739,9 @@ function handle_recompute_now(PDO $pdo, array $user): void
             $score = min(100, (int)round($score + min(20, count($ruleHits) * 4)));
             $ltv = compute_ltv($rec);
             $newMeta = ['imputed_fields' => $imputed, 'rule_hits' => $ruleHits, 'tags' => (array)($riskOut['tags'] ?? [])];
+            if (isset($metadata['custom_fields']) && is_array($metadata['custom_fields'])) {
+                $newMeta['custom_fields'] = $metadata['custom_fields'];
+            }
             $upd->execute([$ltv, (string)($riskOut['risk_tier'] ?? 'Unknown'), $score, json_encode($newMeta, JSON_UNESCAPED_SLASHES), (int)$ph['id']]);
             $updated++;
             $offsetId = (int)$ph['id'];

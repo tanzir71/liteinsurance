@@ -9,7 +9,10 @@
    - `liteinsurance_error.log` (server-side error log)
    - `liteinsurance_uploads/` (CSV staging, created automatically)
 5) Visit `https://YOURDOMAIN/liteinsurance.php` and register the first user (becomes `admin`).
-6) Import → “Download sample CSV” → Upload → Map columns → Preview → Confirm & import.
+6) Open Settings and review the setup doctor for PHP, PDO SQLite, DB path, upload path, upload limits, `.env`, and `CRON_TOKEN`.
+7) Import -> “Download sample CSV” -> Upload -> Map columns -> Preview -> Confirm & import.
+
+Real CSVs can use a mapped Record ID and optional Display name. Unmapped columns are preserved as custom fields and can be referenced later as `custom.field_key` in rules and segment filters.
 
 ## Optional: .env config (recommended)
 Create `public_html/.env` (not committed) based on `.env.example`.

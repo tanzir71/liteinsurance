@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LiteInsurance Docs -- Deploy, Configure, and Operate</title>
+  <meta name="description" content="Deployment and operating docs for LiteInsurance: PHP 8, SQLite, CSV imports, JSON rules, segments, security, cron, and backups.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://tanzir71.github.io/liteinsurance/docs.html">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%230a0a0a'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='32' font-family='monospace' fill='%23f4f3ee'%3ELI%3C/text%3E%3C/svg%3E">
+  <style>
+    :root { --bg:#f4f3ee; --bg-alt:#ebe9e1; --fg:#0a0a0a; --muted:#6b6b66; --muted-2:#8a877e; --faint:#a8a59c; --border:#cfcdc4; --border-soft:#e3e1d8; --panel:#fbfaf6; --acc:#2540ff; --dk-bg:#0c0d0e; --dk-ink:#f4f3ee; --dk-mute:#8e8f88; --dk-rule:#232527; --f-sans:Inter,"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif; --f-mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace; }
+    *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--f-sans);line-height:1.55} a{color:inherit;text-decoration:none} code,pre,.mono{font-family:var(--f-mono)}
+    .container{max-width:1152px;margin:0 auto;padding:0 20px} header{position:sticky;top:0;z-index:30;border-bottom:1px solid var(--border);background:rgba(244,243,238,.94);backdrop-filter:blur(10px)} header .container{max-width:1152px} .header-inner{min-height:60px;display:flex;align-items:center;justify-content:space-between;gap:16px}.brand{display:inline-flex;align-items:center;gap:12px}.logo{display:grid;place-items:center;width:34px;height:34px;background:var(--fg);color:var(--bg);font:11px/1 var(--f-mono);letter-spacing:.05em}.brand-name{font-size:14px;font-weight:650;letter-spacing:-.02em}nav{display:flex;flex-wrap:wrap;align-items:center;gap:6px;justify-content:flex-end;font-size:14px}.nav-link{display:inline-flex;height:36px;align-items:center;padding:0 10px;color:var(--muted)}.nav-link:hover{background:var(--bg-alt);color:var(--fg)}.btn{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:0 14px;border:1px solid var(--fg);background:var(--fg);color:var(--bg);font-weight:600}.header-inner .btn{min-height:44px;padding:0 18px;font-size:14px;font-family:var(--f-sans)}.btn-primary{background:var(--fg);color:var(--bg)}.btn:hover,.btn-primary:hover{background:var(--acc);border-color:var(--acc);color:#fff}
+    .hero{border-bottom:1px solid var(--border)}.hero-inner{padding:72px 0 54px}.eyebrow{display:inline-flex;align-items:center;gap:12px;font:12px/1.4 var(--f-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}.eyebrow:before{content:"";width:12px;height:12px;background:var(--acc)}h1{margin:20px 0 0;max-width:760px;font-size:48px;line-height:1.04;letter-spacing:-.035em;font-weight:650;text-wrap:balance}.lead{margin:18px 0 0;max-width:680px;color:var(--muted);line-height:1.7}
+    .layout{display:grid;grid-template-columns:1fr;gap:34px;padding:44px 0 76px}@media(min-width:980px){.layout{grid-template-columns:250px 1fr}.toc{position:sticky;top:86px;align-self:start}}.toc{border:1px solid var(--border);background:var(--panel);padding:16px}.toc .label{font:11px/1.4 var(--f-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--muted-2);margin-bottom:8px}.toc a{display:block;padding:8px 0;border-top:1px solid var(--border-soft);font-size:13px;color:var(--muted)}.toc a:hover{color:var(--acc)}
+    section.doc{padding:0 0 42px;margin-bottom:42px;border-bottom:1px solid var(--border)}.idx{font:12px/1.4 var(--f-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--faint)}h2{margin:10px 0 0;font-size:30px;line-height:1.12;letter-spacing:-.03em;font-weight:650}p{max-width:760px;color:var(--muted)}.grid{display:grid;grid-template-columns:1fr;gap:1px;background:var(--border);border:1px solid var(--border);margin-top:18px}@media(min-width:760px){.grid-2{grid-template-columns:repeat(2,1fr)}.grid-3{grid-template-columns:repeat(3,1fr)}}.cell{background:var(--panel);padding:18px}.cell h3{margin:0;font-size:15px}.cell p{margin:8px 0 0;font-size:13.5px}.cell .k{display:inline-block;margin-top:12px;color:var(--acc);font:11px/1.4 var(--f-mono)}pre{margin:18px 0 0;padding:16px;overflow:auto;background:var(--dk-bg);color:var(--dk-ink);font:12px/1.7 var(--f-mono)}table{width:100%;border-collapse:collapse;margin-top:18px;background:var(--panel);font-size:13px}th,td{padding:11px 10px;border:1px solid var(--border);text-align:left;vertical-align:top}th{font:11px/1.4 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted-2)}
+    footer{border-top:1px solid var(--border);padding:34px 0;color:var(--muted-2);font-size:12px}.footer-inner{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between}.footer-links{display:flex;flex-wrap:wrap;gap:14px;font-family:var(--f-mono)}.footer-links a:hover{color:var(--acc)}@media(max-width:760px){nav{display:none}h1{font-size:38px}}
+  </style>
+</head>
+<body>
+  <header><div class="container header-inner"><a class="brand" href="./index.html"><span class="logo">LI</span><span class="brand-name">LiteInsurance</span></a><nav><a class="nav-link" href="./index.html">Home</a><a class="nav-link" href="./demo.html">Demo</a><a class="nav-link" href="./docs.html">Docs</a><a class="nav-link" href="./compare.html">Compare</a><a class="btn btn-primary" href="https://github.com/tanzir71/liteinsurance" target="_blank" rel="noopener">GitHub</a></nav></div></header>
+  <main>
+    <div class="hero"><div class="container hero-inner"><span class="eyebrow">Docs / verified against the PHP app</span><h1>Deploy, configure, and operate LiteInsurance.</h1><p class="lead">These docs cover the actual single-file PHP application: CSV import, imputation, LTV scoring, JSON rules, segments, campaign simulation, security controls, cron, and backups.</p></div></div>
+    <div class="container layout">
+      <aside class="toc" aria-label="Docs table of contents"><div class="label">Contents</div><a href="#deploy">Deploy</a><a href="#local">Run locally</a><a href="#config">Config</a><a href="#pipeline">Pipeline</a><a href="#rules">Rules</a><a href="#segments">Segments</a><a href="#security">Security</a><a href="#ops">Operations</a></aside>
+      <div>
+        <section class="doc" id="deploy"><span class="idx">DOC / 01</span><h2>Deploy to shared hosting</h2><p>Upload <code>liteinsurance.php</code> into <code>public_html/</code>, ensure PHP 8+ and PDO SQLite are enabled, then visit <code>/liteinsurance.php</code>. The first registered user becomes the admin. Settings includes a Setup doctor for PHP, SQLite, paths, upload limits, cron token, and webroot storage checks.</p><pre>public_html/
+  liteinsurance.php
+  .env             # optional
+
+Visit: https://YOURDOMAIN/liteinsurance.php
+Register first user -> Settings -> Setup doctor -> Import -> Preview -> Confirm import</pre></section>
+        <section class="doc" id="local"><span class="idx">DOC / 02</span><h2>Run locally</h2><p>The app has no build step. Use PHP's built-in server from the repository root.</p><pre>php -S 127.0.0.1:8000
+open http://127.0.0.1:8000/liteinsurance.php</pre></section>
+        <section class="doc" id="config"><span class="idx">DOC / 03</span><h2>Configuration keys</h2><p>Most defaults live in the PHP file. Optional environment overrides can be set in <code>.env</code>.</p><table><thead><tr><th>Key</th><th>Default</th><th>Effect</th></tr></thead><tbody><tr><td><code>CRON_TOKEN</code></td><td>blank</td><td>Protects web cron. CLI cron can run without it.</td></tr><tr><td><code>DB_PATH</code></td><td><code>liteinsurance.db</code></td><td>SQLite database path. Move outside webroot when hosting allows.</td></tr><tr><td><code>UPLOAD_DIR</code></td><td><code>liteinsurance_uploads/</code></td><td>CSV staging directory. Move outside webroot when possible.</td></tr></tbody></table></section>
+        <section class="doc" id="pipeline"><span class="idx">DOC / 04</span><h2>Import and scoring pipeline</h2><div class="grid grid-3"><div class="cell"><h3>Import</h3><p>CSV upload, Record ID mapping, optional Display name mapping, custom CSV field preservation, preview, and staged commit.</p><span class="k">metadata.custom_fields</span></div><div class="cell"><h3>Impute</h3><p>Mapped numeric fields use mean. Mapped categorical fields use mode or configured defaults.</p><span class="k">is_imputed</span></div><div class="cell"><h3>Score</h3><p>LTV requires mapped premium, tenure, and policy type. Without them, scoring stays blank or Unknown.</p><span class="k">ltv_estimate</span></div></div></section>
+        <section class="doc" id="rules"><span class="idx">DOC / 05</span><h2>Risk rules</h2><p>Rules are priority-ordered JSON definitions. A matching rule can set <code>risk_tier</code>, adjust score, and add a tag. Supported leaf operators include <code>=</code>, <code>!=</code>, <code>&gt;</code>, <code>&lt;</code>, <code>&gt;=</code>, <code>&lt;=</code>, <code>in</code>, <code>contains</code>, and <code>regex</code>.</p><pre>{
+  "logic": "AND",
+  "conditions": [
+    { "field": "age", "op": ">=", "value": 60 },
+    { "field": "tenure_months", "op": "<", "value": 12 }
+  ],
+  "actions": {
+    "set_risk_tier": "High",
+    "score_delta": 20,
+    "add_tag": "senior_short_tenure"
+  }
+}</pre></section>
+        <section class="doc" id="segments"><span class="idx">DOC / 06</span><h2>Segments and exports</h2><p>Segments combine selected rule IDs with a validated WHERE-style filter. Allowed fields include core fields plus custom fields using <code>custom.field_key</code>. CSV export is protected by a session token and appends enabled custom fields.</p><pre>risk_tier = 'High' AND ltv_estimate > 7000
+custom.renewal_probability >= 0.7 AND confidence_score >= 80</pre></section>
+        <section class="doc" id="security"><span class="idx">DOC / 07</span><h2>Security model</h2><div class="grid grid-2"><div class="cell"><h3>Web controls</h3><p>CSRF on POST, session hardening, idle timeout, rate limits, and security headers.</p><span class="k">csrf_token</span></div><div class="cell"><h3>Data controls</h3><p>PII is masked in list views. Uploads are randomized and blocked from direct browsing when possible.</p><span class="k">mask_name</span></div></div></section>
+        <section class="doc" id="ops"><span class="idx">DOC / 08</span><h2>Operations</h2><p>Back up the SQLite database, rotate <code>CRON_TOKEN</code>, and use cron to recompute LTV and risk tiers after rule changes.</p><pre>php /home/USER/public_html/liteinsurance.php action=cron_jobs cron_token=YOUR_TOKEN</pre></section>
+      </div>
+    </div>
+  </main>
+  <footer><div class="container footer-inner"><span>LiteInsurance docs</span><span class="footer-links"><a href="./index.html">home</a><a href="./demo.html">demo</a><a href="./SECURITY.md">security</a><a href="./SETUP.md">setup md</a></span></div></footer>
+</body>
+</html>
