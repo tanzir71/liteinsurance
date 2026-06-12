@@ -61,6 +61,9 @@ assert.doesNotMatch(landing, /grid-template-columns:\s*1fr\s+1\.4fr\s+1fr/, 'eva
 assert.match(landing, /@media \(min-width: 980px\) \{ \.paths \{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\); \} \}/, 'evaluation cards should align on three equal desktop columns');
 assert.match(landing, /\.path p \{[^}]*min-height: 88px;/, 'evaluation card descriptions should reserve equal vertical space before code blocks');
 assert.match(landing, /\.pre-block \{[^}]*height: 128px;/, 'evaluation code boxes should have equal height');
+assert.match(landing, /\.flex-copy \{[^}]*display: flex;[^}]*flex-direction: column;[^}]*min-height: 100%;/, 'flexibility section left column should stretch vertically');
+assert.match(landing, /\.flex-support-grid \{[^}]*margin-top: auto;/, 'flexibility section support cards should anchor to the bottom of the right column');
+assert.match(landing, /<div class="flex-copy">[\s\S]*<div class="grid grid-2 flex-support-grid">/, 'flexibility support cards should use the bottom-anchored grid class');
 
 const demo = read('demo.html');
 assert.match(demo, /const POLICY_COUNT = 200/, 'demo should generate a 200-policy sample');
@@ -80,6 +83,12 @@ assert.match(demo, /function renderDataPreview\(/, 'demo should render the data 
 assert.match(demo, /function customFieldKey\(/, 'demo should derive stable custom field keys from arbitrary CSV headers');
 assert.match(demo, /custom_fields/, 'demo should preserve unmapped CSV columns as local custom fields');
 assert.match(demo, /custom\./, 'demo rules should be able to reference custom fields with custom.field_key');
+assert.match(demo, /data-inline-cell/, 'demo should make the visible data tables directly editable inline');
+assert.match(demo, /function applyInlineCellEdit\(/, 'demo should persist inline table edits through the active policy data model');
+assert.match(demo, /document\.addEventListener\('input'[\s\S]*inlineDirty/, 'demo should track spreadsheet-style dirty cell edits before blur/change');
+assert.match(demo, /event\.key === 'Enter'[\s\S]*applyInlineCellEdit\(input\)/, 'demo should commit inline cell edits when the user presses Enter');
+assert.match(demo, /renderSegmentInlineRows/, 'segments should expose editable policy rows instead of only summary cards');
+assert.doesNotMatch(demo, /id="customSheetHead"|id="customSheetRows"|Custom field sheet/, 'demo should not push edits into a separate custom-field sheet');
 assert.match(demo, /Custom fields preserved locally/, 'demo should explain that arbitrary uploaded CSV columns are preserved locally');
 assert.match(demo, /Real policyholder data replaces the seed sample/, 'demo should explicitly explain that uploaded real data replaces the seed sample');
 assert.match(demo, /CSV rows hold people; rules JSON holds conditions and actions/, 'demo should distinguish policyholder CSV data from rules JSON');
@@ -99,6 +108,10 @@ assert.match(php, /Record ID \(required\)/, 'import mapping should use flexible 
 assert.match(php, /Display name/, 'import mapping should allow a display name separate from the record ID');
 assert.match(php, /custom\.agent_code/, 'server docs/examples should show custom field rule references');
 assert.match(php, /metadata\['custom_fields'\]/, 'server should keep custom fields when recomputing metadata');
+assert.match(php, /policy_cell_update/, 'server should expose an inline cell update action for profile rows');
+assert.match(php, /function handle_policy_cell_update\(/, 'server should persist inline profile cell edits');
+assert.match(php, /data-policy-cell/, 'profile table cells should be editable in place rather than through a separate form');
+assert.match(php, /e\.key==="Enter"[\s\S]*save\(input\)/, 'profile table cells should commit inline edits on Enter');
 assert.doesNotMatch(php, /const SAMPLE_CSV = /, 'server should not ship a five-row static sample constant');
 
 assert.match(landing, /custom CSV fields preserved locally/, 'landing should promise custom CSV fields only when the app preserves them');

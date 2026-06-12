@@ -7,7 +7,7 @@ LiteInsurance is intentionally small: one PHP 8 file, SQLite persistence, no bui
 ## Try It
 
 - Landing page: `index.html`
-- No-install demo: `demo.html` starts with seed data, then lets evaluators upload a local CSV, preserve custom CSV fields, and edit risk rules as JSON locally.
+- No-install demo: `demo.html` starts with seed data, then lets evaluators upload a local CSV, preserve and edit custom CSV fields, and edit risk rules visually or as JSON locally.
 - Production app: `liteinsurance.php`
 
 ## Quick Start
@@ -25,7 +25,7 @@ LiteInsurance is intentionally small: one PHP 8 file, SQLite persistence, no bui
 | Import | CSV upload, Record ID mapping, custom CSV fields, preview, staged commit |
 | Data quality | Mean/mode imputation, imputed flags, confidence score |
 | LTV | Premium, remaining term, policy multiplier, retention adjustment |
-| Risk | Priority-ordered JSON rules with a rule tester |
+| Risk | Priority-ordered visual or JSON rules with a rule tester |
 | Segments | Rule IDs plus validated WHERE-style filters, including `custom.field_key` |
 | Campaigns | Cross-sell rate, offer value, contact cost, lift, net revenue |
 | Ops | Audit log, setup doctor, cron recompute, SQLite backup path |
@@ -37,7 +37,7 @@ LiteInsurance is intentionally small: one PHP 8 file, SQLite persistence, no bui
 |---|---|
 | `liteinsurance.php` | Single-file PHP + SQLite app |
 | `index.html` | Commercial landing page |
-| `demo.html` | Browser-only demo with 200-policy seed data, local CSV upload, a rules JSON editor, and local storage |
+| `demo.html` | Browser-only demo with 200-policy seed data, local CSV upload, editable custom fields, visual/JSON rules, and local storage |
 | `docs.html` | Deployment and operating docs |
 | `compare.html` | Honest comparison guide |
 | `SETUP.md` | cPanel/shared-hosting setup notes |

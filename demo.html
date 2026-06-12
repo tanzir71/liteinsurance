@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LiteInsurance Demo -- Browser-Only Policy Segmentation</title>
-  <meta name="description" content="Try LiteInsurance in the browser with seed data, local CSV upload, editable JSON risk rules, risk segments, LTV scoring, and campaign simulation.">
+  <meta name="description" content="Try LiteInsurance with seed data, local CSV upload, editable custom fields, visual or JSON risk rules, segments, LTV scoring, and campaign simulation.">
   <meta name="robots" content="index, follow">
   <link rel="canonical" href="https://tanzir71.github.io/liteinsurance/demo.html">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%230a0a0a'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='32' font-family='monospace' fill='%23f4f3ee'%3ELI%3C/text%3E%3C/svg%3E">
@@ -85,6 +85,13 @@
     th { color: var(--muted-2); font: 11px/1.4 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; }
     td.right, th.right { text-align: right; }
     .scroll { overflow-x: auto; border: 1px solid var(--border); background: var(--bg); }
+    .inline-cell { min-width: 92px; height: 32px; min-height: 32px; border: 1px solid transparent; background: transparent; padding: 0 7px; font: 12px/1.2 var(--f-sans); }
+    .inline-cell:hover { border-color: var(--border); background: var(--panel); }
+    .inline-cell:focus { border-color: var(--acc); background: #fff; box-shadow: 0 0 0 1px var(--acc); }
+    .inline-cell.right { text-align: right; }
+    .inline-cell.name { min-width: 132px; }
+    .inline-cell.policy { min-width: 96px; font-family: var(--f-mono); }
+    .computed-cell { display: inline-flex; align-items: center; min-height: 32px; padding: 0 7px; color: var(--muted); }
     .badge { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border: 1px solid var(--border); font: 11px/1 var(--f-mono); color: var(--fg); }
     .badge.high { color: var(--acc); border-color: var(--acc); }
     .chart { display: grid; gap: 12px; margin-top: 10px; }
@@ -93,13 +100,17 @@
     .fill { display: block; height: 100%; background: var(--acc); }
     .rule-list, .segment-list { display: grid; gap: 1px; background: var(--border); border: 1px solid var(--border); }
     .rule, .segment { background: var(--panel); padding: 16px; display: grid; gap: 6px; }
+    button.rule { width: 100%; border: 0; color: inherit; text-align: left; cursor: pointer; }
+    button.rule:hover, button.rule.is-selected { background: var(--bg); box-shadow: inset 3px 0 0 var(--acc); }
     .rule .code, .segment .code { font: 12px/1.6 var(--f-mono); color: var(--muted); }
     .range-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
     @media (min-width: 820px) { .range-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
     input[type="range"] { padding: 0; accent-color: var(--acc); }
     output { color: var(--fg); font: 12px/1.4 var(--f-mono); }
     .editor-grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
+    .editor-grid > * { min-width: 0; }
     @media (min-width: 940px) { .editor-grid { grid-template-columns: .82fr 1.18fr; } }
+    @media (min-width: 940px) { .data-grid { grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); } }
     .action-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
     .upload-field { display: grid; gap: 6px; margin-top: 16px; }
     .upload-label { color: var(--muted-2); font: 11px/1.4 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; }
@@ -114,11 +125,30 @@
     .status.error { color: #a33a2a; }
     .schema-list { margin: 12px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
     .schema-list code { color: var(--fg); font-family: var(--f-mono); }
+    #dataSource { grid-template-columns: 1fr; }
+    #dataSource .metric .n { font-size: 22px; line-height: 1.18; overflow-wrap: anywhere; }
     .data-health { display: grid; grid-template-columns: 1fr; gap: 1px; margin-bottom: 14px; background: var(--border); border: 1px solid var(--border); }
-    @media (min-width: 720px) { .data-health { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (min-width: 720px) { .data-health { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
     .data-preview-wrap { max-height: 416px; overflow: auto; border: 1px solid var(--border); background: var(--bg); }
     .data-preview-wrap table { min-width: 620px; }
     .data-preview-wrap td, .data-preview-wrap th { white-space: nowrap; }
+    .column-tools { align-items: end; }
+    .column-tools label { flex: 1 1 220px; }
+    .mode-tabs { display: flex; gap: 1px; margin: 0 0 14px; background: var(--border); border: 1px solid var(--border); }
+    .mode-tab { flex: 1 1 0; min-height: 40px; border: 0; background: var(--panel); color: var(--muted); cursor: pointer; font: 12px/1 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; }
+    .mode-tab[aria-selected="true"] { color: var(--fg); background: var(--bg); box-shadow: inset 0 -3px 0 var(--acc); }
+    .builder-panel[hidden] { display: none; }
+    .builder-panel { border: 1px solid var(--border); background: var(--bg); padding: 14px; }
+    .builder-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    @media (min-width: 760px) { .builder-grid { grid-template-columns: 1fr 120px 110px; } }
+    .condition-row { display: grid; grid-template-columns: 1fr; gap: 8px; align-items: end; padding: 10px 0; border-top: 1px solid var(--border-soft); }
+    @media (min-width: 820px) { .condition-row { grid-template-columns: 1.05fr .65fr 1fr auto; } }
+    .condition-row:first-child { border-top: 0; }
+    .condition-row .btn { min-height: 40px; }
+    .builder-actions { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 12px; }
+    @media (min-width: 760px) { .builder-actions { grid-template-columns: 1fr .7fr 1fr; } }
+    .segment-inline { margin-top: 10px; border: 1px solid var(--border); background: var(--bg); overflow-x: auto; }
+    .segment-inline table { min-width: 820px; }
     .results { margin-top: 18px; }
     .note { margin: 14px 0 0; font-size: 13px; color: var(--muted); }
     @media (max-width: 760px) {
@@ -169,12 +199,12 @@
         <div>
           <span class="eyebrow">No-install evaluation</span>
           <h1>Run the insurance workflow with seed data or your own local file.</h1>
-          <p class="lead">This demo mirrors the production app's core mechanics: CSV import, missing-field imputation, LTV scoring, editable JSON risk rules, segments, CSV export, and campaign simulation.</p>
+          <p class="lead">This demo mirrors the production app's core mechanics: CSV import, editable custom fields, missing-field imputation, LTV scoring, visual or JSON risk rules, segments, CSV export, and campaign simulation.</p>
         </div>
         <div class="demo-card">
           <div class="label">Evaluation flow</div>
           <div class="big">Real data replaces the seed sample.</div>
-          <p class="muted">Upload a policyholder CSV in Data, then edit scoring logic in the Rules JSON editor. CSV rows hold people; rules JSON holds conditions and actions. The browser saves demo state locally until you reset it.</p>
+          <p class="muted">Upload a policyholder CSV in Data, edit custom field cells like a small sheet, then switch between the visual rule builder and the Rules JSON editor. CSV rows hold people; rules JSON holds conditions and actions. The browser saves demo state locally until you reset it.</p>
         </div>
       </div>
 
@@ -186,6 +216,7 @@
         <button class="tab" role="tab" aria-selected="false" data-tab="segments">Segments</button>
         <button class="tab" role="tab" aria-selected="false" data-tab="simulator">Simulator</button>
       </div>
+      <p class="status" id="inlineEditStatus">Inline editing is active in Profiles, Data, and segment previews. Change a cell and it recomputes local state.</p>
 
       <section class="view active" id="dashboard" role="tabpanel">
         <div class="grid grid-4" id="kpis"></div>
@@ -210,7 +241,7 @@
         </div>
         <div class="scroll">
           <table>
-            <thead><tr><th>Policy</th><th>Name</th><th>Age</th><th>Type</th><th>Region</th><th class="right">Premium</th><th class="right">LTV</th><th>Tier</th><th class="right">Conf</th><th>Imputed</th></tr></thead>
+            <thead><tr id="profilesHead"><th>Policy</th><th>Name</th><th>Age</th><th>Type</th><th>Region</th><th class="right">Premium</th><th class="right">LTV</th><th>Tier</th><th class="right">Conf</th><th>Imputed</th></tr></thead>
             <tbody id="policyRows"></tbody>
           </table>
         </div>
@@ -218,7 +249,7 @@
       </section>
 
       <section class="view" id="data" role="tabpanel">
-        <div class="editor-grid">
+        <div class="editor-grid data-grid">
           <div>
             <h2 class="section-title">Local data source</h2>
             <div class="grid grid-2" id="dataSource"></div>
@@ -246,11 +277,15 @@
             <div class="data-health" id="dataHealth"></div>
             <div class="data-preview-wrap">
               <table>
-                <thead><tr><th>Policy</th><th>Name</th><th>Region</th><th class="right">Premium</th><th>Tier</th></tr></thead>
+                <thead><tr id="dataPreviewHead"><th>Policy</th><th>Name</th><th>Region</th><th class="right">Premium</th><th>Tier</th></tr></thead>
                 <tbody id="dataPreview"></tbody>
               </table>
             </div>
-            <p class="note">Preview uses the same active rows as Profiles, Segments, exports, and the simulator.</p>
+            <p class="note">Preview uses the same editable rows as Profiles, Segments, exports, and the simulator. Change cells directly; computed LTV and tiers refresh after each edit.</p>
+            <div class="action-row column-tools">
+              <label>New custom field column <input id="newCustomFieldName" type="text" placeholder="renewal_probability"></label>
+              <button class="btn" id="addCustomField" type="button">Add column</button>
+            </div>
           </div>
         </div>
       </section>
@@ -258,16 +293,48 @@
       <section class="view" id="rules" role="tabpanel">
         <div class="editor-grid">
           <div>
-            <h2 class="section-title">Editable JSON risk rules</h2>
+            <h2 class="section-title">Risk rules</h2>
             <div class="rule-list" id="ruleList"></div>
-            <p class="note">Apply rules JSON to rerun risk tiers against the current local CSV dataset. This editor is for scoring rules only; policyholder names belong in the uploaded CSV and table, not in rules JSON.</p>
+            <div class="action-row">
+              <button class="btn" id="newVisualRule" type="button">New rule</button>
+            </div>
+            <p class="note">Rules rerun risk tiers against the current local CSV dataset. Policyholder names belong in the uploaded CSV and table, not in rules JSON.</p>
           </div>
           <div>
-            <h2 class="section-title">Rules JSON editor</h2>
-            <textarea id="rulesEditor" spellcheck="false" aria-label="Rules JSON editor"></textarea>
-            <div class="action-row">
-              <button class="btn primary" id="applyRulesJson" type="button">Apply rules</button>
-              <button class="btn" id="resetRulesJson" type="button">Reset rules</button>
+            <h2 class="section-title" id="ruleEditorTitle">Visual rule builder</h2>
+            <div class="mode-tabs" role="tablist" aria-label="Rule editor mode">
+              <button class="mode-tab" role="tab" aria-selected="true" data-rule-mode="visual" type="button">Visual builder</button>
+              <button class="mode-tab" role="tab" aria-selected="false" data-rule-mode="json" type="button">Plain JSON</button>
+            </div>
+            <div class="builder-panel" id="visualRulesPanel">
+              <div class="builder-grid">
+                <label>Rule name <input id="visualRuleName" type="text" maxlength="120"></label>
+                <label>Priority <input id="visualRulePriority" type="number" min="0" max="1000" value="100"></label>
+                <label>Enabled <select id="visualRuleEnabled"><option value="true">Yes</option><option value="false">No</option></select></label>
+              </div>
+              <div class="builder-grid" style="margin-top:10px;">
+                <label>Match logic <select id="visualRuleLogic"><option value="AND">All conditions</option><option value="OR">Any condition</option></select></label>
+              </div>
+              <div id="visualConditions"></div>
+              <div class="action-row">
+                <button class="btn" id="addVisualCondition" type="button">Add condition</button>
+              </div>
+              <div class="builder-actions">
+                <label>Set tier <select id="visualActionTier"><option value="">No change</option><option>Low</option><option>Medium</option><option>High</option><option>Review</option><option>Unknown</option></select></label>
+                <label>Score delta <input id="visualActionScore" type="number" min="-100" max="100" value="0"></label>
+                <label>Add tag <input id="visualActionTag" type="text" placeholder="senior_short_tenure"></label>
+              </div>
+              <div class="action-row">
+                <button class="btn primary" id="applyVisualRule" type="button">Apply visual rule</button>
+              </div>
+            </div>
+            <div class="builder-panel" id="jsonRulesPanel" hidden>
+              <h3 class="section-title">Rules JSON editor</h3>
+              <textarea id="rulesEditor" spellcheck="false" aria-label="Rules JSON editor"></textarea>
+              <div class="action-row">
+                <button class="btn primary" id="applyRulesJson" type="button">Apply rules</button>
+                <button class="btn" id="resetRulesJson" type="button">Reset rules</button>
+              </div>
             </div>
             <p class="status" id="rulesStatus">Edit conditions and actions, then apply to recompute the demo.</p>
           </div>
@@ -387,6 +454,24 @@
         actions: { set_risk_tier: 'High', score_delta: 20, add_tag: 'senior_short_tenure' }
       }
     ];
+    const CORE_RULE_FIELDS = [
+      ['age', 'Age'],
+      ['gender', 'Gender'],
+      ['policy_type', 'Policy type'],
+      ['region', 'Region'],
+      ['premium_amount', 'Premium amount'],
+      ['tenure_months', 'Tenure months'],
+      ['sum_assured', 'Sum assured'],
+      ['ltv_estimate', 'LTV estimate'],
+      ['risk_tier', 'Risk tier'],
+      ['confidence_score', 'Confidence score'],
+      ['is_imputed', 'Is imputed']
+    ];
+    const RULE_OPERATORS = ['=', '!=', '>', '<', '>=', '<=', 'in', 'contains', 'regex'];
+    const INLINE_CORE_FIELDS = ['policy_number', 'name', 'age', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured'];
+    const INLINE_NUMERIC_FIELDS = new Set(['age', 'premium_amount', 'tenure_months', 'sum_assured']);
+    const PROFILE_CUSTOM_COLUMN_LIMIT = 3;
+    const DATA_CUSTOM_COLUMN_LIMIT = 4;
 
     let seed = 71371n;
     function rand() {
@@ -569,7 +654,12 @@
           region: chance(0.11) ? '' : region,
           premium_amount: chance(0.09) ? null : Math.round(premium * 100) / 100,
           tenure_months: chance(0.08) ? null : tenure,
-          sum_assured: chance(0.06) ? null : sumAssured
+          sum_assured: chance(0.06) ? null : sumAssured,
+          custom_fields: {
+            agent_code: 'AG-' + String(10 + (i % 18)).padStart(2, '0'),
+            renewal_probability: Math.round((0.42 + rand() * 0.48) * 100) / 100,
+            source_channel: pick(['broker', 'web', 'referral', 'branch'])
+          }
         });
       }
       return rows;
@@ -634,6 +724,7 @@
     let rawPolicies = [];
     let policies = [];
     let rules = cloneRules(DEFAULT_RULES);
+    let selectedRuleId = 1;
     let datasetMeta = {
       source: 'seed',
       label: 'Seed sample data',
@@ -846,6 +937,9 @@
     }
     function applyRules(inputRules, message) {
       rules = normalizeRules(inputRules);
+      if (!rules.some((rule) => Number(rule.id) === Number(selectedRuleId))) {
+        selectedRuleId = sortedRules()[0]?.id || 0;
+      }
       recomputePolicies();
       const saved = persistRules();
       syncRulesEditor();
@@ -855,6 +949,7 @@
     function resetRules() {
       storageRemove(LOCAL_RULES_STORAGE_KEY);
       rules = cloneRules(DEFAULT_RULES);
+      selectedRuleId = rules[0]?.id || 0;
       recomputePolicies();
       syncRulesEditor();
       renderAll({ preserveFilters: true });
@@ -949,28 +1044,28 @@
 
     function renderPolicies() {
       const rows = filteredPolicies();
-      document.getElementById('policyRows').innerHTML = rows.slice(0, 35).map((p) => `
-        <tr>
-          <td>${p.policy_number}</td>
-          <td>${esc(p.masked_name)}</td>
-          <td>${p.age ?? ''}</td>
-          <td>${esc(p.policy_type)}</td>
-          <td>${esc(p.region)}</td>
-          <td class="right">${exactMoney(p.premium_amount)}</td>
-          <td class="right">${exactMoney(p.ltv_estimate)}</td>
-          <td><span class="badge ${p.risk_tier === 'High' ? 'high' : ''}">${esc(p.risk_tier)}</span></td>
-          <td class="right">${p.confidence_score}</td>
-          <td>${p.imputed_fields.length ? esc(p.imputed_fields.join(', ')) : 'No'}</td>
-        </tr>
-      `).join('');
-      document.getElementById('rowCount').textContent = `Showing ${Math.min(rows.length, 35)} of ${rows.length} matching policies.`;
+      const customKeys = customFieldKeysFromRows(policies).slice(0, PROFILE_CUSTOM_COLUMN_LIMIT);
+      document.getElementById('profilesHead').innerHTML = editablePolicyHeaders(customKeys, ['policy_number', 'name', 'age', 'policy_type', 'region', 'premium_amount', 'tenure_months'])
+        + '<th class="right">LTV</th><th>Tier</th><th class="right">Conf</th><th>Imputed</th>';
+      document.getElementById('policyRows').innerHTML = rows.slice(0, 35).map((p) => editablePolicyRow(
+        p,
+        customKeys,
+        ['policy_number', 'name', 'age', 'policy_type', 'region', 'premium_amount', 'tenure_months'],
+        [
+          { value: exactMoney(p.ltv_estimate), right: true },
+          { value: p.risk_tier },
+          { value: p.confidence_score, right: true },
+          { value: p.imputed_fields.length ? p.imputed_fields.join(', ') : 'No' }
+        ]
+      )).join('');
+      document.getElementById('rowCount').textContent = `Showing ${Math.min(rows.length, 35)} of ${rows.length} matching policies. Edit cells directly; derived LTV, tier, confidence, and segments refresh after changes.`;
     }
 
     function renderRules() {
       document.getElementById('ruleList').innerHTML = sortedRules().map((rule, i) => {
         const hits = policies.filter((p) => evalConditions(p, { logic: rule.logic, conditions: rule.conditions })).length;
         const action = rule.actions.set_risk_tier ? `sets ${rule.actions.set_risk_tier}` : 'no tier action';
-        return `<div class="rule"><strong>${String(i + 1).padStart(2, '0')} / ${esc(rule.name)}</strong><span class="code">${esc(ruleCode(rule))}</span><span class="muted">${hits} policies match / priority ${esc(rule.priority)} / ${esc(action)}${rule.enabled ? '' : ' / disabled'}.</span></div>`;
+        return `<button class="rule${Number(rule.id) === Number(selectedRuleId) ? ' is-selected' : ''}" type="button" data-rule-id="${esc(rule.id)}"><strong>${String(i + 1).padStart(2, '0')} / ${esc(rule.name)}</strong><span class="code">${esc(ruleCode(rule))}</span><span class="muted">${hits} policies match / priority ${esc(rule.priority)} / ${esc(action)}${rule.enabled ? '' : ' / disabled'}.</span></button>`;
       }).join('');
     }
 
@@ -983,6 +1078,222 @@
         Object.keys(row.custom_fields || {}).forEach((key) => set.add(key));
         return set;
       }, new Set())).sort();
+    }
+    function allRuleFields() {
+      const custom = customFieldKeysFromRows(rawPolicies.length ? rawPolicies : policies)
+        .map((key) => ['custom.' + key, 'custom.' + key]);
+      return CORE_RULE_FIELDS.concat(custom);
+    }
+    function optionHtml(options, selected) {
+      return options.map(([value, label]) => `<option value="${esc(value)}"${value === selected ? ' selected' : ''}>${esc(label)}</option>`).join('');
+    }
+    function operatorOptions(selected) {
+      return RULE_OPERATORS.map((op) => `<option value="${esc(op)}"${op === selected ? ' selected' : ''}>${esc(op)}</option>`).join('');
+    }
+    function nextRuleId() {
+      return Math.max(0, ...rules.map((rule) => Number(rule.id) || 0)) + 1;
+    }
+    function selectedRule() {
+      const sorted = sortedRules();
+      return sorted.find((rule) => Number(rule.id) === Number(selectedRuleId)) || sorted[0] || null;
+    }
+    function conditionInputValue(condition) {
+      if (Array.isArray(condition.value)) return condition.value.join(', ');
+      if (condition.value === undefined || condition.value === null) return '';
+      return String(condition.value);
+    }
+    function parseConditionValue(op, raw) {
+      const text = String(raw ?? '').trim();
+      if (op === 'in') {
+        return text.split(',').map((part) => part.trim()).filter(Boolean).map((part) => {
+          const n = numberOrNull(part);
+          return n === null ? part : n;
+        });
+      }
+      if (/^(true|false)$/i.test(text)) return /^true$/i.test(text);
+      const n = numberOrNull(text);
+      return n === null ? text : n;
+    }
+    function visualRuleTemplate() {
+      return {
+        id: nextRuleId(),
+        name: 'New visual rule',
+        priority: 100,
+        enabled: true,
+        logic: 'AND',
+        conditions: [{ field: 'age', op: '>=', value: 60 }],
+        actions: { set_risk_tier: 'High', score_delta: 10, add_tag: 'review_candidate' }
+      };
+    }
+    function conditionRowHtml(condition = {}) {
+      return `<div class="condition-row" data-condition-row>
+        <label>Field <select data-condition-field>${optionHtml(allRuleFields(), String(condition.field || 'age'))}</select></label>
+        <label>Operator <select data-condition-op>${operatorOptions(String(condition.op || '>='))}</select></label>
+        <label>Value <input data-condition-value type="text" value="${esc(conditionInputValue(condition))}" placeholder="60"></label>
+        <button class="btn" type="button" data-remove-condition>Remove</button>
+      </div>`;
+    }
+    function renderVisualBuilder(ruleInput) {
+      const rule = ruleInput || selectedRule() || visualRuleTemplate();
+      const leafConditions = (rule.conditions || []).filter((condition) => condition && condition.field);
+      document.getElementById('ruleEditorTitle').textContent = Number(rule.id || 0) > 0 && rules.some((r) => Number(r.id) === Number(rule.id)) ? 'Visual rule builder' : 'New visual rule';
+      document.getElementById('visualRuleName').value = rule.name || '';
+      document.getElementById('visualRulePriority').value = Number(rule.priority ?? 100);
+      document.getElementById('visualRuleEnabled').value = rule.enabled === false ? 'false' : 'true';
+      document.getElementById('visualRuleLogic').value = rule.logic === 'OR' ? 'OR' : 'AND';
+      document.getElementById('visualConditions').innerHTML = (leafConditions.length ? leafConditions : [{ field: 'age', op: '>=', value: 60 }]).map(conditionRowHtml).join('');
+      document.getElementById('visualActionTier').value = rule.actions?.set_risk_tier || '';
+      document.getElementById('visualActionScore').value = Number(rule.actions?.score_delta || 0);
+      document.getElementById('visualActionTag').value = rule.actions?.add_tag || '';
+    }
+    function collectVisualRule() {
+      const exists = rules.some((rule) => Number(rule.id) === Number(selectedRuleId));
+      const base = exists ? (selectedRule() || visualRuleTemplate()) : { ...visualRuleTemplate(), id: Number(selectedRuleId) || nextRuleId() };
+      const name = document.getElementById('visualRuleName').value.trim();
+      const conditions = Array.from(document.querySelectorAll('[data-condition-row]')).map((row) => {
+        const field = row.querySelector('[data-condition-field]').value;
+        const op = row.querySelector('[data-condition-op]').value;
+        const raw = row.querySelector('[data-condition-value]').value;
+        return { field, op, value: parseConditionValue(op, raw) };
+      }).filter((condition) => condition.field && condition.op);
+      const actions = {};
+      const tier = document.getElementById('visualActionTier').value;
+      const score = numberOrNull(document.getElementById('visualActionScore').value);
+      const tag = document.getElementById('visualActionTag').value.trim();
+      if (tier) actions.set_risk_tier = tier;
+      if (score !== null && score !== 0) actions.score_delta = score;
+      if (tag) actions.add_tag = tag;
+      if (!conditions.length) throw new Error('Add at least one condition.');
+      if (!Object.keys(actions).length) throw new Error('Add at least one action.');
+      return {
+        id: Number(base.id) || nextRuleId(),
+        name: name || 'Untitled visual rule',
+        priority: Number(document.getElementById('visualRulePriority').value || 100),
+        enabled: document.getElementById('visualRuleEnabled').value !== 'false',
+        logic: document.getElementById('visualRuleLogic').value === 'OR' ? 'OR' : 'AND',
+        conditions,
+        actions
+      };
+    }
+    function applyVisualRule() {
+      try {
+        const draft = collectVisualRule();
+        const next = rules.filter((rule) => Number(rule.id) !== Number(draft.id));
+        next.push(draft);
+        selectedRuleId = draft.id;
+        applyRules(next, `Applied "${draft.name}" and recomputed current policies.`);
+      } catch (error) {
+        setStatus('rulesStatus', error.message || 'Could not apply visual rule.', 'error');
+      }
+    }
+    function setRuleEditorMode(mode) {
+      const visual = mode !== 'json';
+      document.querySelectorAll('[data-rule-mode]').forEach((button) => button.setAttribute('aria-selected', button.dataset.ruleMode === (visual ? 'visual' : 'json') ? 'true' : 'false'));
+      document.getElementById('visualRulesPanel').hidden = !visual;
+      document.getElementById('jsonRulesPanel').hidden = visual;
+      if (visual) renderVisualBuilder();
+    }
+    function coerceCustomEditValue(value) {
+      const text = String(value ?? '').trim();
+      if (text === '') return '';
+      if (/^(true|false)$/i.test(text)) return /^true$/i.test(text);
+      const n = numberOrNull(text);
+      return n === null ? text : n;
+    }
+    function inlineCellValue(row, field) {
+      if (field.startsWith('custom.')) return exportValue(row, field);
+      return row[field] ?? '';
+    }
+    function inlineCell(row, field, options = {}) {
+      const value = inlineCellValue(row, field);
+      const classes = ['inline-cell'];
+      if (options.right) classes.push('right');
+      if (field === 'name') classes.push('name');
+      if (field === 'policy_number') classes.push('policy');
+      return `<td${options.right ? ' class="right"' : ''}><input class="${classes.join(' ')}" data-inline-cell data-row-key="${esc(row.policy_number)}" data-field="${esc(field)}" value="${esc(value)}" aria-label="${esc((row.policy_number || 'row') + ' ' + field)}"></td>`;
+    }
+    function computedCell(value, options = {}) {
+      return `<td${options.right ? ' class="right"' : ''}><span class="computed-cell">${esc(value)}</span></td>`;
+    }
+    function editablePolicyHeaders(customKeys = [], fields = INLINE_CORE_FIELDS) {
+      const labels = {
+        policy_number: 'Policy',
+        name: 'Name',
+        age: 'Age',
+        policy_type: 'Type',
+        region: 'Region',
+        premium_amount: 'Premium',
+        tenure_months: 'Tenure',
+        sum_assured: 'Assured'
+      };
+      return fields.map((field) => `<th${['premium_amount', 'tenure_months', 'sum_assured'].includes(field) ? ' class="right"' : ''}>${esc(labels[field] || field)}</th>`)
+        .concat(customKeys.map((key) => `<th>${esc('custom.' + key)}</th>`))
+        .join('');
+    }
+    function editablePolicyRow(row, customKeys = [], fields = INLINE_CORE_FIELDS, computed = []) {
+      const editable = fields.map((field) => inlineCell(row, field, { right: ['premium_amount', 'tenure_months', 'sum_assured'].includes(field) })).join('');
+      const custom = customKeys.map((key) => inlineCell(row, 'custom.' + key)).join('');
+      const derived = computed.map((item) => computedCell(item.value, { right: item.right })).join('');
+      return `<tr>${editable}${custom}${derived}</tr>`;
+    }
+    function rawPolicyIndex(rowKey) {
+      return rawPolicies.findIndex((row) => String(row.policy_number) === String(rowKey));
+    }
+    function parseInlineValue(field, value) {
+      const text = String(value ?? '').trim();
+      if (field.startsWith('custom.')) return coerceCustomEditValue(text);
+      if (INLINE_NUMERIC_FIELDS.has(field)) {
+        const n = numberOrNull(text);
+        if (field === 'age' || field === 'tenure_months') return n === null ? null : Math.round(n);
+        return n;
+      }
+      return text;
+    }
+    function setInlineEditStatus(message, type = 'success') {
+      setStatus('inlineEditStatus', message, type);
+      if (document.getElementById('data')?.classList.contains('active')) {
+        setStatus('dataStatus', message, type);
+      }
+    }
+    function applyInlineCellEdit(input) {
+      const rowKey = input.dataset.rowKey || '';
+      const field = input.dataset.field || '';
+      const index = rawPolicyIndex(rowKey);
+      if (index < 0 || !field) {
+        setInlineEditStatus('Could not find that row in the active dataset.', 'error');
+        return;
+      }
+      const value = parseInlineValue(field, input.value);
+      if (field === 'policy_number') {
+        const nextKey = String(value || '').trim();
+        if (!nextKey) {
+          setInlineEditStatus('Policy ID cannot be blank.', 'error');
+          renderAll({ preserveFilters: true });
+          return;
+        }
+        if (rawPolicies.some((row, rowIndex) => rowIndex !== index && String(row.policy_number) === nextKey)) {
+          setInlineEditStatus('Policy ID must stay unique.', 'error');
+          renderAll({ preserveFilters: true });
+          return;
+        }
+        rawPolicies[index].policy_number = nextKey;
+      } else if (field === 'name') {
+        rawPolicies[index].name = String(value || '').trim() || rawPolicies[index].policy_number;
+      } else if (field.startsWith('custom.')) {
+        const key = field.slice(7);
+        rawPolicies[index].custom_fields = rawPolicies[index].custom_fields || {};
+        rawPolicies[index].custom_fields[key] = value;
+      } else if (INLINE_CORE_FIELDS.includes(field)) {
+        rawPolicies[index][field] = value;
+      } else {
+        setInlineEditStatus('That field is read-only.', 'error');
+        renderAll({ preserveFilters: true });
+        return;
+      }
+      recomputePolicies();
+      const saved = persistDemoData();
+      renderAll({ preserveFilters: true });
+      setInlineEditStatus(`Updated ${field}${saved ? ' and saved it for this browser.' : '; local storage is unavailable.'}`, saved ? 'success' : '');
     }
 
     function exportValue(row, header) {
@@ -1018,9 +1329,26 @@
           <strong>${segment.name}</strong>
           <span class="code">${esc(segment.code)}</span>
           <span class="muted">${rows.length} policies / average LTV ${avg == null ? 'not scored' : money(avg)}</span>
+          ${renderSegmentInlineRows(rows)}
           <span><button class="btn" type="button" data-export-segment="${i}">Export CSV</button></span>
         </div>`;
       }).join('');
+    }
+    function renderSegmentInlineRows(rows) {
+      const customKeys = customFieldKeysFromRows(rows).slice(0, 2);
+      const visibleRows = rows.slice(0, 4);
+      if (!visibleRows.length) {
+        return '<div class="segment-inline"><table><tbody><tr><td class="muted">No matching rows.</td></tr></tbody></table></div>';
+      }
+      return `<div class="segment-inline"><table>
+        <thead><tr>${editablePolicyHeaders(customKeys, ['policy_number', 'name', 'region', 'premium_amount'])}<th>Tier</th></tr></thead>
+        <tbody>${visibleRows.map((p) => editablePolicyRow(
+          p,
+          customKeys,
+          ['policy_number', 'name', 'region', 'premium_amount'],
+          [{ value: p.risk_tier }]
+        )).join('')}</tbody>
+      </table></div>`;
     }
 
     function renderSimulator() {
@@ -1068,15 +1396,38 @@
         ['Avg conf', String(avgConfidence)],
         ['Custom fields', customCount.toLocaleString()]
       ].map(([label, value]) => `<div class="cell metric"><div class="n">${esc(value)}</div><div class="l">${esc(label)}</div></div>`).join('');
-      document.getElementById('dataPreview').innerHTML = policies.slice(0, 10).map((p) => `
-        <tr>
-          <td>${esc(p.policy_number)}</td>
-          <td>${esc(p.masked_name)}</td>
-          <td>${esc(p.region)}</td>
-          <td class="right">${exactMoney(p.premium_amount)}</td>
-          <td><span class="badge ${p.risk_tier === 'High' ? 'high' : ''}">${esc(p.risk_tier)}</span></td>
-        </tr>
-      `).join('');
+      const previewCustomKeys = customFieldKeysFromRows(policies).slice(0, DATA_CUSTOM_COLUMN_LIMIT);
+      document.getElementById('dataPreviewHead').innerHTML = editablePolicyHeaders(previewCustomKeys, ['policy_number', 'name', 'region', 'premium_amount', 'tenure_months'])
+        + '<th class="right">LTV</th><th>Tier</th>';
+      document.getElementById('dataPreview').innerHTML = policies.slice(0, 12).map((p) => editablePolicyRow(
+        p,
+        previewCustomKeys,
+        ['policy_number', 'name', 'region', 'premium_amount', 'tenure_months'],
+        [
+          { value: exactMoney(p.ltv_estimate), right: true },
+          { value: p.risk_tier }
+        ]
+      )).join('');
+    }
+    function addCustomField() {
+      const input = document.getElementById('newCustomFieldName');
+      const requested = input.value.trim();
+      if (!requested) {
+        setStatus('dataStatus', 'Enter a custom field name first.', 'error');
+        return;
+      }
+      const used = {};
+      customFieldKeysFromRows(rawPolicies).forEach((key) => { used[key] = true; });
+      const key = customFieldKey(requested, used);
+      rawPolicies.forEach((row) => {
+        row.custom_fields = row.custom_fields || {};
+        if (!(key in row.custom_fields)) row.custom_fields[key] = '';
+      });
+      input.value = '';
+      recomputePolicies();
+      const saved = persistDemoData();
+      renderAll({ preserveFilters: true });
+      setInlineEditStatus(`Added column custom.${key}${saved ? ' and saved it for this browser.' : '.'}`, saved ? 'success' : '');
     }
     function renderAll(options = {}) {
       renderKpis();
@@ -1085,6 +1436,7 @@
       populateFilters(options);
       renderPolicies();
       renderRules();
+      renderVisualBuilder();
       renderSegments();
       renderSimulator();
       renderDataSource();
@@ -1149,8 +1501,67 @@
       document.getElementById('dataFile').addEventListener('change', handleDataFile);
       document.getElementById('resetDemoData').addEventListener('click', resetDemoData);
       document.getElementById('downloadDataCsv').addEventListener('click', downloadCurrentCsv);
+      document.getElementById('addCustomField').addEventListener('click', addCustomField);
+      document.getElementById('newCustomFieldName').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          addCustomField();
+        }
+      });
+      document.addEventListener('input', (event) => {
+        const input = event.target.closest('[data-inline-cell]');
+        if (!input) return;
+        input.dataset.inlineDirty = '1';
+      });
+      document.addEventListener('change', (event) => {
+        const input = event.target.closest('[data-inline-cell]');
+        if (!input) return;
+        delete input.dataset.inlineDirty;
+        applyInlineCellEdit(input);
+      });
+      document.addEventListener('keydown', (event) => {
+        const input = event.target.closest('[data-inline-cell]');
+        if (!input) return;
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          delete input.dataset.inlineDirty;
+          applyInlineCellEdit(input);
+          input.blur();
+        }
+      });
       document.getElementById('applyRulesJson').addEventListener('click', applyRulesEditor);
       document.getElementById('resetRulesJson').addEventListener('click', resetRules);
+      document.getElementById('newVisualRule').addEventListener('click', () => {
+        const draft = visualRuleTemplate();
+        selectedRuleId = draft.id;
+        renderVisualBuilder(draft);
+        setRuleEditorMode('visual');
+      });
+      document.getElementById('ruleList').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-rule-id]');
+        if (!button) return;
+        selectedRuleId = Number(button.dataset.ruleId);
+        renderRules();
+        renderVisualBuilder();
+        setRuleEditorMode('visual');
+      });
+      document.querySelectorAll('[data-rule-mode]').forEach((button) => {
+        button.addEventListener('click', () => setRuleEditorMode(button.dataset.ruleMode));
+      });
+      document.getElementById('addVisualCondition').addEventListener('click', () => {
+        document.getElementById('visualConditions').insertAdjacentHTML('beforeend', conditionRowHtml({ field: 'age', op: '>=', value: 60 }));
+      });
+      document.getElementById('visualConditions').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-remove-condition]');
+        if (!button) return;
+        const rows = document.querySelectorAll('[data-condition-row]');
+        if (rows.length <= 1) {
+          setStatus('rulesStatus', 'A rule needs at least one condition.', 'error');
+          return;
+        }
+        button.closest('[data-condition-row]').remove();
+      });
+      document.getElementById('applyVisualRule').addEventListener('click', applyVisualRule);
       document.getElementById('segmentList').addEventListener('click', (event) => {
         const button = event.target.closest('[data-export-segment]');
         if (!button) return;

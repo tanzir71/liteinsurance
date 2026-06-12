@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LiteInsurance -- Insurance LTV and Risk Segmentation in One PHP File</title>
-  <meta name="description" content="Self-hosted PHP and SQLite insurance ops app for CSV import, LTV scoring, risk rules, segments, and campaign simulation.">
+  <meta name="description" content="Self-hosted PHP and SQLite insurance ops app for CSV import, custom fields, visual or JSON risk rules, segments, LTV, and campaign simulation.">
   <meta name="robots" content="index, follow">
   <link rel="canonical" href="https://tanzir71.github.io/liteinsurance/">
   <meta property="og:title" content="LiteInsurance -- Insurance LTV and Risk Segmentation">
-  <meta property="og:description" content="Import policyholder CSVs, compute LTV, apply risk rules, build segments, and simulate campaigns in one self-hosted PHP file.">
+  <meta property="og:description" content="Import policyholder CSVs, preserve custom fields, apply visual or JSON risk rules, build segments, and simulate campaigns in one self-hosted PHP file.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://tanzir71.github.io/liteinsurance/">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="LiteInsurance -- Insurance LTV and Risk Segmentation">
-  <meta name="twitter:description" content="A portable PHP + SQLite dashboard for insurance CSVs, risk rules, LTV, segments, and campaign simulation.">
+  <meta name="twitter:description" content="A portable PHP + SQLite dashboard for insurance CSVs, custom fields, risk rules, LTV, segments, and campaign simulation.">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%230a0a0a'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='32' font-family='monospace' fill='%23f4f3ee'%3ELI%3C/text%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -25,7 +25,7 @@
     "name": "LiteInsurance",
     "operatingSystem": "Any server running PHP 8+ with SQLite",
     "applicationCategory": "BusinessApplication",
-    "description": "Self-hosted PHP and SQLite insurance operations dashboard for policyholder CSV import, missing-field imputation, LTV scoring, JSON risk rules, segment exports, and campaign simulation.",
+    "description": "Self-hosted PHP and SQLite insurance operations dashboard for policyholder CSV import, custom field preservation, missing-field imputation, LTV scoring, visual or JSON risk rules, segment exports, and campaign simulation.",
     "url": "https://tanzir71.github.io/liteinsurance/",
     "softwareVersion": "1.0.0",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
@@ -50,7 +50,7 @@
       {
         "@type": "Question",
         "name": "Can I try it without installing PHP?",
-        "acceptedAnswer": { "@type": "Answer", "text": "Yes. The no-install demo runs in the browser with a deterministic 200-policy seed dataset, local CSV upload for policyholder rows, and an editable rules JSON editor for scoring logic." }
+        "acceptedAnswer": { "@type": "Answer", "text": "Yes. The no-install demo runs in the browser with a deterministic 200-policy seed dataset, local CSV upload for policyholder rows, editable custom field cells, and visual or JSON rule editing for scoring logic." }
       },
       {
         "@type": "Question",
@@ -160,6 +160,24 @@
     .dstep .n { font: 11px/1.4 var(--f-mono); color: var(--acc); letter-spacing: .18em; text-transform: uppercase; }
     .dstep .t { margin-top: 6px; font-size: 14px; font-weight: 650; }
     .dstep p { margin: 6px 0 0; font-size: 13px; line-height: 1.55; color: var(--muted); }
+    .flex-layout { display: grid; grid-template-columns: 1fr; gap: 28px; align-items: stretch; }
+    @media (min-width: 980px) { .flex-layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); } }
+    .flex-copy { display: flex; flex-direction: column; min-height: 100%; }
+    .flex-support-grid { margin-top: auto; }
+    @media (max-width: 979px) { .flex-support-grid { margin-top: 24px; } }
+    .field-board { border: 1px solid var(--border); background: var(--panel); overflow-x: auto; }
+    .field-board table { width: 100%; min-width: 660px; border-collapse: collapse; font-size: 13px; }
+    .field-board th, .field-board td { padding: 11px 10px; border-bottom: 1px solid var(--border-soft); text-align: left; white-space: nowrap; }
+    .field-board th { color: var(--muted-2); font: 11px/1.4 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; }
+    .field-board td:last-child { color: var(--acc); font-family: var(--f-mono); font-size: 12px; }
+    .mini-tabs { display: flex; gap: 1px; margin-top: 12px; background: var(--border); border: 1px solid var(--border); }
+    .mini-tab { flex: 1; padding: 11px 10px; background: var(--panel); color: var(--muted); font: 11px/1.4 var(--f-mono); letter-spacing: .12em; text-transform: uppercase; }
+    .mini-tab.active { background: var(--bg); color: var(--fg); box-shadow: inset 0 -3px 0 var(--acc); }
+    .rule-builder-shot { border: 1px solid var(--border); border-top: 0; background: var(--bg); padding: 14px; }
+    .builder-row { display: grid; grid-template-columns: 1fr .6fr 1fr; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border-soft); font: 12px/1.4 var(--f-mono); }
+    .builder-row span { background: var(--panel); border: 1px solid var(--border); padding: 8px; overflow-wrap: anywhere; }
+    .builder-action { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font: 12px/1.4 var(--f-mono); }
+    .builder-action span { background: var(--dk-bg); color: var(--dk-ink); padding: 10px; }
     .paths { display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); }
     @media (min-width: 980px) { .paths { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
     .path { background: var(--panel); padding: 24px 22px; min-width: 0; display: flex; flex-direction: column; }
@@ -224,7 +242,7 @@
           <div>
             <span class="eyebrow">Insurance ops / self-hosted / PHP + SQLite</span>
             <h1>Insurance LTV and risk segmentation in one PHP file.</h1>
-            <p class="lead">Import policyholder CSVs, impute missing fields, compute LTV, apply JSON risk rules, build exportable segments, and simulate cross-sell revenue on your own server. No SaaS bill. No customer data egress.</p>
+            <p class="lead">Import policyholder CSVs, preserve custom fields, impute missing values, compute LTV, apply visual or JSON risk rules, build exportable segments, and simulate cross-sell revenue on your own server. No SaaS bill. No customer data egress.</p>
             <div class="cta-row">
               <a class="btn btn-primary" href="./demo.html">Try the no-install demo</a>
               <a class="btn" href="./docs.html">Read setup docs</a>
@@ -266,7 +284,7 @@ Preview <span class="a">--&gt;</span> Confirm import</pre>
         <div class="diagram-wrap">
           <svg viewBox="0 0 1120 360" role="img" aria-labelledby="diagram-title diagram-desc" xmlns="http://www.w3.org/2000/svg">
             <title id="diagram-title">LiteInsurance workflow diagram</title>
-            <desc id="diagram-desc">CSV import flows through imputation, LTV scoring, JSON risk rules, segment export, and campaign simulation.</desc>
+            <desc id="diagram-desc">CSV import flows through custom fields, imputation, LTV scoring, risk rules, segment export, and campaign simulation.</desc>
             <defs>
               <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
                 <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#e3e1d8" stroke-width="1"/>
@@ -314,8 +332,47 @@ Preview <span class="a">--&gt;</span> Confirm import</pre>
         <div class="diagram-steps">
           <div class="dstep"><div class="n">01 / Import</div><div class="t">Map any CSV</div><p>Upload, map columns, preview imputation, then commit rows into SQLite.</p></div>
           <div class="dstep"><div class="n">02 / Repair</div><div class="t">Expose weak data</div><p>Missing values are imputed and marked, not silently hidden.</p></div>
-          <div class="dstep"><div class="n">03 / Decide</div><div class="t">Run JSON rules</div><p>Priority-ordered rules set tiers, tags, and confidence adjustments.</p></div>
+          <div class="dstep"><div class="n">03 / Decide</div><div class="t">Run risk rules</div><p>Priority-ordered visual or JSON rules set tiers, tags, and confidence adjustments.</p></div>
           <div class="dstep"><div class="n">04 / Act</div><div class="t">Export and simulate</div><p>Build segments, export CSV, and model cross-sell revenue before outreach.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="flexibility" class="section">
+      <div class="container">
+        <div class="flex-layout">
+          <div class="flex-copy">
+            <span class="idx">FLX / 02</span>
+            <h2>Flexible fields without turning the app into a database project.</h2>
+            <p class="sub">LiteInsurance treats your CSV like the source of truth: map the few columns the scorer needs, keep every extra column as a typed custom field, then reference those fields from visual rules, raw JSON, segment filters, and exports.</p>
+            <div class="grid grid-2 flex-support-grid">
+              <div class="cell"><h3>Spreadsheet-like custom fields</h3><p>Unmapped CSV columns become editable local fields instead of requiring schema migrations.</p><span class="k">metadata.custom_fields</span></div>
+              <div class="cell"><h3>Two rule editing modes</h3><p>Use field/operator/value controls for normal edits, or switch to plain JSON for nested groups and advanced operators.</p><span class="k">visual + JSON</span></div>
+            </div>
+          </div>
+          <div>
+            <div class="field-board" aria-label="Custom field mapping example">
+              <table>
+                <thead><tr><th>CSV header</th><th>App role</th><th>Rule reference</th></tr></thead>
+                <tbody>
+                  <tr><td>policy_number</td><td>Record ID</td><td>policy_number</td></tr>
+                  <tr><td>premium_amount</td><td>LTV input</td><td>premium_amount</td></tr>
+                  <tr><td>agent_code</td><td>Custom field</td><td>custom.agent_code</td></tr>
+                  <tr><td>renewal_probability</td><td>Custom field</td><td>custom.renewal_probability</td></tr>
+                  <tr><td>source_channel</td><td>Custom field</td><td>custom.source_channel</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="mini-tabs" aria-hidden="true">
+              <div class="mini-tab active">Visual builder</div>
+              <div class="mini-tab">Plain JSON</div>
+            </div>
+            <div class="rule-builder-shot" aria-label="Visual rule builder example">
+              <div class="builder-row"><span>custom.renewal_probability</span><span>&gt;=</span><span>0.7</span></div>
+              <div class="builder-row"><span>premium_amount</span><span>&gt;</span><span>120</span></div>
+              <div class="builder-action"><span>set tier: Low</span><span>tag: renewal_ready</span></div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -323,7 +380,7 @@ Preview <span class="a">--&gt;</span> Confirm import</pre>
     <section id="features" class="section">
       <div class="container">
         <div class="section-head">
-          <span class="idx">FTR / 02</span>
+          <span class="idx">FTR / 03</span>
           <h2>Eight product surfaces that make the demo feel real.</h2>
           <p class="sub">The app is compact, but it is not a static mockup. The importer, scorer, rule tester, segment builder, exports, and campaign simulator all use real local state.</p>
         </div>
@@ -343,7 +400,7 @@ Preview <span class="a">--&gt;</span> Confirm import</pre>
     <section id="setup" class="section">
       <div class="container">
         <div class="section-head">
-          <span class="idx">RUN / 03</span>
+          <span class="idx">RUN / 04</span>
           <h2>Three ways to evaluate it.</h2>
           <p class="sub">Start in the browser, then deploy the PHP app when you want to test imports, users, exports, and server-side persistence.</p>
         </div>
@@ -351,7 +408,7 @@ Preview <span class="a">--&gt;</span> Confirm import</pre>
           <div class="path">
             <span class="path-tag rec">No install</span>
             <h3>Browser demo</h3>
-            <p>Runs entirely client-side with a deterministic 200-policy seed dataset, local CSV upload for policyholder rows, and editable rules JSON saved only in the browser.</p>
+            <p>Runs entirely client-side with a deterministic 200-policy seed dataset, local CSV upload for policyholder rows, editable custom fields, and visual or JSON rules saved only in the browser.</p>
             <pre class="pre-block"><span class="c"># nothing to install</span>
 open ./demo.html</pre>
             <a class="link" href="./demo.html">Launch demo</a>
@@ -382,7 +439,7 @@ open http://127.0.0.1:8000/liteinsurance.php</pre>
     <section id="trust" class="section">
       <div class="container">
         <div class="section-head">
-          <span class="idx">SEC / 04</span>
+          <span class="idx">SEC / 05</span>
           <h2>Built for sensitive policyholder data.</h2>
           <p class="sub">LiteInsurance assumes CSVs contain private customer data, so the default architecture keeps the app small, self-hosted, and inspectable.</p>
         </div>
@@ -397,7 +454,7 @@ open http://127.0.0.1:8000/liteinsurance.php</pre>
     <section id="faq" class="section">
       <div class="container">
         <div class="section-head">
-          <span class="idx">FAQ / 05</span>
+          <span class="idx">FAQ / 06</span>
           <h2>Questions an evaluator will ask before uploading a real CSV.</h2>
         </div>
         <details>
@@ -410,7 +467,7 @@ open http://127.0.0.1:8000/liteinsurance.php</pre>
         </details>
         <details>
           <summary>Can I try it before deploying PHP?</summary>
-          <p>Yes. The no-install demo starts with a deterministic 200-policy dataset, then lets you replace it with a local policyholder CSV and edit risk rules JSON for dashboards, segments, and campaign math.</p>
+          <p>Yes. The no-install demo starts with a deterministic 200-policy dataset, then lets you replace it with a local policyholder CSV, edit custom field cells, and build risk rules visually or as JSON for dashboards, segments, and campaign math.</p>
         </details>
         <details>
           <summary>Is this a full agency management system?</summary>
@@ -426,7 +483,7 @@ open http://127.0.0.1:8000/liteinsurance.php</pre>
         </details>
         <details>
           <summary>How do risk rules work?</summary>
-          <p>Rules are JSON definitions with conditions and actions. Matching rules can set a risk tier, adjust confidence, and add tags for segment logic.</p>
+          <p>Rules use the same conditions-and-actions format whether you edit them in the visual builder or the plain JSON editor. Matching rules can set a risk tier, adjust confidence, and add tags for segment logic.</p>
         </details>
       </div>
     </section>
@@ -436,7 +493,7 @@ open http://127.0.0.1:8000/liteinsurance.php</pre>
         <div>
           <span class="eyebrow">Demo first / deploy second</span>
           <h2>See the full insurance workflow before you touch a server.</h2>
-          <p>The browser demo shows the dashboard, policy table, risk segments, and campaign simulator with realistic sample data.</p>
+          <p>The browser demo shows the dashboard, policy table, custom field sheet, rule builder, risk segments, and campaign simulator with realistic sample data.</p>
         </div>
         <a class="btn btn-dark" href="./demo.html">Open the demo</a>
       </div>

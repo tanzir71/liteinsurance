@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LiteInsurance Docs -- Deploy, Configure, and Operate</title>
-  <meta name="description" content="Deployment and operating docs for LiteInsurance: PHP 8, SQLite, CSV imports, JSON rules, segments, security, cron, and backups.">
+  <meta name="description" content="Deployment and operating docs for LiteInsurance: PHP 8, SQLite, CSV imports, visual or JSON rules, segments, security, cron, and backups.">
   <meta name="robots" content="index, follow">
   <link rel="canonical" href="https://tanzir71.github.io/liteinsurance/docs.html">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%230a0a0a'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='32' font-family='monospace' fill='%23f4f3ee'%3ELI%3C/text%3E%3C/svg%3E">
@@ -21,7 +21,7 @@
 <body>
   <header><div class="container header-inner"><a class="brand" href="./index.html"><span class="logo">LI</span><span class="brand-name">LiteInsurance</span></a><nav><a class="nav-link" href="./index.html">Home</a><a class="nav-link" href="./demo.html">Demo</a><a class="nav-link" href="./docs.html">Docs</a><a class="nav-link" href="./compare.html">Compare</a><a class="btn btn-primary" href="https://github.com/tanzir71/liteinsurance" target="_blank" rel="noopener">GitHub</a></nav></div></header>
   <main>
-    <div class="hero"><div class="container hero-inner"><span class="eyebrow">Docs / verified against the PHP app</span><h1>Deploy, configure, and operate LiteInsurance.</h1><p class="lead">These docs cover the actual single-file PHP application: CSV import, imputation, LTV scoring, JSON rules, segments, campaign simulation, security controls, cron, and backups.</p></div></div>
+    <div class="hero"><div class="container hero-inner"><span class="eyebrow">Docs / verified against the PHP app</span><h1>Deploy, configure, and operate LiteInsurance.</h1><p class="lead">These docs cover the actual single-file PHP application: CSV import, imputation, LTV scoring, visual or JSON rules, segments, campaign simulation, security controls, cron, and backups.</p></div></div>
     <div class="container layout">
       <aside class="toc" aria-label="Docs table of contents"><div class="label">Contents</div><a href="#deploy">Deploy</a><a href="#local">Run locally</a><a href="#config">Config</a><a href="#pipeline">Pipeline</a><a href="#rules">Rules</a><a href="#segments">Segments</a><a href="#security">Security</a><a href="#ops">Operations</a></aside>
       <div>
@@ -35,7 +35,7 @@ Register first user -> Settings -> Setup doctor -> Import -> Preview -> Confirm 
 open http://127.0.0.1:8000/liteinsurance.php</pre></section>
         <section class="doc" id="config"><span class="idx">DOC / 03</span><h2>Configuration keys</h2><p>Most defaults live in the PHP file. Optional environment overrides can be set in <code>.env</code>.</p><table><thead><tr><th>Key</th><th>Default</th><th>Effect</th></tr></thead><tbody><tr><td><code>CRON_TOKEN</code></td><td>blank</td><td>Protects web cron. CLI cron can run without it.</td></tr><tr><td><code>DB_PATH</code></td><td><code>liteinsurance.db</code></td><td>SQLite database path. Move outside webroot when hosting allows.</td></tr><tr><td><code>UPLOAD_DIR</code></td><td><code>liteinsurance_uploads/</code></td><td>CSV staging directory. Move outside webroot when possible.</td></tr></tbody></table></section>
         <section class="doc" id="pipeline"><span class="idx">DOC / 04</span><h2>Import and scoring pipeline</h2><div class="grid grid-3"><div class="cell"><h3>Import</h3><p>CSV upload, Record ID mapping, optional Display name mapping, custom CSV field preservation, preview, and staged commit.</p><span class="k">metadata.custom_fields</span></div><div class="cell"><h3>Impute</h3><p>Mapped numeric fields use mean. Mapped categorical fields use mode or configured defaults.</p><span class="k">is_imputed</span></div><div class="cell"><h3>Score</h3><p>LTV requires mapped premium, tenure, and policy type. Without them, scoring stays blank or Unknown.</p><span class="k">ltv_estimate</span></div></div></section>
-        <section class="doc" id="rules"><span class="idx">DOC / 05</span><h2>Risk rules</h2><p>Rules are priority-ordered JSON definitions. A matching rule can set <code>risk_tier</code>, adjust score, and add a tag. Supported leaf operators include <code>=</code>, <code>!=</code>, <code>&gt;</code>, <code>&lt;</code>, <code>&gt;=</code>, <code>&lt;=</code>, <code>in</code>, <code>contains</code>, and <code>regex</code>.</p><pre>{
+        <section class="doc" id="rules"><span class="idx">DOC / 05</span><h2>Risk rules</h2><p>Rules are priority-ordered conditions and actions. The app provides a visual builder for common field/operator/value rules and a plain JSON editor for nested groups or advanced edits. A matching rule can set <code>risk_tier</code>, adjust score, and add a tag. Supported leaf operators include <code>=</code>, <code>!=</code>, <code>&gt;</code>, <code>&lt;</code>, <code>&gt;=</code>, <code>&lt;=</code>, <code>in</code>, <code>contains</code>, and <code>regex</code>.</p><pre>{
   "logic": "AND",
   "conditions": [
     { "field": "age", "op": ">=", "value": 60 },

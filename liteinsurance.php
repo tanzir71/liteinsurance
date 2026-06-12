@@ -415,6 +415,11 @@ function route_web(PDO $pdo): void
         handle_repair_apply($pdo, $user);
         return;
     }
+    if ($action === 'policy_cell_update') {
+        require_admin($user);
+        handle_policy_cell_update($pdo, $user);
+        return;
+    }
 
     if ($action === 'recompute_now') {
         require_admin($user);
@@ -754,6 +759,20 @@ function render_tab_import(PDO $pdo): void
     }
     echo '</tbody></table></div>';
 }
+
+function profile_cell_input(array $row, string $field, string $value, string $variant = ''): string
+{
+    $classes = 'profileCellInput';
+    if ($variant === 'num') {
+        $classes .= ' right';
+    } elseif ($variant !== '') {
+        $classes .= ' ' . $variant;
+    }
+    $id = (int)($row['id'] ?? 0);
+    $label = trim((string)($row['policy_number'] ?? 'row')) . ' ' . $field;
+    return '<td' . ($variant === 'num' ? ' class="right"' : '') . '><input class="' . h($classes) . '" data-policy-cell data-policy-id="' . h((string)$id) . '" data-field="' . h($field) . '" value="' . h($value) . '" aria-label="' . h($label) . '"></td>';
+}
+
 function render_tab_profiles(PDO $pdo): void
 {
     $q = trim((string)($_GET['q'] ?? ''));
@@ -783,7 +802,7 @@ function render_tab_profiles(PDO $pdo): void
     $st->execute($args);
     $total = (int)$st->fetchColumn();
 
-    $st = $pdo->prepare('SELECT policy_number, name, age, policy_type, region, ltv_estimate, risk_tier, confidence_score, is_imputed, metadata FROM policyholders ' . $whereSql . ' ORDER BY id DESC LIMIT ' . (int)$limit . ' OFFSET ' . (int)$offset);
+    $st = $pdo->prepare('SELECT id, policy_number, name, age, policy_type, region, premium_amount, tenure_months, sum_assured, ltv_estimate, risk_tier, confidence_score, is_imputed, metadata FROM policyholders ' . $whereSql . ' ORDER BY id DESC LIMIT ' . (int)$limit . ' OFFSET ' . (int)$offset);
     $st->execute($args);
     $rows = $st->fetchAll();
     $customDefs = $pdo->query('SELECT field_key, label FROM custom_field_defs WHERE enabled = 1 ORDER BY field_key ASC LIMIT 4')->fetchAll();
@@ -796,8 +815,9 @@ function render_tab_profiles(PDO $pdo): void
     echo '<div class="actionsRow" style="align-items:flex-end"><button class="btnSecondary" type="submit">Filter</button><a class="link" href="' . h(self_url(['tab' => 'profiles'])) . '">Reset</a></div></div>';
     echo '</form>';
 
-    echo '<div class="muted">Showing ' . h((string)count($rows)) . ' of ' . h((string)$total) . '.</div>';
-    echo '<div class="scrollX"><table class="table"><thead><tr><th>Record / Policy ID</th><th>Display name</th><th>Age</th><th>Type</th><th>Region</th><th class="right">LTV</th><th>Tier</th><th class="right">Conf</th><th>Imputed</th>';
+    echo '<div class="muted" id="profileInlineStatus">Showing ' . h((string)count($rows)) . ' of ' . h((string)$total) . '. Edit cells directly; LTV, risk tier, confidence, and segments refresh after save.</div>';
+    echo '<input type="hidden" id="profileInlineCsrf" value="' . h(csrf_token()) . '">';
+    echo '<div class="scrollX"><table class="table"><thead><tr><th>Record / Policy ID</th><th>Display name</th><th>Age</th><th>Type</th><th>Region</th><th class="right">Premium</th><th class="right">Tenure</th><th class="right">Assured</th><th class="right">LTV</th><th>Tier</th><th class="right">Conf</th><th>Imputed</th>';
     foreach ($customDefs as $def) {
         echo '<th>' . h((string)$def['label']) . '</th>';
     }
@@ -806,24 +826,28 @@ function render_tab_profiles(PDO $pdo): void
         $low = (int)$r['confidence_score'] < 60;
         $meta = safe_json((string)($r['metadata'] ?? '{}'));
         $custom = is_array($meta['custom_fields'] ?? null) ? (array)$meta['custom_fields'] : [];
+        $policyId = h((string)(int)$r['id']);
         echo '<tr class="' . ($low ? 'rowLow' : '') . '">';
-        echo '<td>' . h((string)$r['policy_number']) . '</td>';
-        echo '<td>' . h(mask_name((string)$r['name'])) . '</td>';
-        echo '<td>' . h((string)($r['age'] ?? '')) . '</td>';
-        echo '<td>' . h((string)($r['policy_type'] ?? '')) . '</td>';
-        echo '<td>' . h((string)($r['region'] ?? '')) . '</td>';
-        echo '<td class="right">' . h(money_or_blank($r['ltv_estimate'] ?? null)) . '</td>';
-        echo '<td>' . h((string)($r['risk_tier'] ?? 'Unknown')) . '</td>';
-        echo '<td class="right">' . h((string)($r['confidence_score'] ?? 0)) . '</td>';
+        echo profile_cell_input($r, 'policy_number', (string)$r['policy_number'], 'policy');
+        echo profile_cell_input($r, 'name', (string)$r['name'], 'name');
+        echo profile_cell_input($r, 'age', (string)($r['age'] ?? ''), 'num');
+        echo profile_cell_input($r, 'policy_type', (string)($r['policy_type'] ?? ''));
+        echo profile_cell_input($r, 'region', (string)($r['region'] ?? ''));
+        echo profile_cell_input($r, 'premium_amount', (string)($r['premium_amount'] ?? ''), 'num');
+        echo profile_cell_input($r, 'tenure_months', (string)($r['tenure_months'] ?? ''), 'num');
+        echo profile_cell_input($r, 'sum_assured', (string)($r['sum_assured'] ?? ''), 'num');
+        echo '<td class="right" data-derived-field="ltv_estimate" data-policy-id="' . $policyId . '">' . h(money_or_blank($r['ltv_estimate'] ?? null)) . '</td>';
+        echo '<td data-derived-field="risk_tier" data-policy-id="' . $policyId . '">' . h((string)($r['risk_tier'] ?? 'Unknown')) . '</td>';
+        echo '<td class="right" data-derived-field="confidence_score" data-policy-id="' . $policyId . '">' . h((string)($r['confidence_score'] ?? 0)) . '</td>';
         echo '<td>' . ((int)$r['is_imputed'] === 1 ? '<span class="badge">Yes</span>' : '<span class="badge mutedBadge">No</span>') . '</td>';
         foreach ($customDefs as $def) {
             $v = $custom[(string)$def['field_key']] ?? '';
-            echo '<td>' . h(is_bool($v) ? ($v ? 'true' : 'false') : (string)$v) . '</td>';
+            echo profile_cell_input($r, 'custom.' . (string)$def['field_key'], is_bool($v) ? ($v ? 'true' : 'false') : (string)$v);
         }
         echo '</tr>';
     }
     if (!$rows) {
-        echo '<tr><td colspan="' . h((string)(9 + count($customDefs))) . '" class="muted">No policyholders found.</td></tr>';
+        echo '<tr><td colspan="' . h((string)(12 + count($customDefs))) . '" class="muted">No policyholders found.</td></tr>';
     }
     echo '</tbody></table></div>';
 
@@ -892,6 +916,34 @@ function render_tab_rules(PDO $pdo): void
         $acts = safe_json((string)$editing['actions_json']);
         $json = json_encode(['logic' => (is_array($conds) && isset($conds['logic'])) ? $conds['logic'] : 'AND', 'conditions' => (is_array($conds) && isset($conds['conditions'])) ? $conds['conditions'] : (is_array($conds) ? $conds : []), 'actions' => is_array($acts) ? $acts : []], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
     }
+    $fieldOptions = [
+        'age' => 'Age',
+        'gender' => 'Gender',
+        'policy_type' => 'Policy type',
+        'region' => 'Region',
+        'premium_amount' => 'Premium amount',
+        'tenure_months' => 'Tenure months',
+        'sum_assured' => 'Sum assured',
+        'ltv_estimate' => 'LTV estimate',
+        'risk_tier' => 'Risk tier',
+        'confidence_score' => 'Confidence score',
+        'is_imputed' => 'Is imputed',
+    ];
+    $customDefs = $pdo->query('SELECT field_key, label FROM custom_field_defs WHERE enabled = 1 ORDER BY field_key ASC LIMIT 50')->fetchAll();
+    foreach ($customDefs as $def) {
+        $key = (string)($def['field_key'] ?? '');
+        if ($key !== '') {
+            $fieldOptions['custom.' . $key] = 'custom.' . $key;
+        }
+    }
+    $fieldOptionHtml = '';
+    foreach ($fieldOptions as $value => $label) {
+        $fieldOptionHtml .= '<option value="' . h((string)$value) . '">' . h((string)$label) . '</option>';
+    }
+    $operatorOptionHtml = '';
+    foreach (['=', '!=', '>', '<', '>=', '<=', 'in', 'contains', 'regex'] as $op) {
+        $operatorOptionHtml .= '<option value="' . h($op) . '">' . h($op) . '</option>';
+    }
 
     echo '<div class="card"><div class="h2">' . h($rid > 0 ? 'Edit rule' : 'New rule') . '</div>';
     echo '<form method="post" class="form">';
@@ -902,8 +954,10 @@ function render_tab_rules(PDO $pdo): void
     echo '<label class="label">Name</label><input class="input" name="name" required maxlength="120" value="' . h($name) . '">';
     echo '<div class="grid2"><div><label class="label">Priority</label><input class="input" type="number" name="priority" min="0" max="1000" value="' . h((string)$priority) . '"></div>';
     echo '<div><label class="label">Enabled</label><select class="select" name="enabled"><option value="1"' . ($enabled === 1 ? ' selected' : '') . '>Yes</option><option value="0"' . ($enabled === 0 ? ' selected' : '') . '>No</option></select></div></div>';
-    echo '<label class="label">Rule JSON</label><textarea class="textarea" name="definition_json" rows="12" spellcheck="false">' . h((string)$json) . '</textarea>';
-    echo '<div class="muted tiny">Ops: =, !=, &gt;, &lt;, &gt;=, &lt;=, in, contains, regex. Use custom CSV fields as custom.agent_code. Group: {"all": [...]} / {"any": [...]} in conditions.</div>';
+    echo '<select id="ruleFieldOptions" hidden>' . $fieldOptionHtml . '</select><select id="ruleOperatorOptions" hidden>' . $operatorOptionHtml . '</select>';
+    echo '<div class="ruleModeTabs" role="tablist" aria-label="Rule editor mode"><button class="ruleModeTab" type="button" data-rule-mode="visual" aria-selected="true">Visual builder</button><button class="ruleModeTab" type="button" data-rule-mode="json" aria-selected="false">Plain JSON</button></div>';
+    echo '<div class="ruleModePanel" id="ruleVisualPanel"><div class="grid2"><div><label class="label">Match logic</label><select class="select" id="ruleLogicVisual"><option value="AND">All conditions</option><option value="OR">Any condition</option></select></div><div class="inlineCheck"><input type="checkbox" id="ruleAdvancedJsonNotice" disabled><span>Nested groups stay in Plain JSON</span></div></div><div id="ruleConditionsVisual"></div><div class="actionsRow"><button class="btnSecondary" type="button" id="addRuleCondition">Add condition</button></div><div class="ruleActionGrid"><div><label class="label">Set tier</label><select class="select" id="ruleActionTier"><option value="">No change</option><option>Low</option><option>Medium</option><option>High</option><option>Review</option><option>Unknown</option></select></div><div><label class="label">Score delta</label><input class="input" id="ruleActionScore" type="number" min="-100" max="100" value="0"></div><div><label class="label">Add tag</label><input class="input" id="ruleActionTag" maxlength="80" placeholder="senior_short_tenure"></div></div></div>';
+    echo '<div class="ruleModePanel" id="ruleJsonPanel" hidden><label class="label">Rule JSON</label><textarea class="textarea" name="definition_json" rows="12" spellcheck="false">' . h((string)$json) . '</textarea><div class="muted tiny">Ops: =, !=, &gt;, &lt;, &gt;=, &lt;=, in, contains, regex. Use custom CSV fields as custom.agent_code. Group: {"all": [...]} / {"any": [...]} in conditions.</div></div>';
     echo '<button class="btn" type="submit">Save rule</button>';
 
     echo '<div class="divider"></div><div class="h2">Test a rule</div>';
@@ -1350,6 +1404,12 @@ function app_css(): string
         . '.table th,.table td{border-bottom:1px solid var(--borderSoft);padding:10px 8px;text-align:left;vertical-align:top;white-space:nowrap;}'
         . '.table th{color:var(--muted2);font:11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;}'
         . '.right{text-align:right;}'
+        . '.profileCellInput{width:100%;min-width:88px;min-height:32px;border:1px solid transparent;background:transparent;padding:0 7px;font-size:12px;color:var(--text);}'
+        . '.profileCellInput:hover{border-color:var(--border);background:var(--bg);}'
+        . '.profileCellInput:focus{border-color:var(--accent);background:#fff;box-shadow:0 0 0 1px var(--accent);}'
+        . '.profileCellInput.right{text-align:right;}'
+        . '.profileCellInput.name{min-width:132px;}'
+        . '.profileCellInput.policy{min-width:104px;font-family:var(--mono);}'
         . '.badge{display:inline-block;padding:2px 8px;border:1px solid var(--border);font:11px/1.4 var(--mono);}'
         . '.mutedBadge{color:var(--muted);}'
         . '.scrollX{overflow:auto;border:1px solid var(--border);background:var(--panel);}'
@@ -1362,6 +1422,16 @@ function app_css(): string
         . '.checkGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;border:1px solid var(--border);padding:10px;background:var(--bg);}'
         . '.check{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:var(--text);}'
         . '.codeBlock{border:1px solid var(--darkRule);padding:10px;background:var(--dark);color:var(--darkInk);overflow:auto;font-size:12px;}'
+        . '.ruleModeTabs{display:flex;gap:1px;background:var(--border);border:1px solid var(--border);margin:4px 0 10px;}'
+        . '.ruleModeTab{flex:1 1 0;border:0;background:var(--panel);color:var(--muted);padding:11px 10px;cursor:pointer;font:11px/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;}'
+        . '.ruleModeTab[aria-selected="true"]{background:var(--bg);color:var(--text);box-shadow:inset 0 -3px 0 var(--accent);}'
+        . '.ruleModePanel{border:1px solid var(--border);background:var(--bg);padding:12px;margin-bottom:10px;}'
+        . '.ruleModePanel[hidden]{display:none;}'
+        . '.ruleConditionRow{display:grid;grid-template-columns:1fr .62fr 1fr auto;gap:8px;align-items:end;padding:8px 0;border-top:1px solid var(--borderSoft);}'
+        . '.ruleConditionRow:first-child{border-top:0;}'
+        . '.ruleActionGrid{display:grid;grid-template-columns:1fr .7fr 1fr;gap:10px;margin-top:10px;}'
+        . '.inlineCheck{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;}'
+        . '.inlineCheck input{width:auto;}'
         . '.pager{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;}'
         . '.pagerOn,.pagerOff{padding:6px 10px;border:1px solid var(--border);text-decoration:none;color:var(--text);font-size:12px;font-family:var(--mono);}'
         . '.pagerOn{background:var(--text);color:var(--bg);font-weight:700;}'
@@ -1377,7 +1447,7 @@ function app_css(): string
         . '.authBrand{display:flex;align-items:center;gap:12px;font-weight:700;letter-spacing:-0.02em;margin-bottom:6px;}'
         . '.authBrand:before{content:"LI";display:grid;place-items:center;width:34px;height:34px;background:var(--text);color:var(--bg);font:11px/1 var(--mono);}'
         . '.authFooter{margin-top:14px;display:flex;flex-direction:column;gap:8px;}'
-        . '@media (max-width:900px){.appShell{grid-template-columns:1fr;grid-template-rows:60px auto 1fr;}.topBar{padding:0 12px;}.userPill{max-width:48vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.sideNav{flex-direction:row;overflow:auto;white-space:nowrap;border-right:none;border-bottom:1px solid var(--border);} .main{padding:16px 12px 36px;} .grid2{grid-template-columns:1fr;} .kpiGrid{grid-template-columns:repeat(2,minmax(0,1fr));} .gridMap{grid-template-columns:1fr;} .checkGrid{grid-template-columns:1fr;}}'
+        . '@media (max-width:900px){.appShell{grid-template-columns:1fr;grid-template-rows:60px auto 1fr;}.topBar{padding:0 12px;}.userPill{max-width:48vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.sideNav{flex-direction:row;overflow:auto;white-space:nowrap;border-right:none;border-bottom:1px solid var(--border);} .main{padding:16px 12px 36px;} .grid2{grid-template-columns:1fr;} .kpiGrid{grid-template-columns:repeat(2,minmax(0,1fr));} .gridMap{grid-template-columns:1fr;} .checkGrid{grid-template-columns:1fr;}.ruleConditionRow{grid-template-columns:1fr;}.ruleActionGrid{grid-template-columns:1fr;}}'
         . '</style>';
 }
 
@@ -1392,7 +1462,7 @@ function app_js(): string
         . 'const ta=document.querySelector("textarea[name=definition_json]");'
         . 'const csrf=document.querySelector("input[name=csrf_token]");'
         . 'if(!out||!sel||!ta||!csrf){return;}'
-        . 'out.textContent="Running…";'
+        . 'out.textContent="Running...";'
         . 'const fd=new FormData();'
         . 'fd.append("csrf_token",csrf.value||"");'
         . 'fd.append("action","rule_test");'
@@ -1405,6 +1475,34 @@ function app_js(): string
         . 'out.textContent=j?JSON.stringify(j,null,2):txt;'
         . '}catch(e){out.textContent=String(e);}'
         . '};'
+        . '(function(){'
+        . 'function status(msg,err){const el=document.getElementById("profileInlineStatus");if(el){el.textContent=msg;el.style.color=err?"#a33a2a":"";}}'
+        . 'function money(v){const n=Number(v);return Number.isFinite(n)?"$"+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):"";}'
+        . 'function derivedCell(id,field){return document.querySelector("[data-policy-id=\\"" + id + "\\"][data-derived-field=\\"" + field + "\\"]");}'
+        . 'function updateDerived(id,data){if(!data||!data.derived){return;}const d=data.derived;const ltv=derivedCell(id,"ltv_estimate");if(ltv){ltv.textContent=money(d.ltv_estimate);}const tier=derivedCell(id,"risk_tier");if(tier){tier.textContent=d.risk_tier||"Unknown";}const conf=derivedCell(id,"confidence_score");if(conf){conf.textContent=d.confidence_score==null?"":String(d.confidence_score);}}'
+        . 'async function save(input){const csrf=document.getElementById("profileInlineCsrf")||document.querySelector("input[name=csrf_token]");if(!csrf){return;}const id=input.dataset.policyId||"0";const field=input.dataset.field||"";const sig=id+"|"+field+"|"+(input.value||"");if(input.dataset.inlineSaveKey===sig||input.dataset.inlineSaving==="1"){return;}const fd=new FormData();fd.append("csrf_token",csrf.value||"");fd.append("action","policy_cell_update");fd.append("id",id);fd.append("field",field);fd.append("value",input.value||"");input.dataset.inlineSaving="1";input.disabled=true;status("Saving "+field+"...");try{const res=await fetch(window.location.href,{method:"POST",body:fd,headers:{"X-Requested-With":"fetch","Accept":"application/json"}});const data=await res.json();if(!data.ok){throw new Error(data.error||"Could not save cell.");}input.dataset.inlineSaveKey=sig;updateDerived(id,data);status("Saved "+field+". Computed cells refreshed.");}catch(e){status(e.message||String(e),true);}finally{input.disabled=false;delete input.dataset.inlineSaving;}}'
+        . 'document.addEventListener("change",function(e){const input=e.target.closest("[data-policy-cell]");if(input){save(input);}});'
+        . 'document.addEventListener("keydown",function(e){const input=e.target.closest("[data-policy-cell]");if(input&&e.key==="Enter"){e.preventDefault();save(input);input.blur();}});'
+        . '})();'
+        . '(function(){'
+        . 'function qs(s,r){return(r||document).querySelector(s);}'
+        . 'function qsa(s,r){return Array.from((r||document).querySelectorAll(s));}'
+        . 'function ta(){return qs("textarea[name=definition_json]");}'
+        . 'function safeJson(t){try{return JSON.parse(t||"{}");}catch(e){return null;}}'
+        . 'function opts(id){const e=document.getElementById(id);return e?e.innerHTML:"";}'
+        . 'function esc(v){return String(v==null?"":v).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}'
+        . 'function iv(v){return Array.isArray(v)?v.join(", "):(v==null?"":String(v));}'
+        . 'function pv(op,raw){const text=String(raw||"").trim();if(op==="in"){return text.split(",").map(function(p){return p.trim();}).filter(Boolean).map(function(p){const n=Number(p);return Number.isFinite(n)&&p!==""?n:p;});}if(/^(true|false)$/i.test(text)){return /^true$/i.test(text);}const n=Number(text.replace(/[$,]/g,""));return Number.isFinite(n)&&text!==""?n:text;}'
+        . 'function setSel(s,v){if(!s){return;}const str=String(v||"");if(str&&!qsa("option",s).some(function(o){return o.value===str;})){const o=document.createElement("option");o.value=str;o.textContent=str;s.appendChild(o);}s.value=str;}'
+        . 'function row(c){const w=document.createElement("div");w.className="ruleConditionRow";w.setAttribute("data-rule-condition-row","");w.innerHTML="<div><label class=\\"label\\">Field</label><select class=\\"select\\" data-rule-field>"+opts("ruleFieldOptions")+"</select></div><div><label class=\\"label\\">Operator</label><select class=\\"select\\" data-rule-op>"+opts("ruleOperatorOptions")+"</select></div><div><label class=\\"label\\">Value</label><input class=\\"input\\" data-rule-value value=\\""+esc(iv(c&&c.value))+"\\"></div><button class=\\"btnSecondary\\" type=\\"button\\" data-rule-remove-condition>Remove</button>";setSel(qs("[data-rule-field]",w),c&&c.field?c.field:"age");setSel(qs("[data-rule-op]",w),c&&c.op?c.op:">=");return w;}'
+        . 'function defRule(){return{logic:"AND",conditions:[{field:"age",op:">=",value:60}],actions:{set_risk_tier:"High",score_delta:10}};}'
+        . 'function render(){const t=ta();if(!t||!document.getElementById("ruleVisualPanel")){return;}const d=safeJson(t.value)||defRule();const logic=document.getElementById("ruleLogicVisual");if(logic){logic.value=String(d.logic||"AND").toUpperCase()==="OR"?"OR":"AND";}const box=document.getElementById("ruleConditionsVisual");if(box){box.innerHTML="";const cond=Array.isArray(d.conditions)?d.conditions:[];const leaf=cond.filter(function(x){return x&&x.field;});(leaf.length?leaf:defRule().conditions).forEach(function(c){box.appendChild(row(c));});const adv=document.getElementById("ruleAdvancedJsonNotice");if(adv){adv.checked=cond.some(function(x){return x&&!(x.field);});}}const a=d.actions&&typeof d.actions==="object"?d.actions:{};setSel(document.getElementById("ruleActionTier"),a.set_risk_tier||"");const score=document.getElementById("ruleActionScore");if(score){score.value=Number(a.score_delta||0);}const tag=document.getElementById("ruleActionTag");if(tag){tag.value=a.add_tag||"";}}'
+        . 'function collect(){const t=ta();if(!t){return null;}const cond=qsa("[data-rule-condition-row]").map(function(r){const f=qs("[data-rule-field]",r).value;const o=qs("[data-rule-op]",r).value;const v=qs("[data-rule-value]",r).value;return{field:f,op:o,value:pv(o,v)};}).filter(function(x){return x.field&&x.op;});if(!cond.length){throw new Error("Add at least one condition.");}const actions={};const tier=document.getElementById("ruleActionTier");const score=document.getElementById("ruleActionScore");const tag=document.getElementById("ruleActionTag");if(tier&&tier.value){actions.set_risk_tier=tier.value;}if(score&&score.value!==""&&Number(score.value)!==0){actions.score_delta=Number(score.value);}if(tag&&tag.value.trim()!==""){actions.add_tag=tag.value.trim();}if(!Object.keys(actions).length){throw new Error("Add at least one action.");}const logic=document.getElementById("ruleLogicVisual");const d={logic:logic&&logic.value==="OR"?"OR":"AND",conditions:cond,actions:actions};t.value=JSON.stringify(d,null,2);return d;}'
+        . 'function mode(m){const visual=m!=="json";if(!visual){try{collect();}catch(e){}}qsa("[data-rule-mode]").forEach(function(b){b.setAttribute("aria-selected",b.dataset.ruleMode===(visual?"visual":"json")?"true":"false");});const vp=document.getElementById("ruleVisualPanel");const jp=document.getElementById("ruleJsonPanel");if(vp){vp.hidden=!visual;}if(jp){jp.hidden=visual;}if(visual){render();}}'
+        . 'function bind(){if(!document.getElementById("ruleVisualPanel")){return;}render();qsa("[data-rule-mode]").forEach(function(b){b.addEventListener("click",function(){mode(b.dataset.ruleMode);});});const add=document.getElementById("addRuleCondition");if(add){add.addEventListener("click",function(){const box=document.getElementById("ruleConditionsVisual");if(box){box.appendChild(row({field:"age",op:">=",value:60}));}});}const box=document.getElementById("ruleConditionsVisual");if(box){box.addEventListener("click",function(e){const b=e.target.closest("[data-rule-remove-condition]");if(!b){return;}if(qsa("[data-rule-condition-row]").length<=1){return;}b.closest("[data-rule-condition-row]").remove();});}const f=ta()?ta().closest("form"):null;if(f){f.addEventListener("submit",function(e){const vp=document.getElementById("ruleVisualPanel");if(vp&&!vp.hidden){try{collect();}catch(err){e.preventDefault();alert(err.message||String(err));}}});}}'
+        . 'window.LiteInsurance.ruleTest=async function(){const out=document.getElementById("ruleTestOut");const sel=document.getElementById("ruleTestPolicy");const t=ta();const csrf=document.querySelector("input[name=csrf_token]");if(!out||!sel||!t||!csrf){return;}const vp=document.getElementById("ruleVisualPanel");if(vp&&!vp.hidden){try{collect();}catch(e){out.textContent=e.message||String(e);return;}}out.textContent="Running...";const fd=new FormData();fd.append("csrf_token",csrf.value||"");fd.append("action","rule_test");fd.append("policyholder_id",sel.value||"0");fd.append("definition_json",t.value||"");try{const res=await fetch(window.location.href,{method:"POST",body:fd,headers:{"X-Requested-With":"fetch"}});const txt=await res.text();let j=null;try{j=JSON.parse(txt);}catch(e){}out.textContent=j?JSON.stringify(j,null,2):txt;}catch(e){out.textContent=String(e);}};'
+        . 'document.addEventListener("DOMContentLoaded",bind);'
+        . '})();'
         . '</script>';
 }
 
@@ -3689,6 +3787,122 @@ function handle_campaign_save(PDO $pdo, array $user): void
     audit($pdo, (int)$user['id'], 'campaigns.simulate', ['id' => (int)$pdo->lastInsertId(), 'segment_id' => $segmentId, 'projected_revenue' => $gross]);
     flash('success', 'Simulation complete. Net revenue: ' . CURRENCY_SYMBOL . number_format($net, 2));
     redirect_to(['tab' => 'campaigns']);
+}
+
+function handle_policy_cell_update(PDO $pdo, array $user): void
+{
+    header('Content-Type: application/json; charset=utf-8');
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['ok' => false, 'error' => 'POST required']);
+        return;
+    }
+    $id = (int)($_POST['id'] ?? 0);
+    $field = trim((string)($_POST['field'] ?? ''));
+    $value = trim((string)($_POST['value'] ?? ''));
+    if ($id <= 0 || $field === '') {
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'Missing row or field']);
+        return;
+    }
+    $st = $pdo->prepare('SELECT * FROM policyholders WHERE id = ?');
+    $st->execute([$id]);
+    $row = $st->fetch();
+    if (!$row) {
+        http_response_code(404);
+        echo json_encode(['ok' => false, 'error' => 'Policyholder not found']);
+        return;
+    }
+
+    $coreFields = ['policy_number', 'name', 'age', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured'];
+    if (str_starts_with($field, 'custom.')) {
+        $key = substr($field, 7);
+        if (!preg_match('/^[a-z_][a-z0-9_]*$/', $key)) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => 'Invalid custom field']);
+            return;
+        }
+        $meta = safe_json((string)($row['metadata'] ?? '{}'));
+        if (!is_array($meta)) {
+            $meta = [];
+        }
+        $custom = is_array($meta['custom_fields'] ?? null) ? (array)$meta['custom_fields'] : [];
+        $def = $pdo->prepare('SELECT field_type, label, source_header FROM custom_field_defs WHERE field_key = ? LIMIT 1');
+        $def->execute([$key]);
+        $defRow = $def->fetch();
+        $fieldType = is_array($defRow) ? (string)($defRow['field_type'] ?? 'text') : (infer_custom_value_type($value) ?? 'text');
+        $custom[$key] = parse_custom_value($value, $fieldType);
+        $meta['custom_fields'] = $custom;
+        $upd = $pdo->prepare('UPDATE policyholders SET metadata = ? WHERE id = ?');
+        $upd->execute([json_encode($meta, JSON_UNESCAPED_SLASHES), $id]);
+    } elseif (in_array($field, $coreFields, true)) {
+        if (in_array($field, ['policy_number', 'name'], true) && $value === '') {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => $field . ' cannot be blank']);
+            return;
+        }
+        if ($field === 'policy_number') {
+            $dupe = $pdo->prepare('SELECT COUNT(*) FROM policyholders WHERE policy_number = ? AND id <> ?');
+            $dupe->execute([$value, $id]);
+            if ((int)$dupe->fetchColumn() > 0) {
+                http_response_code(409);
+                echo json_encode(['ok' => false, 'error' => 'Policy ID must be unique']);
+                return;
+            }
+        }
+        $parsed = $value;
+        if (in_array($field, ['age', 'tenure_months'], true)) {
+            $parsed = $value === '' ? null : parse_int($value);
+            if ($value !== '' && $parsed === null) {
+                http_response_code(400);
+                echo json_encode(['ok' => false, 'error' => 'Whole number expected']);
+                return;
+            }
+        } elseif (in_array($field, ['premium_amount', 'sum_assured'], true)) {
+            $parsed = $value === '' ? null : parse_number($value);
+            if ($value !== '' && $parsed === null) {
+                http_response_code(400);
+                echo json_encode(['ok' => false, 'error' => 'Number expected']);
+                return;
+            }
+        }
+        $upd = $pdo->prepare('UPDATE policyholders SET ' . $field . ' = ? WHERE id = ?');
+        $upd->execute([$parsed, $id]);
+    } else {
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'Field is read-only']);
+        return;
+    }
+
+    $derived = recompute_policyholder_row($pdo, $id);
+    audit($pdo, (int)$user['id'], 'profiles.inline_update', ['id' => $id, 'field' => $field]);
+    echo json_encode(['ok' => true, 'id' => $id, 'field' => $field, 'derived' => $derived], JSON_UNESCAPED_SLASHES);
+}
+
+function recompute_policyholder_row(PDO $pdo, int $id): array
+{
+    $st = $pdo->prepare('SELECT * FROM policyholders WHERE id = ?');
+    $st->execute([$id]);
+    $ph = $st->fetch();
+    if (!$ph) {
+        return [];
+    }
+    $rec = policyholder_record_from_row($ph);
+    $meta = safe_json((string)($ph['metadata'] ?? '{}'));
+    if (!is_array($meta)) {
+        $meta = [];
+    }
+    $imputed = is_array($meta['imputed_fields'] ?? null) ? (array)$meta['imputed_fields'] : [];
+    $riskOut = evaluate_rules_for_record($rec, load_rules($pdo));
+    $ruleHits = (array)($riskOut['rule_hits'] ?? []);
+    $score = compute_confidence($rec, $imputed);
+    $score = min(100, (int)round($score + min(20, count($ruleHits) * 4)));
+    $ltv = compute_ltv($rec);
+    $meta['rule_hits'] = $ruleHits;
+    $meta['tags'] = (array)($riskOut['tags'] ?? []);
+    $upd = $pdo->prepare('UPDATE policyholders SET ltv_estimate = ?, risk_tier = ?, confidence_score = ?, metadata = ? WHERE id = ?');
+    $upd->execute([$ltv, (string)($riskOut['risk_tier'] ?? 'Unknown'), $score, json_encode($meta, JSON_UNESCAPED_SLASHES), $id]);
+    return ['ltv_estimate' => $ltv, 'risk_tier' => (string)($riskOut['risk_tier'] ?? 'Unknown'), 'confidence_score' => $score];
 }
 
 function handle_repair_apply(PDO $pdo, array $user): void
