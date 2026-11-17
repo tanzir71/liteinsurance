@@ -11,6 +11,7 @@ Added
 - Sample book gains `agent_code`, `renewal_probability` and `source_channel` custom columns (also used by the demo).
 
 Changed
+- Support link: a “Buy me a coffee” call to action (https://buymeacoffee.com/tanzir) sits above the footer on the landing page, docs, compare and demo, in the app footer, and on the sign-in card.
 - The whole app now follows the App UI v2 design, not just the demo:
   - Shell: navy sidebar with icons and counts, an agency box (new "Agency name" setting), a user card with sign-out, and a top bar with search and per-screen actions.
   - Today: five KPI cards; a renewal worklist split into ≤30 / 31–60 / 61–90 / 91–120 days, with premium change, risk, owner and status; and Opportunities, Data health and Consent & opt-outs cards.

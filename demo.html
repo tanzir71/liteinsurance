@@ -42,6 +42,17 @@
     .header-inner .btn { min-height: 44px; padding: 0 18px; font-size: 14px; font-family: var(--f-sans); }
     .btn-primary { background: var(--fg); color: var(--bg); }
     .btn-primary:hover { background: var(--acc); border-color: var(--acc); color: #fff; }
+    .site-foot { border-top: 1px solid var(--border); background: var(--bg); padding: 22px 0 26px; font-size: 13px; color: var(--muted); }
+    .site-foot .container { max-width: none; padding: 0 28px; }
+    .donate { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 14px; line-height: 1.5; text-decoration: none; }
+    .donate-ic { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 4px; background: #FFDD00; color: #0B0D12; }
+    .donate-text strong { color: var(--fg); font-weight: 650; }
+    .donate-cta { margin-left: auto; flex: none; display: inline-flex; align-items: center; min-height: 38px; padding: 0 16px; border-radius: 4px; background: #FFDD00; color: #0B0D12; font-weight: 600; }
+    .donate:hover .donate-cta { background: var(--fg); color: #fff; }
+    .donate:focus-visible { outline: 2px solid var(--acc); outline-offset: 4px; }
+    .site-foot-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 18px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 12px; }
+    .site-foot-meta a:hover { color: var(--acc); }
+    @media (max-width: 760px) { .site-foot .container { padding: 0 16px; } .donate { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: start; } .donate-cta { grid-column: 2; justify-self: start; margin-left: 0; } }
     @media (max-width: 760px) {
       .hamburger { display: inline-flex; flex-direction: column; justify-content: center; gap: 5px; width: 44px; height: 44px; padding: 0 11px; border: 1px solid var(--border); background: var(--panel); cursor: pointer; }
       .hamburger span { display: block; height: 2px; width: 100%; background: var(--fg); transition: transform .2s ease, opacity .2s ease; }
@@ -774,6 +785,8 @@
       </div>
     </div>
   </div>
+
+  <footer class="site-foot"><div class="container"><a class="donate" href="https://buymeacoffee.com/tanzir" target="_blank" rel="noopener"><span class="donate-ic"><svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8h10v4.5a4 4 0 01-4 4h-2a4 4 0 01-4-4z"/><path d="M13.5 9.5h1.2a2 2 0 010 4h-1.4"/><path d="M6.5 2.5c-.6.8.6 1.6 0 2.5M9.5 2.5c-.6.8.6 1.6 0 2.5"/></svg></span><span class="donate-text"><strong>Tanzir Rahman</strong> is fueling open-source code, local utilities, and late-night builds.</span><span class="donate-cta">Buy me a coffee</span></a><div class="site-foot-meta"><span>© 2026 Tanzir Rahman · MIT licensed · demo data stays in this browser</span><span><a href="./docs.html">Docs</a> · <a href="./compare.html">Compare</a> · <a href="https://github.com/tanzir71/liteinsurance">GitHub</a></span></div></div></footer>
 
   <datalist id="dl-policy-type"></datalist>
   <datalist id="dl-region"></datalist>

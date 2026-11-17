@@ -342,6 +342,15 @@ td.ref{font-family:var(--mono);font-size:12.5px;color:var(--acc)}
 .fcol h5{font:600 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:#C8CCD8;margin-bottom:16px}
 .fcol a{display:block;font-size:14px;margin-bottom:12px;color:var(--darkMute)}
 .fbot{border-top:1px solid var(--darkLine)}
+.donate-band{border-top:1px solid var(--darkLine)}
+.ftr .donate-band .wrap{display:block;padding:22px 0}
+.donate{display:flex;align-items:center;gap:14px;color:var(--darkMute);text-decoration:none;font-size:14.5px;line-height:1.5}
+.donate-ic{display:grid;place-items:center;flex:none;width:38px;height:38px;border-radius:4px;background:#FFDD00;color:#0B0D12}
+.donate-text strong{color:#fff;font-weight:600}
+.donate-cta{margin-left:auto;flex:none;display:inline-flex;align-items:center;height:40px;padding:0 18px;border-radius:4px;background:#FFDD00;color:#0B0D12;font-weight:600;font-size:14px}
+.donate:hover .donate-cta,.donate:focus-visible .donate-cta{background:#fff}
+.donate:focus-visible{outline:2px solid #4D66FF;outline-offset:4px}
+@media (max-width:700px){.donate{display:grid;grid-template-columns:38px minmax(0,1fr);align-items:start}.donate-cta{grid-column:2;justify-self:start;margin-left:0}}
 .fbot .wrap{display:flex;justify-content:space-between;padding:20px 0;font-size:12.5px;grid-template-columns:none}
 
 /* ===== Layout contracts (pinned by test/commercial-readiness.test.mjs) ===== */
@@ -870,6 +879,7 @@ open http://127.0.0.1:8000/liteinsurance.php</pre>
       <div class="fcol"><h5>Resources</h5><a href="./SETUP.md">Setup</a><a href="./SECURITY.md">Security</a><a href="https://github.com/tanzir71/liteinsurance">GitHub</a></div>
       <div class="fcol"><h5>Stack</h5><a>PHP 8.1+ · PDO SQLite</a><a>No build step</a><a href="https://github.com/tanzir71/liteinsurance">Source on GitHub</a><a href="https://github.com/tanzir71/liteinsurance/blob/main/LICENSE">MIT license</a></div>
     </div>
+    <div class="donate-band"><div class="wrap"><a class="donate" href="https://buymeacoffee.com/tanzir" target="_blank" rel="noopener"><span class="donate-ic"><svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8h10v4.5a4 4 0 01-4 4h-2a4 4 0 01-4-4z"/><path d="M13.5 9.5h1.2a2 2 0 010 4h-1.4"/><path d="M6.5 2.5c-.6.8.6 1.6 0 2.5M9.5 2.5c-.6.8.6 1.6 0 2.5"/></svg></span><span class="donate-text"><strong>Tanzir Rahman</strong> is fueling open-source code, local utilities, and late-night builds.</span><span class="donate-cta">Buy me a coffee</span></a></div></div>
     <div class="fbot"><div class="wrap"><span>© 2026 Tanzir Rahman · MIT licensed</span><span>No affiliation with any CRM, AMS, BI, or insurance software vendor.</span></div></div>
   </footer>
 

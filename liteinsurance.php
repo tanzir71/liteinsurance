@@ -573,6 +573,7 @@ function render_auth_page(string $mode, bool $hasUsers): void
     }
     echo '<div class="tiny muted">Session secured, CSRF protected.</div>';
     echo '<div class="tiny muted"><a class="link" href="SETUP.md" target="_blank" rel="noopener">Docs</a> · <a class="link" href="SECURITY.md" target="_blank" rel="noopener">Security</a></div>';
+    echo donate_link(true);
     echo '</div>';
     echo '</div></main>';
     echo app_js();
@@ -1745,6 +1746,17 @@ a.wsBox:hover{border-color:#36405C;}
 .happen span{color:var(--muted);font-size:12.5px;}
 .happenText b{font-size:14.5px;}
 .cardFlush .scrollX{border:0;border-radius:0;margin:0;background:transparent;}
+.footer{flex-wrap:wrap;}
+.footer .donate{margin-left:auto;}
+.donate{display:inline-flex;align-items:center;gap:10px;color:var(--muted);font-size:12.5px;text-decoration:none;line-height:1.4;}
+.donateIc{display:grid;place-items:center;flex:none;width:28px;height:28px;border-radius:var(--r);background:#FFDD00;color:#0B0D12;}
+.donateText strong{color:var(--ink);font-weight:600;}
+.donateCta{flex:none;display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:var(--r);background:#FFDD00;color:#0B0D12;font-weight:600;}
+.donate:hover .donateCta{background:var(--ink);color:#fff;}
+.donate:focus-visible{outline:2px solid var(--acc);outline-offset:3px;}
+.donateCompact{margin-top:10px;padding-top:12px;border-top:1px solid var(--line2);align-items:flex-start;}
+.donateCompact .donateCta{display:none;}
+@media (max-width:900px){.footer .donate{margin-left:0;display:grid;grid-template-columns:28px minmax(0,1fr);align-items:start;}.footer .donateCta{grid-column:2;justify-self:start;}}
 .scn .best{white-space:nowrap;}
 .pvRow>div{min-width:0;}
 .pvRow .mono{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -5045,10 +5057,17 @@ function render_app(PDO $pdo, array $user, string $tab): void
         }
     }
     echo '</main>';
-    echo '<footer class="footer"><span>' . h(APP_NAME) . ' · one PHP file + SQLite</span><a class="link" href="SETUP.md" target="_blank" rel="noopener">Docs</a><a class="link" href="SECURITY.md" target="_blank" rel="noopener">Security</a></footer>';
+    echo '<footer class="footer"><span>' . h(APP_NAME) . ' · one PHP file + SQLite</span><a class="link" href="SETUP.md" target="_blank" rel="noopener">Docs</a><a class="link" href="SECURITY.md" target="_blank" rel="noopener">Security</a>' . donate_link() . '</footer>';
     echo '</div>';
     echo app_js();
     echo '</body></html>';
+}
+
+/** Support link shown in the app footer and on the sign-in card. */
+function donate_link(bool $compact = false): string
+{
+    $cup = '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8h10v4.5a4 4 0 01-4 4h-2a4 4 0 01-4-4z"/><path d="M13.5 9.5h1.2a2 2 0 010 4h-1.4"/><path d="M6.5 2.5c-.6.8.6 1.6 0 2.5M9.5 2.5c-.6.8.6 1.6 0 2.5"/></svg>';
+    return '<a class="donate' . ($compact ? ' donateCompact' : '') . '" href="https://buymeacoffee.com/tanzir" target="_blank" rel="noopener"><span class="donateIc">' . $cup . '</span><span class="donateText"><strong>Tanzir Rahman</strong> is fueling open-source code, local utilities, and late-night builds.</span><span class="donateCta">Buy me a coffee</span></a>';
 }
 
 function page_subtitle(PDO $pdo, string $tab, string $fallback): string
