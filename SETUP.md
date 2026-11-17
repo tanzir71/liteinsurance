@@ -10,7 +10,7 @@
    - `liteinsurance_uploads/` (CSV staging, created automatically)
 5) Visit `https://YOURDOMAIN/liteinsurance.php` and register the first user (becomes `admin`).
 6) Open Settings and review the setup doctor for PHP, PDO SQLite, DB path, upload path, upload limits, `.env`, and `CRON_TOKEN`.
-7) Import & health -> “Download sample CSV” -> Upload -> Map columns -> Preview -> Confirm & import.
+7) Import & health -> “Download sample CSV” -> Upload -> Map columns -> Review -> Import.
 8) Settings -> set currency, terminology and whether premiums are monthly or annual.
 9) Settings -> Users & access: registration is invite-only by default. Open it while teammates create accounts, then close it again. Turn on "Require two-step verification" if you want every user on TOTP (Account page).
 10) Settings -> Data retention: choose how long to keep staged uploads, audit events, contact history and long-expired policies. The daily cron applies it.

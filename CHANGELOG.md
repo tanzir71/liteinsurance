@@ -11,6 +11,19 @@ Added
 - Sample book gains `agent_code`, `renewal_probability` and `source_channel` custom columns (also used by the demo).
 
 Changed
+- The whole app now follows the App UI v2 design, not just the demo:
+  - Shell: navy sidebar with icons and counts, an agency box (new "Agency name" setting), a user card with sign-out, and a top bar with search and per-screen actions.
+  - Today: five KPI cards; a renewal worklist split into ≤30 / 31–60 / 61–90 / 91–120 days, with premium change, risk, owner and status; and Opportunities, Data health and Consent & opt-outs cards.
+  - Book: saved-view tabs and filter chips; a table sorted by expiry with checkboxes for bulk status, owner and export (opted-out records are left out); and a detail panel.
+    - The panel explains the risk tier condition by condition, shows the LTV formula and confidence deductions, and lists the details.
+    - From the panel you can log a call, set status or owner, change consent and see contact history.
+    - Field edits move from the table to the panel's Edit mode.
+  - Lists: saved lists and templates, a plain-language builder with WHERE/AND rows, and consent checkboxes that now filter the list and its exports (stored with the list). It also has an advanced filter-text box and a live result (count, households, average LTV, monthly premium, reach, left out) with a preview.
+  - Campaigns:
+    - A scenario form with a channel switch and percentage inputs.
+    - A projected funnel, the gross, cost, net and return-on-cost tiles, and the break-even rate.
+    - Saved scenarios as cards, with the best net marked and names generated automatically.
+  - Import & health: an Upload → Map columns → Review → Import stepper. Mapping is now per CSV column: each column shows a masked sample and picks a field, Custom field or Ignore. A "What will happen" summary shows updated, new and missing-expiry counts and warns when no consent column is mapped. `map[field]=header` posts still work.
 - Renewals board in the app now matches the App UI v2 design: one column per cadence touchpoint (Flag & prioritise 120–91, Update exposures 90–76, Remarket decision 75–46, Compare quotes 45–31, Present to client 30–16, Bind ≤ 15 and overdue), built from the cadence in Settings. Cards show the masked name, owner initials (or the producer until someone is assigned), policy and line, expiry date, premium with change vs prior term, risk and a status picker. Filters for owner, line, High/Review risk and premium change ≥ 10% also apply to the call-list CSV and calendar export, which move to the top bar. Owner filtering now falls back to the producer.
 - `demo.html` rebuilt to match the App UI v2 design: navy sidebar (Today, Renewals, Book, Lists, Campaigns, Import & health, Scoring rules), a top bar with search (`/`) and per-screen actions, and the designed screens: KPI cards and renewal worklist with Opportunities, Data health and Consent; a Renewals board grouped by the 120/90/75/45/30/15-day cadence; a Book table with bulk status changes and a "Why this tier" panel (rule conditions, LTV formula, confidence, consent); a plain-language list builder with consent filters and a live result; Campaigns with a funnel, break-even and saved scenarios; and Import & health with column mapping. Masked names use `•` and can be revealed per policy; sensitive sample values stay masked in the mapping table.
 

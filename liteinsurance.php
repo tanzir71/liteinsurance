@@ -20,6 +20,7 @@ Deploy:
 Customize here
 */
 const APP_NAME = 'LiteInsurance';
+const APP_VERSION = '1.2';
 const DB_PATH = __DIR__ . DIRECTORY_SEPARATOR . 'liteinsurance.db';
 const UPLOAD_DIR = __DIR__ . DIRECTORY_SEPARATOR . 'liteinsurance_uploads';
 const ACCENT_COLOR = '#2540ff';
@@ -487,6 +488,8 @@ function route_web(PDO $pdo): void
         'suppression_apply' => 'handle_suppression_apply',
         'audit_export' => 'handle_audit_export',
         'checklist_dismiss' => 'handle_checklist_dismiss',
+        'book_export' => 'handle_book_export',
+        'bulk_update' => 'handle_bulk_update',
     ];
     $userActions = [
         'renewal_update' => 'handle_renewal_update',
@@ -700,43 +703,110 @@ function require_csrf(): void
     }
 }
 
+function import_stepper(int $current, string $meta, string $reviewLabel = 'Review'): string
+{
+    $steps = ['Upload', 'Map columns', $reviewLabel, 'Import'];
+    $out = '<div class="card stepper" aria-label="Import progress">';
+    foreach ($steps as $i => $label) {
+        $n = $i + 1;
+        $cls = $n < $current ? 'done' : ($n === $current ? 'now' : '');
+        $out .= ($i ? '<span class="stpLine"></span>' : '') . '<span class="stp ' . $cls . '"' . ($n === $current ? ' aria-current="step"' : '') . '><i>' . ($n < $current ? '✓' : $n) . '</i>' . h($label) . '</span>';
+    }
+    return $out . ($meta !== '' ? '<span class="stpMeta">' . h($meta) . '</span>' : '') . '</div>';
+}
+
+function stage_scan(array $stage): array
+{
+    $out = ['rows' => 0, 'samples' => [], 'filled' => []];
+    $fh = @fopen((string)($stage['path'] ?? ''), 'rb');
+    if (!$fh) {
+        return $out;
+    }
+    $headers = fgetcsv($fh);
+    if (!is_array($headers)) {
+        fclose($fh);
+        return $out;
+    }
+    $headers = array_map(fn($x) => trim(strip_bom((string)$x)), $headers);
+    while (($row = fgetcsv($fh)) !== false && $out['rows'] < 200000) {
+        if ($row === [null]) {
+            continue;
+        }
+        $out['rows']++;
+        foreach ($headers as $i => $hname) {
+            $v = trim((string)($row[$i] ?? ''));
+            if ($v === '') {
+                continue;
+            }
+            $out['filled'][$hname] = ($out['filled'][$hname] ?? 0) + 1;
+            if (!isset($out['samples'][$hname])) {
+                $out['samples'][$hname] = $v;
+            }
+        }
+    }
+    fclose($fh);
+    return $out;
+}
+
+function mask_sample(string $field, string $v): string
+{
+    if ($field === 'display_name') {
+        return mask_name($v);
+    }
+    if ($field === 'email') {
+        return mask_email($v);
+    }
+    if ($field === 'phone') {
+        return mask_phone($v);
+    }
+    if ($field === 'dob') {
+        return substr($v, 0, 4) . '-••-••';
+    }
+    return mb_strimwidth($v, 0, 28, '…');
+}
+
 function render_tab_import(PDO $pdo): void
 {
     $stage = $_SESSION['import_stage'] ?? null;
-    echo '<div class="actionsRow actionsTop">';
-    echo '<a class="btnSecondary" href="' . h(self_url(['action' => 'download_sample_csv'])) . '">Download sample CSV</a>';
-    echo '<form method="post" class="inline"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="load_sample"><button class="btnSecondary" type="submit">Load sample rules + data</button></form>';
-    echo '<span class="muted tiny">Works with AMS exports (policy #, effective/expiration dates, line of business, company, producer, customer ID, email, phone) or any spreadsheet.</span>';
-    echo '</div>';
-
-    echo '<div class="grid2">';
-    echo '<div class="card"><div class="h2">Upload CSV</div>';
-    echo '<div class="muted">Max upload: ' . h((string)round(MAX_UPLOAD_BYTES / 1024 / 1024, 1)) . ' MB. Staged in <code>' . h(basename(upload_dir())) . '/</code>.</div>';
-    echo '<form method="post" enctype="multipart/form-data" class="form">';
-    echo '<input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="import_upload">';
-    echo '<input class="input" type="file" name="csv" accept=".csv,text/csv" required>';
-    echo '<button class="btn" type="submit">Upload</button>';
-    echo '</form></div>';
-    echo '<div class="card"><div class="h2">Missing data strategy</div><ul class="list"><li>Mapped numeric fields: mean imputation (rounded)</li><li>Mapped categorical fields: mode imputation, consistent casing</li><li>Missing expiration date: effective date + 12 months (6 for auto), flagged as filled-in</li><li>Unmapped CSV columns: preserved in <code>metadata.custom_fields</code></li><li>Scoring requires mapped premium, tenure, and policy type (or line of business); otherwise LTV stays blank and risk remains Unknown.</li><li>Re-importing updates matching Record IDs in place.</li></ul></div>';
-    echo '</div>';
-
-    if (is_array($stage) && isset($stage['headers'], $stage['path'])) {
-        render_import_mapping($pdo, $stage);
+    $hasStage = is_array($stage) && isset($stage['headers'], $stage['path']);
+    $hasPreview = $hasStage && isset($stage['preview']) && is_array($stage['preview']) && (string)($_GET['remap'] ?? '') !== '1';
+    if ($hasStage) {
+        $headers = array_values(array_filter(array_map(fn($x) => trim(strip_bom((string)$x)), (array)$stage['headers']), fn($x) => $x !== ''));
+        $scan = stage_scan($stage);
+        $meta = (string)($stage['filename'] ?? 'upload.csv') . ' · ' . number_format($scan['rows']) . ' rows · ' . count($headers) . ' columns';
+        if ($hasPreview) {
+            $issues = (int)($stage['preview']['stats']['hard_rejects_preview'] ?? 0) + (int)($stage['preview']['stats']['missing_expiry'] ?? 0);
+            echo import_stepper(3, $meta, $issues > 0 ? 'Review ' . number_format($issues) . ' issues' : 'Review');
+            render_import_review($pdo, $stage, $scan);
+        } else {
+            echo import_stepper(2, $meta);
+            render_import_mapping($pdo, $stage);
+        }
+    } else {
+        echo import_stepper(1, '');
+        echo '<div class="importGrid"><div class="card"><div class="h2">Upload your export</div><div class="muted">A CSV from your agency management system or any spreadsheet. Max ' . h((string)round(MAX_UPLOAD_BYTES / 1024 / 1024, 1)) . ' MB; staged in <code>' . h(basename(upload_dir())) . '/</code> and deleted once imported.</div>';
+        echo '<form method="post" enctype="multipart/form-data" class="uploadBox">' . csrf_field() . '<input type="hidden" name="action" value="import_upload"><input class="input" type="file" name="csv" accept=".csv,text/csv" required aria-label="CSV file"><button class="btn" type="submit">Upload and map columns</button></form>';
+        echo '<form method="post" class="actionsRow">' . csrf_field() . '<input type="hidden" name="action" value="load_sample"><button class="btnSecondary" type="submit">Load the sample book (200 policies)</button><span class="muted tiny">Same file as Download sample CSV, with rules and lists.</span></form></div>';
+        echo '<div class="card"><div class="eyebrow">What will happen</div><div class="happen happenText">';
+        foreach ([['↻', '', 'Re-imports update in place', 'Matched on Record ID; renewal status, owner, contact history and opt-outs are kept'], ['+', 'ok', 'Every extra column is kept', 'Unmapped columns become custom fields you can use in rules and lists'], ['!', 'warn', 'Gaps are filled, then flagged', 'Numbers use the book mean, labels the most common value; scored with lower confidence']] as [$ic, $tone, $t, $s]) {
+            echo '<div class="item"><span class="ic ' . $tone . '">' . h($ic) . '</span><div><b>' . h($t) . '</b><span>' . h($s) . '</span></div></div>';
+        }
+        echo '</div></div></div>';
     }
 
     render_import_health($pdo);
 
     $imports = $pdo->query('SELECT filename, rows_total, rows_imported, rows_updated, created_at, errors_json FROM imports ORDER BY created_at DESC, id DESC LIMIT 12')->fetchAll();
-    echo '<div class="card"><div class="h2">Import history</div>';
-    echo '<div class="scrollX"><table class="table"><thead><tr><th>When</th><th>Filename</th><th class="right">Rows</th><th class="right">New</th><th class="right">Updated</th><th>Issues</th></tr></thead><tbody>';
+    echo '<div class="card cardFlush"><div class="cardHeadPad"><div><div class="h2">Import history</div><div class="muted">Each import is recorded with its counts and first issue.</div></div></div>';
+    echo '<div class="scrollX"><table class="t2"><thead><tr><th>When</th><th>File</th><th class="r">Rows</th><th class="r">New</th><th class="r">Updated</th><th>Issues</th></tr></thead><tbody>';
     foreach ($imports as $r) {
         $errors = safe_json((string)($r['errors_json'] ?? '[]'));
         $n = is_array($errors) ? count($errors) : 0;
         $first = ($n && is_array($errors[0] ?? null)) ? ('row ' . (int)($errors[0]['row'] ?? 0) . ': ' . (string)($errors[0]['msg'] ?? '')) : '';
-        echo '<tr><td>' . h((string)$r['created_at']) . '</td><td>' . h((string)$r['filename']) . '</td><td class="right">' . h((string)$r['rows_total']) . '</td><td class="right">' . h((string)((int)$r['rows_imported'] - (int)($r['rows_updated'] ?? 0))) . '</td><td class="right">' . h((string)(int)($r['rows_updated'] ?? 0)) . '</td><td class="muted"' . ($first !== '' ? ' title="' . h($first) . '"' : '') . '>' . h($n ? ($n . ' issue(s) · ' . mb_strimwidth($first, 0, 60, '…')) : '—') . '</td></tr>';
+        echo '<tr><td>' . h(date_dmy((string)$r['created_at'])) . ' <span class="muted tiny">' . h(substr((string)$r['created_at'], 11, 5)) . '</span></td><td class="mono">' . h((string)$r['filename']) . '</td><td class="r">' . h(number_format((int)$r['rows_total'])) . '</td><td class="r">' . h(number_format((int)$r['rows_imported'] - (int)($r['rows_updated'] ?? 0))) . '</td><td class="r">' . h(number_format((int)($r['rows_updated'] ?? 0))) . '</td><td class="muted"' . ($first !== '' ? ' title="' . h($first) . '"' : '') . '>' . h($n ? ($n . ' issue(s) · ' . mb_strimwidth($first, 0, 60, '…')) : '—') . '</td></tr>';
     }
     if (!$imports) {
-        echo '<tr><td colspan="6" class="muted">No imports yet.</td></tr>';
+        echo '<tr><td colspan="6" class="empty">No imports yet.</td></tr>';
     }
     echo '</tbody></table></div></div>';
 }
@@ -760,10 +830,6 @@ function render_tab_rules(PDO $pdo): void
     } catch (Throwable $e) {
         $hitCounts = [];
     }
-    echo '<div class="actionsRow">';
-    echo '<a class="btnSecondary" href="' . h(self_url(['tab' => 'rules'])) . '">New rule</a>';
-    echo '<form method="post" class="inline"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="export_rules"><button class="btnSecondary" type="submit">Export rules JSON</button></form>';
-    echo '</div>';
 
     echo '<div class="grid2 gridWide">';
     echo '<div class="card"><div class="h2">Rules, in the order they run</div><div class="muted">Highest priority runs first. The first matching rule that sets a tier wins; tags and score deltas add up; a rule marked <em>stop</em> ends evaluation. Recompute after editing.</div>';
@@ -840,7 +906,7 @@ function render_tab_rules(PDO $pdo): void
         $operatorOptionHtml .= '<option value="' . h($op) . '">' . h($op) . '</option>';
     }
 
-    echo '<div class="card"><div class="h2">' . h($rid > 0 ? 'Edit rule' : 'New rule') . '</div>';
+    echo '<div class="card" id="ruleEditor"><div class="h2">' . h($rid > 0 ? 'Edit rule' : 'New rule') . '</div>';
     echo '<form method="post" class="form">';
     echo '<input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="rule_save">';
     if ($rid > 0) {
@@ -1299,7 +1365,7 @@ a{color:inherit;}code{font-family:var(--mono);font-size:.92em;background:var(--l
 .stPick select:hover{border-color:var(--slate);}
 .avatar{display:inline-grid;place-items:center;flex:none;width:24px;height:24px;border-radius:50%;font:700 9.5px/1 var(--sans);letter-spacing:.02em;}
 .avatar-a{background:#DCE2FF;color:#1A2FD6;}.avatar-b{background:#E7F4EC;color:#157F3B;}.avatar-c{background:#F1ECFE;color:#5B34C7;}.avatar-d{background:#FDF2E4;color:#B45309;}
-.avatarSoft{opacity:.55;}.avatarNone{background:var(--line2);color:var(--muted);}
+.avatarSoft{opacity:.7;}.avatarNone{background:var(--line2);color:var(--muted);}
 .panel{border-color:var(--acc100);box-shadow:0 1px 0 var(--acc100);}
 .panelHead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;}
 .panelHead .actionsRow{margin:0;}
@@ -1357,6 +1423,336 @@ a.userPill:hover,.userPillOn{background:var(--nav2);color:var(--navInk);}
 .btnSecondary:disabled{opacity:.5;cursor:not-allowed;}
 @media (max-width:1200px){.kpiGrid.kpi5{grid-template-columns:repeat(3,minmax(0,1fr));}.gridMap{grid-template-columns:repeat(2,minmax(0,1fr));}.whyGrid{grid-template-columns:1fr;}.steps{grid-template-columns:1fr 1fr;}}
 @media (max-width:900px){.appShell{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto 1fr auto;background:var(--paper);}.sideNav{grid-row:auto;grid-column:1;position:static;height:auto;flex-direction:row;align-items:center;overflow-x:auto;padding:8px;gap:4px;}.brand{padding:4px 8px;}.brand span{display:none;}.navGroup{display:none;}.navItem{white-space:nowrap;}.sideFoot{margin:0 0 0 auto;border:0;padding:0;flex-direction:row;}.userPill{display:none;}.topBar,.main,.footer{grid-column:1;}.topBar{position:static;flex-wrap:wrap;padding:12px 16px;}.topSearch{flex:1 1 100%;}.topTitle{flex:1 1 100%;}.topActions{flex:1 1 100%;flex-wrap:wrap;}.boardHint{margin-left:0;flex:1 1 100%;}.switch{margin-left:0;}.main{padding:16px 12px 36px;}.grid2,.gridWide,.grid3,.panelGrid{grid-template-columns:1fr;}.kpiGrid,.kpiGrid.kpi5{grid-template-columns:1fr 1fr;}.gridMap{grid-template-columns:1fr;}.checkGrid{grid-template-columns:1fr;}.ruleConditionRow{grid-template-columns:1fr;}.ruleActionGrid{grid-template-columns:1fr 1fr;}.lbRow{grid-template-columns:1fr 1fr;}.steps{grid-template-columns:1fr;}.statRow{grid-template-columns:repeat(3,minmax(0,1fr));}.fnRow{grid-template-columns:110px minmax(0,1fr) 70px;}.fnTotals{grid-template-columns:repeat(2,minmax(0,1fr));}}
+/* ===== App UI v2 (matches the Figma "LiteInsurance — App UI v2" frames) ===== */
+.sideNav{padding:18px 12px 14px;gap:2px;}
+.brand{font-size:17px;padding:2px 10px 18px;}
+.wsBox{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 6px;padding:10px 11px;border:1px solid var(--navLine);border-radius:var(--r);background:#0D1222;text-decoration:none;color:var(--navMute);}
+a.wsBox:hover{border-color:#36405C;}
+.wsName{display:block;color:#fff;font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.wsSub{display:block;font-size:11.5px;color:var(--navMute);}
+.wsBox svg{flex:none;width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.5;}
+.navGroup{padding:16px 10px 7px;color:#6E7690;}
+.navItem{justify-content:flex-start;gap:11px;padding:0 10px;min-height:34px;font-size:14px;}
+.navItem svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;opacity:.85;}
+.navLabel{flex:1;}
+.navOn{box-shadow:none;font-weight:600;}
+.navCount{min-width:26px;padding:2px 7px;border-radius:9px;background:#2A3146;color:#E6E8EF;font:600 11px/14px var(--mono);}
+.navOn .navCount{background:var(--acc);color:#fff;}
+.navCount.navWarn{background:var(--amber);color:#fff;}
+.sideFoot{border-top:0;padding:0;gap:10px;}
+.userRow{display:flex;align-items:stretch;gap:6px;}
+.userCard{flex:1;min-width:0;display:flex;align-items:center;gap:10px;padding:10px 11px;border:1px solid var(--navLine);border-radius:var(--r);text-decoration:none;}
+.userCard:hover,.userCardOn{border-color:#36405C;}
+.userAvatar{display:inline-grid;place-items:center;flex:none;width:28px;height:28px;border-radius:50%;background:var(--acc100);color:var(--accInk);font:700 10.5px/1 var(--sans);}
+.userMeta{min-width:0;flex:1;}
+.userName{display:block;color:#fff;font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.userRole{display:block;font-size:11.5px;color:var(--navMute);}
+.userRow form{display:flex;}
+.navLogout{width:auto;display:grid;place-items:center;padding:0 9px;color:var(--navMute);}
+.navLogout svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;}
+.navLogout:hover{color:#fff;}
+.sideVer{padding:2px 10px 0;font:10.5px/1.4 var(--mono);color:#5B6380;letter-spacing:.04em;}
+.topBar{padding:12px 28px;min-height:68px;}
+.h1{font-size:21px;line-height:26px;}
+.topTitle .muted{font-size:12.5px;line-height:17px;}
+.topSearch{flex:0 1 320px;}.topSearch .input{height:36px;padding:0 12px;font-size:13.5px;}
+.btnDark{display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:var(--r);padding:9px 14px;font:inherit;font-size:13.5px;font-weight:600;cursor:pointer;text-decoration:none;line-height:1.2;border:1px solid var(--ink);background:var(--ink);color:#fff;}
+.btnDark:hover{background:#262B36;}
+.btnDark:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
+.btnBlock{width:100%;padding:14px 16px;font-size:15px;}
+.linkStrong{color:var(--acc);font-weight:600;text-decoration:none;font-size:13.5px;}
+.linkStrong:hover{text-decoration:underline;}
+.eyebrow{font:500 10.5px/1.3 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);}
+.eyebrowAcc{color:var(--acc);}
+.cardFlush{padding:0;overflow:hidden;}
+.cardHeadPad{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:18px 20px 14px;border-bottom:1px solid var(--line);}
+.cardHeadPad>div:first-child{min-width:0;}
+.cardHeadPad>.btnSecondary,.cardHeadPad>.preset{flex:none;}
+.cardHeadPad .h2{margin:0;font-size:16px;}
+.cardHeadPad .muted{margin-top:3px;font-size:12.5px;}
+.cardFoot{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 20px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px;}
+.stack{display:flex;flex-direction:column;gap:20px;min-width:0;}
+.stack>.card,.todayGrid>.card,.listsGrid .card,.campGrid .card,.importGrid .card{margin-bottom:0;}
+/* KPI cards */
+.kpiRow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:20px;}
+.kpiCard{padding:16px 16px 18px;background:var(--white);border:1px solid var(--line);border-radius:var(--r);min-width:0;}
+.kpiCard .l{color:var(--muted);font-size:12.5px;}
+.kpiCard .n{font-size:26px;font-weight:600;letter-spacing:-.02em;margin:6px 0 4px;font-variant-numeric:tabular-nums;}
+.kpiCard .n.bad{color:var(--red);}
+.kpiCard .s{color:var(--muted);font-size:12.5px;line-height:1.35;}
+.kpiCard .s.warn{color:var(--amber);}
+.todayGrid{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:20px;align-items:start;}
+/* segmented links */
+.seg{display:inline-flex;gap:2px;flex-wrap:wrap;}
+.seg a{display:inline-flex;align-items:center;gap:7px;min-height:32px;padding:0 11px;border-radius:var(--r);color:var(--slate);font-size:13px;font-weight:600;text-decoration:none;}
+.seg a b{font:600 10.5px/16px var(--mono);padding:0 6px;border-radius:8px;background:var(--line2);color:var(--muted);}
+.seg a:hover{background:var(--line2);}
+.seg a.on{background:var(--ink);color:#fff;}
+.seg a.on b{background:#2A3146;color:#fff;}
+/* v2 tables */
+.t2{width:100%;border-collapse:collapse;font-size:13.5px;}
+.t2 th{padding:9px 12px;text-align:left;font:500 10.5px/1.3 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:#FAFAF7;border-bottom:1px solid var(--line);white-space:nowrap;}
+.t2 td{padding:10px 12px;border-bottom:1px solid var(--line2);vertical-align:middle;white-space:nowrap;}
+.t2 tbody tr:last-child td{border-bottom:0;}
+.t2 th:first-child,.t2 td:first-child{padding-left:18px;}
+.t2 th:last-child,.t2 td:last-child{padding-right:18px;}
+.t2.dense th,.t2.dense td{padding-left:8px;padding-right:8px;}
+.t2.dense th:first-child,.t2.dense td:first-child{padding-left:16px;}
+.t2.dense th:last-child,.t2.dense td:last-child{padding-right:16px;}
+.t2 .r{text-align:right;}
+.t2 .mono{color:var(--slate);}
+.t2 .ins{font-weight:600;letter-spacing:.02em;color:var(--ink);text-decoration:none;}
+.t2 .sub{display:block;color:var(--muted);font-size:11.5px;margin-top:1px;}
+.t2 .sub.due{color:var(--red);}
+.t2 tr.rowLink{cursor:pointer;}
+.t2 tr.rowLink:hover td{background:#FAFAF7;}
+.t2 tr.rowOpen td{background:var(--acc50);}
+.t2 tr.rowOpen td:first-child{box-shadow:inset 3px 0 0 var(--acc);}
+.t2 td.due{color:var(--red);font-weight:600;}
+.t2 .ck{width:40px;padding-right:0;}
+.t2 .ck input{accent-color:var(--acc);width:15px;height:15px;margin:0;vertical-align:middle;}
+.t2 .empty{padding:18px 20px;color:var(--muted);white-space:normal;}
+.tierDot{border-radius:10px;padding:1px 9px 1px 8px;}
+.tierDot::before{content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:currentColor;vertical-align:1px;}
+.stPill{position:relative;display:inline-flex;align-items:center;padding:2px 9px 2px 22px;border:1px solid var(--line);border-radius:var(--r);background:var(--white);font-size:12px;color:var(--slate);white-space:nowrap;}
+.stPill::before{content:"";position:absolute;left:9px;top:50%;width:7px;height:7px;margin-top:-3.5px;border-radius:1px;background:#8A8F99;}
+.chg0{color:var(--ink);font-weight:600;}
+/* opportunities, health, consent */
+.oppRow{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:12px;align-items:center;padding:14px 20px;border-top:1px solid var(--line2);text-decoration:none;color:inherit;}
+.oppRow:first-child{border-top:0;}
+.oppRow:hover{background:#FAFAF7;}
+.oppIc{display:grid;place-items:center;width:32px;height:32px;border-radius:var(--r);background:var(--acc50);color:var(--acc);}
+.oppIc svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linejoin:round;}
+.oppRow strong{display:block;font-size:13.5px;font-weight:600;}
+.oppRow .muted{display:block;font-size:12px;line-height:16px;}
+.oppNum{text-align:right;}
+.oppNum b{display:block;font-size:17px;font-weight:600;}
+.oppNum em{font-style:normal;color:var(--acc);font-size:12.5px;font-weight:600;}
+.hbars{padding:14px 20px 18px;display:grid;gap:9px;}
+.hbar{display:grid;grid-template-columns:120px minmax(0,1fr) 40px;gap:10px;align-items:center;font:12px var(--mono);color:var(--slate);}
+.hbar i{display:block;height:5px;border-radius:3px;background:var(--line2);overflow:hidden;}
+.hbar i b{display:block;height:100%;width:0;background:var(--amber);border-radius:3px;}
+.hbar strong{text-align:right;color:var(--ink);font:600 13px var(--sans);}
+.dots{list-style:none;margin:0;padding:14px 20px 18px;display:grid;gap:10px;font-size:13.5px;}
+.dots li{display:grid;grid-template-columns:14px 1fr;gap:8px;}
+.dots li::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green);margin-top:7px;}
+.dots li.warn::before{background:var(--amber);}
+.pad{padding:14px 20px 18px;}
+/* Book */
+.bookWrap{display:grid;grid-template-columns:minmax(0,1fr) 360px;margin:-22px -28px -44px;min-height:calc(100vh - 68px);}
+.bookMain{padding:14px 24px 30px 28px;min-width:0;}
+.bookPanel{border-left:1px solid var(--line);background:var(--white);min-width:0;}
+.vtabs{display:flex;flex-wrap:wrap;align-items:center;gap:22px;border-bottom:1px solid var(--line);margin-bottom:14px;}
+.vtabs a{display:inline-flex;gap:8px;align-items:center;padding:10px 0 11px;margin-bottom:-1px;border-bottom:2px solid transparent;color:var(--slate);font-size:14px;text-decoration:none;}
+.vtabs a b{font:500 10.5px/16px var(--mono);padding:0 6px;border-radius:8px;background:var(--line2);color:var(--muted);}
+.vtabs a.on{border-bottom-color:var(--ink);color:var(--ink);font-weight:600;}
+.vtabs details{position:relative;}
+.vtabs summary{list-style:none;cursor:pointer;color:var(--acc);font-size:13.5px;font-weight:600;padding:10px 0;}
+.vtabs summary::-webkit-details-marker{display:none;}
+.pop{position:absolute;z-index:6;top:100%;left:0;min-width:220px;padding:6px;background:var(--white);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 8px 24px rgba(11,13,18,.12);}
+.pop a{display:flex;justify-content:space-between;gap:12px;padding:7px 10px;margin:0;border:0;border-radius:var(--r);font-size:13px;color:var(--ink);}
+.pop a:hover{background:var(--paper);}
+.fchips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px;}
+.fchip{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 10px 0 12px;border:1px solid var(--acc100);border-radius:var(--r);background:var(--acc50);color:var(--accInk);font-size:13px;text-decoration:none;}
+.fchip span{font-weight:700;}
+.fchip:hover{border-color:var(--acc);}
+.addFilter{position:relative;}
+.addFilter summary{list-style:none;display:inline-flex;align-items:center;height:32px;padding:0 12px;border:1px solid var(--line);border-radius:var(--r);background:var(--white);color:var(--slate);font-size:13px;cursor:pointer;}
+.addFilter summary::-webkit-details-marker{display:none;}
+.addFilter .pop{padding:12px;min-width:280px;display:grid;gap:8px;}
+.fcount{margin-left:auto;color:var(--muted);font-size:12.5px;}
+.bulkBar{display:flex;flex-wrap:wrap;align-items:center;gap:18px;min-height:44px;padding:6px 16px;margin-bottom:12px;border-radius:var(--r);background:var(--ink);color:#fff;font-size:13.5px;}
+.bulkBar[hidden]{display:none;}
+.bulkBar strong{font-weight:600;}
+.bulkBar select,.bulkBar input,.bulkBar button{border:0;background:transparent;color:#D7DAE3;font:inherit;font-size:13.5px;cursor:pointer;padding:4px 0;}
+.bulkBar input{border-bottom:1px solid #3A4152;width:130px;cursor:text;color:#fff;}
+.bulkBar input::placeholder{color:#8E95A8;}
+.bulkBar select option{color:var(--ink);}
+.bulkBar button:hover,.bulkBar select:hover{color:#fff;}
+.bulkBar .bulkClear{margin-left:auto;color:#A9B6FF;font-weight:600;}
+.conf{display:inline-flex;align-items:center;gap:9px;}
+.conf .trk{display:block;width:34px;height:4px;border-radius:2px;background:var(--line2);overflow:hidden;}
+.conf .trk i{display:block;height:100%;width:0;background:var(--green);}
+.conf.mid .trk i{background:var(--amber);}
+.conf.mid b{color:var(--amber);}
+.conf b{font-weight:500;font-variant-numeric:tabular-nums;}
+.pager2{display:flex;gap:16px;}
+.pager2 .off{color:var(--faint);pointer-events:none;}
+.pSec{padding:18px 20px;border-bottom:1px solid var(--line);}
+.pName{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.pName h2{margin:0;font-size:18px;font-weight:600;letter-spacing:.03em;}
+.pName form{margin:0;}
+.revealBtn{display:inline-flex;align-items:center;gap:5px;border:0;background:transparent;color:var(--acc);font:inherit;font-size:13px;font-weight:600;cursor:pointer;padding:0;}
+.revealBtn svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.4;}
+.pMeta{margin:6px 0 10px;font:11.5px/1.5 var(--mono);color:var(--muted);}
+.pChips{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.tagChip{display:inline-block;padding:1px 8px;border-radius:var(--r);background:var(--acc50);color:var(--accInk);font:12px/1.6 var(--mono);}
+.pSec h3{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:0 0 10px;font-size:13.5px;font-weight:600;}
+.pSec h3 a{font-size:12.5px;font-weight:600;color:var(--acc);text-decoration:none;}
+.why2{padding:12px 12px 10px;border:1px solid var(--line);border-radius:var(--r);background:#FAFAF7;}
+.why2Head{display:flex;justify-content:space-between;gap:8px;font-size:13px;font-weight:600;margin-bottom:6px;}
+.why2Head span{font:500 11px var(--mono);color:var(--green);white-space:nowrap;}
+.why2 ul{list-style:none;margin:0;padding:0;display:grid;gap:3px;font:12px/1.5 var(--mono);color:var(--slate);}
+.why2 li::before{content:"✓";color:var(--green);margin-right:8px;font-family:var(--sans);}
+.why2 li.no::before{content:"✗";color:var(--red);}
+.why2Then{margin-top:6px;font-size:12px;color:var(--slate);}
+.pNote{margin:10px 0 0;color:var(--muted);font-size:12px;line-height:1.45;}
+.formula2{font:12.5px/1.8 var(--mono);color:var(--ink);}
+.formula2 em{color:var(--muted);font-style:normal;}
+.chipWarn,.chipOk{display:inline-block;margin:0 6px 6px 0;padding:3px 8px;border-radius:var(--r);font-size:12px;}
+.chipWarn{background:var(--amber50);color:var(--amber);}
+.chipOk{background:var(--green50);color:var(--green);}
+.kv2{display:grid;grid-template-columns:auto 1fr;gap:7px 12px;margin:0;font-size:13px;}
+.kv2 dt{color:var(--muted);}
+.kv2 dd{margin:0;text-align:right;font-weight:500;min-width:0;overflow-wrap:anywhere;}
+.kv2 dd.due{color:var(--red);font-weight:600;}
+.kv2 .profileCellInput{width:100%;text-align:right;}
+.pActions{display:flex;flex-wrap:wrap;gap:8px;padding:16px 20px 8px;}
+.pActions .btnDark,.pActions .btnSecondary,.pActions summary{min-height:40px;}
+.pDrawer{padding:0 20px 12px;}
+.pDrawer details{border:1px solid var(--line);border-radius:var(--r);margin-top:8px;}
+.pDrawer summary{cursor:pointer;padding:10px 12px;font-size:13px;font-weight:600;}
+.pDrawer details>div{padding:0 12px 12px;}
+.timeline2{list-style:none;margin:0;padding:0;display:grid;gap:8px;font-size:12.5px;}
+/* Lists */
+.listsGrid{display:grid;grid-template-columns:248px minmax(0,1fr) 300px;gap:20px;align-items:start;}
+.savedCard{padding:16px 10px;}
+.savedHead{display:flex;justify-content:space-between;align-items:center;padding:0 6px 10px;}
+.savedHead .h2{margin:0;font-size:14px;}
+.sl{display:grid;grid-template-columns:1fr auto;gap:2px 8px;padding:9px 12px;border-radius:var(--r);text-decoration:none;color:inherit;}
+.sl strong{font-size:13.5px;font-weight:600;}
+.sl span{grid-column:1;color:var(--muted);font-size:11.5px;}
+.sl b{grid-row:1/span 2;grid-column:2;align-self:center;font-weight:500;font-size:13px;color:var(--slate);}
+.sl:hover{background:#FAFAF7;}
+.sl.on{background:var(--acc50);}
+.sl.on strong,.sl.on b{color:var(--accInk);}
+.tplHead{padding:16px 12px 4px;}
+.tpl{display:block;width:100%;padding:5px 12px;border:0;background:transparent;color:var(--slate);font:inherit;font-size:13.5px;text-align:left;cursor:pointer;}
+.tpl:hover{color:var(--acc);}
+.builderCard{padding:24px 24px 20px;}
+.titleInput{width:100%;border:0;outline:0;padding:0;font:600 21px/1.3 var(--sans);letter-spacing:-.02em;background:transparent;color:var(--ink);}
+.descInput{width:100%;border:0;outline:0;padding:0;margin-top:4px;font:13.5px/1.4 var(--sans);color:var(--muted);background:transparent;}
+.showRow{display:flex;align-items:center;gap:10px;margin:22px 0 16px;font-size:14px;font-weight:600;}
+.showRow .select{width:auto;}
+.lb{border:0;padding:0;background:transparent;}
+.lbRow{grid-template-columns:44px minmax(0,1.3fr) minmax(0,1fr) minmax(0,1fr) 24px;gap:10px;margin:0 0 10px;}
+.lbW{font:500 10.5px var(--mono);letter-spacing:.1em;color:var(--muted);}
+.lbRow .select,.lbRow .input{height:38px;padding:0 10px;font-size:13.5px;width:100%;}
+.lbX{border:0;background:transparent;color:var(--faint);font-size:16px;cursor:pointer;padding:0;}
+.lbX:hover{color:var(--red);}
+.lbAddRow{display:flex;gap:18px;margin-top:6px;}
+.linkBtn2{border:0;background:transparent;color:var(--acc);font:inherit;font-size:13.5px;font-weight:600;cursor:pointer;padding:0;}
+.divider2{height:1px;background:var(--line);margin:18px 0;}
+.consentPick strong{display:block;font-size:14px;margin-bottom:10px;}
+.consentPick .checkRow{display:flex;flex-wrap:wrap;gap:20px;font-size:13.5px;}
+.consentPick input{accent-color:var(--acc);width:15px;height:15px;}
+.codeBox{margin-top:16px;background:var(--nav);border-radius:var(--r);padding:12px 18px 14px;color:#E6E8EF;}
+.codeHead{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;color:var(--navMute);margin-bottom:8px;}
+.codeHead button{border:0;background:transparent;color:#A9B6FF;font:inherit;font-weight:600;cursor:pointer;}
+.codeBox .textarea{background:transparent;border:0;color:#F3F4F7;padding:0;box-shadow:none;resize:vertical;}
+.codeBox details{margin-top:10px;border-top:1px solid var(--navLine);padding-top:10px;}
+.codeBox summary{cursor:pointer;font-size:12.5px;color:var(--navMute);}
+.codeBox .check{color:#E6E8EF;}
+.big{display:flex;align-items:baseline;gap:10px;margin:6px 0 14px;}
+.big b{font-size:38px;font-weight:600;letter-spacing:-.03em;line-height:1;}
+.big span{color:var(--slate);font-size:13.5px;}
+.res{display:grid;grid-template-columns:1fr auto;font-size:13px;margin:0;}
+.res dt,.res dd{margin:0;padding:9px 0;border-top:1px solid var(--line2);}
+.res dt{color:var(--muted);}
+.res dd{text-align:right;font-weight:600;}
+.res dd.warn{color:var(--amber);}
+.resBtns{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}
+.resErr{color:var(--red);font-size:13px;}
+.pvHead{display:flex;justify-content:space-between;align-items:center;padding:16px 20px 6px;}
+.pvHead .h2{margin:0;font-size:14px;}
+.pvRow{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:10px 20px;border-top:1px solid var(--line2);font-size:13px;}
+.pvRow strong{display:block;font-size:13px;letter-spacing:.02em;}
+.pvRow .mono{display:block;font-size:11.5px;color:var(--muted);}
+/* Campaigns */
+.campGrid{display:grid;grid-template-columns:340px minmax(0,1fr);gap:20px;align-items:start;}
+.campForm{padding:22px 20px;}
+.campTitle{margin:2px 0 18px;font-size:17px;font-weight:600;}
+.fld{display:flex;flex-direction:column;gap:7px;margin-bottom:18px;font-size:13.5px;font-weight:600;}
+.fld .help{font-weight:400;color:var(--muted);font-size:12.5px;}
+.fld .select{font-weight:400;}
+.unit{position:relative;display:block;}
+.unit .input{padding-right:50px;font-weight:400;}
+.unit span{position:absolute;right:12px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:12.5px;font-weight:400;}
+.segctl{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:2px;padding:3px;border-radius:var(--r);background:#ECEAE4;}
+.segctl label{position:relative;display:block;}
+.segctl input{position:absolute;opacity:0;width:1px;height:1px;}
+.segctl span{display:block;text-align:center;padding:7px 0;border-radius:3px;color:var(--muted);font-weight:500;cursor:pointer;}
+.segctl input:checked+span{background:var(--white);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(11,13,18,.1);}
+.segctl input:focus-visible+span{outline:2px solid var(--acc);outline-offset:1px;}
+.fn2{display:grid;grid-template-columns:190px minmax(0,1fr) 60px;gap:16px;align-items:center;margin-bottom:16px;}
+.fn2 strong{display:block;font-size:13.5px;font-weight:600;}
+.fn2 span{display:block;color:var(--muted);font-size:12px;}
+.fn2 i{display:block;height:32px;border-radius:2px;background:#D4D1C8;width:0;min-width:2px;transition:width .2s;}
+.fn2.reach i{background:var(--acc100);}
+.fn2.sales i{background:var(--acc);}
+.fn2 b{text-align:right;font-size:20px;font-weight:600;}
+.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;}
+.tile{padding:14px 16px;border-radius:var(--r);background:var(--paper);}
+.tile .l{color:var(--muted);font-size:12.5px;}
+.tile .n{margin-top:4px;font-size:24px;font-weight:700;letter-spacing:-.02em;}
+.tile.neg .n{color:var(--red);}
+.tile.good{background:var(--green50);}.tile.good .n{color:var(--green);}
+.tile.bad{background:var(--red50);}.tile.bad .n{color:var(--red);}
+.callout{display:flex;gap:10px;align-items:flex-start;margin-top:18px;padding:11px 14px;border-radius:var(--r);background:var(--paper);color:var(--slate);font-size:13px;}
+.callout svg{flex:none;width:14px;height:14px;margin-top:2px;fill:none;stroke:currentColor;stroke-width:1.4;}
+.scns{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;}
+.scn{position:relative;padding:14px 16px;border:1px solid var(--line);border-radius:var(--r);background:var(--white);}
+.scn:hover{border-color:#B9B6AD;}
+.scn.on{border:2px solid var(--acc);padding:13px 15px;background:#FAFBFF;}
+.scn .t{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:13.5px;font-weight:600;}
+.scn .t a{color:inherit;text-decoration:none;}
+.scn .t a::after{content:"";position:absolute;inset:0;}
+.scn .best{padding:1px 7px;border-radius:var(--r);background:var(--green50);color:var(--green);font-size:11.5px;}
+.scn .d{margin:6px 0 10px;color:var(--muted);font-size:12.5px;}
+.scn .v{font-size:22px;font-weight:700;letter-spacing:-.02em;}
+.scn .v small{color:var(--muted);font-size:12.5px;font-weight:400;letter-spacing:0;margin-left:6px;}
+.scn .neg{color:var(--red);}
+.scn form{position:relative;z-index:1;margin-top:8px;}
+.scn form button{border:0;background:transparent;color:var(--muted);font:inherit;font-size:12px;cursor:pointer;padding:0;}
+.scn form button:hover{color:var(--red);}
+/* Import */
+.stepper{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:14px 20px;margin-bottom:20px;}
+.stp{display:inline-flex;align-items:center;gap:10px;font-size:14px;color:var(--muted);}
+.stp i{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;border:1px solid #CFCDC5;font:600 11.5px var(--mono);font-style:normal;}
+.stp.done{color:var(--ink);}
+.stp.done i{background:var(--green);border-color:var(--green);color:#fff;}
+.stp.now{color:var(--ink);font-weight:600;}
+.stp.now i{background:var(--ink);border-color:var(--ink);color:#fff;}
+.stpLine{flex:1 1 30px;max-width:70px;height:1px;background:var(--line);}
+.stpMeta{margin-left:auto;font:11.5px var(--mono);color:var(--muted);}
+.importGrid{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:20px;align-items:start;margin-bottom:20px;}
+.preset{display:inline-flex;gap:8px;align-items:baseline;padding:7px 12px;border:1px solid var(--acc100);border-radius:var(--r);background:var(--acc50);color:var(--accInk);font-size:13px;font-weight:600;}
+.preset small{font-weight:400;font-size:11.5px;}
+.mapTable td:first-child{font-family:var(--mono);font-size:12.5px;}
+.mapTable .select{height:34px;padding:0 10px;font-size:13px;min-width:210px;}
+.resPill{display:inline-block;padding:2px 8px;border-radius:var(--r);font-size:12px;font-weight:600;background:var(--green50);color:var(--green);white-space:nowrap;}
+.resPill.sens{background:var(--amber50);color:var(--amber);}
+.resPill.custom{background:var(--acc50);color:var(--accInk);}
+.resPill.ign{background:var(--line2);color:var(--muted);}
+.mapOpts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:16px 20px;border-top:1px solid var(--line);background:#FAFAF7;}
+.happen{padding:2px 0 0;}
+.happen .item{display:grid;grid-template-columns:28px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid var(--line2);}
+.happen .item:last-child{border-bottom:0;}
+.happen .ic{display:grid;place-items:center;width:28px;height:28px;border-radius:var(--r);background:var(--acc50);color:var(--acc);font-weight:700;}
+.happen .ic.ok{background:var(--green50);color:var(--green);}
+.happen .ic.warn{background:var(--amber50);color:var(--amber);}
+.happen b{display:block;font-size:18px;font-weight:600;}
+.happen span{color:var(--muted);font-size:12.5px;}
+.happenText b{font-size:14.5px;}
+.cardFlush .scrollX{border:0;border-radius:0;margin:0;background:transparent;}
+.scn .best{white-space:nowrap;}
+.pvRow>div{min-width:0;}
+.pvRow .mono{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.warnBox{padding:14px 16px;border-radius:var(--r);background:var(--amber50);font-size:13px;color:var(--ink);}
+.warnBox strong{display:block;color:var(--amber);margin-bottom:4px;}
+.uploadBox{display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:22px;border:1px dashed #CFCDC5;border-radius:var(--r);background:#FAFAF7;}
+@media (max-width:1280px){.kpiRow{grid-template-columns:repeat(3,minmax(0,1fr));}.todayGrid{grid-template-columns:1fr;}.listsGrid{grid-template-columns:220px minmax(0,1fr);}.listsGrid>.stack{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;}.bookWrap{grid-template-columns:minmax(0,1fr) 340px;}.importGrid{grid-template-columns:minmax(0,1fr) 300px;}}
+@media (max-width:900px){.kpiRow{grid-template-columns:1fr 1fr;}.bookWrap{grid-template-columns:1fr;margin:-16px -12px -36px;}.bookMain{padding:14px 12px;}.bookPanel{border-left:0;border-top:1px solid var(--line);}.listsGrid,.campGrid,.importGrid,.listsGrid>.stack{grid-template-columns:1fr;}.lbRow{grid-template-columns:1fr 1fr;}.lbW{display:none;}.tiles{grid-template-columns:1fr 1fr;}.fn2{grid-template-columns:1fr 50px;}.fn2 i{grid-column:1/-1;}.mapOpts{grid-template-columns:1fr;}.cardHeadPad{flex-direction:column;}.seg{max-width:100%;overflow-x:auto;flex-wrap:nowrap;}.seg a{white-space:nowrap;}.userCard,.sideVer,.wsBox{display:none;}.navCount{display:none;}}
 CSS;
     return '<style nonce="' . $nonce . '">' . app_font_faces() . str_replace('__ACCENT__', $accent, $css) . '</style>';
 }
@@ -1438,7 +1834,8 @@ function typeOf(k){return (byKey[k]&&byKey[k].t)||"text";}
 function fieldOptions(sel){var has=false;var html=cat.map(function(c){if(c.k===sel){has=true;}return "<option value=\""+esc(c.k)+"\""+(c.k===sel?" selected":"")+">"+esc(c.l)+"</option>";}).join("");if(sel&&!has){html="<option value=\""+esc(sel)+"\" selected>"+esc(sel)+"</option>"+html;}return html;}
 function opOptions(t,sel){return (OPS[t]||OPS.text).map(function(o){return "<option value=\""+o[0]+"\""+(o[0]===sel?" selected":"")+">"+esc(o[1])+"</option>";}).join("");}
 function syncVals(w){var op=qs("[data-lb=op]",w).value;var v=qs("[data-lb=v]",w),v2=qs("[data-lb=v2]",w);v.hidden=(op==="empty"||op==="notempty"||op==="yes"||op==="no");v2.hidden=op!=="between";v.placeholder=op==="in"?"a, b, c":(op==="between"?"from":"value");v2.placeholder="to";}
-function addRow(r){r=r||{f:cat.length?cat[0].k:"",op:"",v:"",v2:""};var t=typeOf(r.f);var op=r.op||(OPS[t]||OPS.text)[0][0];var w=document.createElement("div");w.className="lbRow";w.innerHTML="<select class=\"select selectSm\" data-lb=\"f\" aria-label=\"Field\">"+fieldOptions(r.f)+"</select><select class=\"select selectSm\" data-lb=\"op\" aria-label=\"Operator\">"+opOptions(t,op)+"</select><div class=\"lbVals\"><input class=\"input inputSm\" data-lb=\"v\" aria-label=\"Value\" value=\""+esc(r.v)+"\"><input class=\"input inputSm\" data-lb=\"v2\" aria-label=\"Upper bound\" value=\""+esc(r.v2)+"\"></div><button class=\"btnGhost btnSm\" type=\"button\" data-lb-remove>Remove</button>";rowsEl.appendChild(w);syncVals(w);}
+function labels(){qsa(".lbRow",rowsEl).forEach(function(w,i){var l=qs(".lbW",w);if(l){l.textContent=i===0?"WHERE":(logic.value==="OR"?"OR":"AND");}});}
+function addRow(r){r=r||{f:cat.length?cat[0].k:"",op:"",v:"",v2:""};var t=typeOf(r.f);var op=r.op||(OPS[t]||OPS.text)[0][0];var w=document.createElement("div");w.className="lbRow";w.innerHTML="<span class=\"lbW\">WHERE</span><select class=\"select\" data-lb=\"f\" aria-label=\"Field\">"+fieldOptions(r.f)+"</select><select class=\"select\" data-lb=\"op\" aria-label=\"Comparison\">"+opOptions(t,op)+"</select><div class=\"lbVals\"><input class=\"input\" data-lb=\"v\" aria-label=\"Value\" value=\""+esc(r.v)+"\"><input class=\"input\" data-lb=\"v2\" aria-label=\"Upper bound\" value=\""+esc(r.v2)+"\"></div><button class=\"lbX\" type=\"button\" data-lb-remove aria-label=\"Remove condition\">×</button>";rowsEl.appendChild(w);syncVals(w);labels();}
 function quote(s){return "'"+String(s).replace(/'/g,"''")+"'";}
 function isNum(s){return s!==""&&Number.isFinite(Number(s));}
 function compile(){var parts=[],rows=[],bad=false;qsa(".lbRow",rowsEl).forEach(function(w){var f=qs("[data-lb=f]",w).value,op=qs("[data-lb=op]",w).value,v=qs("[data-lb=v]",w).value.trim(),v2=qs("[data-lb=v2]",w).value.trim(),t=typeOf(f),p="";rows.push({f:f,op:op,v:v,v2:v2});
@@ -1452,33 +1849,57 @@ else{var sym={eq:"=",ne:"!=",gt:">",lt:"<",gte:">=",lte:"<="}[op]||"=";if(v===""
 parts.push(p);});
 json.value=JSON.stringify({logic:logic.value==="OR"?"OR":"AND",rows:rows});
 return {where:parts.length>1?parts.map(function(x){return x.indexOf(" OR ")>-1?"("+x+")":x;}).join(logic.value==="OR"?" OR ":" AND "):(parts[0]||""),bad:bad};}
-function live(){var my=++seq;var fd=new FormData();fd.append("csrf_token",csrf());fd.append("action","segment_count");fd.append("where",where.value||"");qsa("input[name=\"rule_ids[]\"]:checked",form).forEach(function(b){fd.append("rule_ids[]",b.value);});count.textContent="Counting…";
-fetch(window.location.pathname+window.location.search,{method:"POST",body:fd,headers:{"X-Requested-With":"fetch","Accept":"application/json"}}).then(function(r){return r.json();}).then(function(d){if(my!==seq){return;}if(!d.ok){count.textContent=d.error||"That filter is not valid.";count.classList.add("lbErr");return;}count.classList.remove("lbErr");count.textContent=num(d.count)+" policies · reachable by email "+num(d.email)+" · SMS "+num(d.sms)+" · call "+num(d.phone)+(d.opted_out?" · "+num(d.opted_out)+" opted out":"");}).catch(function(){if(my===seq){count.textContent="Could not count right now.";}});}
-function schedule(bad){clearTimeout(timer);if(bad){count.textContent="Finish each condition to see the count.";count.classList.add("lbErr");return;}timer=setTimeout(live,300);}
+function setLr(k,v){qsa("[data-lr="+k+"]").forEach(function(e){e.textContent=v;});}
+function live(){var my=++seq;var fd=new FormData();fd.append("csrf_token",csrf());fd.append("action","segment_count");fd.append("where",where.value||"");qsa("input[name=\"rule_ids[]\"]:checked",form).forEach(function(b){fd.append("rule_ids[]",b.value);});qsa("[data-lb-consent]:checked",form).forEach(function(b){fd.append("consent[]",b.value);});count.textContent="Counting…";count.hidden=false;
+fetch(window.location.pathname+"?tab=segments",{method:"POST",body:fd,headers:{"X-Requested-With":"fetch","Accept":"application/json"}}).then(function(r){return r.json();}).then(function(d){if(my!==seq){return;}if(!d.ok){count.textContent=d.error||"That filter is not valid.";count.classList.add("lbErr");return;}count.classList.remove("lbErr");count.hidden=true;
+setLr("count",num(d.count));setLr("hh",(d.count===1?"policy":"policies")+" · "+num(d.households)+" household"+(d.households===1?"":"s"));setLr("ltv",d.avg_ltv);setLr("prem",d.monthly_premium);setLr("phone",num(d.phone));setLr("left",num(d.left_out));setLr("pvcount",Math.min(5,d.count)+" of "+num(d.count));var chk=qsa("[data-lb-consent]:checked",form).map(function(b){return b.value;});var ch=chk[0]||"mail";var chIn=qs("[data-lr-channel]");if(chIn){chIn.value=ch;}setLr("export","Export CSV ("+num(d[ch])+")");
+var pv=qs("[data-lr=pv]");if(pv){pv.innerHTML=(d.preview||[]).map(function(p){var t=String(p.tier||"Unknown");return "<div class=\"pvRow\"><div><strong>"+esc(p.name)+"</strong><span class=\"mono\">"+esc(p.policy)+(p.line?" · "+esc(p.line):"")+"</span></div><span>"+esc(p.ltv)+"</span><span class=\"tier tierDot tier-"+esc(t.toLowerCase().replace(/[^a-z]/g,""))+"\">"+esc(t)+"</span></div>";}).join("")||"<div class=\"pad muted\">No policies match yet.</div>";}
+}).catch(function(){if(my===seq){count.textContent="Could not count right now.";}});}
+function schedule(bad){clearTimeout(timer);if(bad){count.hidden=false;count.textContent="Finish each condition to see the count.";count.classList.add("lbErr");return;}timer=setTimeout(live,300);}
 function sync(){var c=compile();where.value=c.where;schedule(c.bad);}
 rowsEl.addEventListener("change",function(e){var w=e.target.closest(".lbRow");if(!w){return;}if(e.target.getAttribute("data-lb")==="f"){qs("[data-lb=op]",w).innerHTML=opOptions(typeOf(e.target.value),"");}syncVals(w);sync();});
 rowsEl.addEventListener("input",function(e){if(e.target.closest(".lbRow")&&e.target.tagName==="INPUT"){sync();}});
-rowsEl.addEventListener("click",function(e){var b=e.target.closest("[data-lb-remove]");if(b){b.closest(".lbRow").remove();sync();}});
+rowsEl.addEventListener("click",function(e){var b=e.target.closest("[data-lb-remove]");if(b){b.closest(".lbRow").remove();labels();sync();}});
 document.getElementById("lbAdd").addEventListener("click",function(){addRow();sync();});
-logic.addEventListener("change",sync);
+logic.addEventListener("change",function(){labels();sync();});
 where.addEventListener("input",function(){json.value="";schedule(false);});
-form.addEventListener("change",function(e){if(e.target.name==="rule_ids[]"){schedule(false);}});
-qsa("[data-preset]").forEach(function(b){b.addEventListener("click",function(){var p={};try{p=JSON.parse(b.getAttribute("data-preset"));}catch(e){}rowsEl.innerHTML="";logic.value=p.logic==="OR"?"OR":"AND";(p.rows||[]).forEach(addRow);var n=document.getElementById("listName");if(n&&!n.value){n.value=b.getAttribute("data-preset-name")||"";}sync();});});
+form.addEventListener("change",function(e){if(e.target.name==="rule_ids[]"||e.target.hasAttribute("data-lb-consent")){schedule(false);}});
+qsa("[data-preset]").forEach(function(b){b.addEventListener("click",function(){var p={};try{p=JSON.parse(b.getAttribute("data-preset"));}catch(e){}rowsEl.innerHTML="";logic.value=p.logic==="OR"?"OR":"AND";(p.rows||[]).forEach(addRow);var n=document.getElementById("listName");if(n&&!n.value){n.value=b.getAttribute("data-preset-name")||"";}var d=qs("[name=description]",form);if(d&&!d.value){d.value=b.getAttribute("data-preset-desc")||"";}sync();});});
 var init=null;try{init=JSON.parse(root.getAttribute("data-initial")||"null");}catch(e){}
-if(init&&init.rows&&init.rows.length){logic.value=init.logic==="OR"?"OR":"AND";init.rows.forEach(addRow);var c=compile();if(!where.value){where.value=c.where;}schedule(c.bad);}
+if(init&&init.rows){logic.value=init.logic==="OR"?"OR":"AND";init.rows.forEach(addRow);var c=compile();if(!where.value){where.value=c.where;}schedule(c.bad);}
 else if(where.value){schedule(false);}
 else{addRow();sync();}
 }
 function camp(){
 var f=document.getElementById("campaignForm");if(!f){return;}
+var CH={phone:["phone consent","call"],email:["email consent","email"],sms:["text consent","text"],mail:["no opt-out","mail"]};
 function val(n){var e=f.querySelector("[name="+n+"]");return e?Number(e.value)||0:0;}
-function upd(){var sel=f.querySelector("[name=segment_id]"),o=sel&&sel.options[sel.selectedIndex],ch=f.querySelector("[name=channel]").value;var size=o?Number(o.getAttribute("data-size"))||0:0,reach=o?Number(o.getAttribute("data-"+ch))||0:0;var rate=val("cross_sell_rate"),avg=val("avg_offer_value"),cost=val("campaign_cost_per_contact"),lift=val("conversion_lift");var conv=reach*rate*(1+lift),gross=conv*avg,c=reach*cost,net=gross-c,roi=c>0?net/c:null,be=avg*(1+lift)>0?cost/(avg*(1+lift)):null;
-function set(k,t){var e=f.querySelector("[data-fn="+k+"]");if(e){e.textContent=t;}}
-function bar(k,v){var e=f.querySelector("[data-fn-bar="+k+"]");if(e){e.style.width=(size>0?Math.max(v>0?1:0,Math.min(100,v*100/size)):0)+"%";}}
-set("size",num(size));set("reach",num(reach));set("conv",num(conv,1));set("gross",money0(gross));set("cost",money0(c));set("net",money0(net));set("roi",roi===null?"—":Math.round(roi*100)+"%");set("be",be===null?"—":(be*100).toFixed(2)+"%");bar("size",size);bar("reach",reach);bar("conv",conv);var n=f.querySelector("[data-fn=net]");if(n){n.classList.toggle("neg",net<0);}}
+function chan(){var r=f.querySelector("input[name=channel]:checked");return r?r.value:"phone";}
+function upd(){var sel=f.querySelector("[name=segment_id]"),o=sel&&sel.options[sel.selectedIndex],ch=chan();var size=o?Number(o.getAttribute("data-size"))||0:0,reach=o?Number(o.getAttribute("data-"+ch))||0:0,name=o?(o.getAttribute("data-name")||""):"";var rate=val("cross_sell_rate_pct")/100,avg=val("avg_offer_value"),cost=val("campaign_cost_per_contact"),lift=val("conversion_lift_pct")/100;var conv=reach*rate*(1+lift),gross=conv*avg,c=reach*cost,net=gross-c,ratio=c>0?gross/c:null,be=avg*(1+lift)>0?cost/(avg*(1+lift)):null;
+function set(k,t){qsa("[data-fn="+k+"]").forEach(function(e){e.textContent=t;});}
+function bar(k,v){var e=qs("[data-fn-bar="+k+"]");if(e){e.style.width=(size>0?Math.max(v>0?1:0,Math.min(100,v*100/size)):0)+"%";}}
+function sub(a,t){var e=qs("["+a+"]");if(e){e.textContent=t;}}
+var label={phone:"Phone",email:"Email",sms:"SMS",mail:"Mail"}[ch]||ch;
+set("size",num(size));set("reach",num(reach));set("conv",num(conv,1));set("gross",money0(gross));set("cost",(c>0?"−":"")+money0(c));set("net",(net<0?"−":"")+money0(Math.abs(net)));set("roi",ratio===null?"—":(ratio<10?ratio.toFixed(1):Math.round(ratio))+"×");set("be",be===null?"—":(be*100).toFixed(2)+"%");bar("size",size);bar("reach",reach);bar("conv",conv);
+var tile=qs("[data-fn-nettile]");if(tile){tile.classList.toggle("good",net>=0);tile.classList.toggle("bad",net<0);}
+sub("data-camp-listname",name||"—");sub("data-camp-reachsub",ch==="mail"?"Not opted out":(label+" consent, not opted out"));sub("data-camp-convsub",num(reach)+" × "+(rate*100).toFixed(1)+"% conversion"+(lift>0?" × "+(1+lift).toFixed(2)+" lift":""));
+var t=qs("[data-camp-title]");if(t&&!t.getAttribute("data-fixed")){t.textContent=(name||"New scenario")+(name?" by "+label.toLowerCase():"");}
+var help=qs("[data-camp-help]");if(help){help.textContent=ch==="mail"?num(reach)+" of "+num(size)+" have not opted out; mail needs no opt-in.":num(reach)+" of "+num(size)+" have "+CH[ch][0]+"; "+num(Math.max(0,size-reach))+" left out automatically.";}
+var segIn=qs("[data-camp-seg]"),chIn=qs("[data-camp-ch]"),ex=qs("[data-camp-export]");if(segIn){segIn.value=sel?sel.value:"";}if(chIn){chIn.value=ch;}if(ex){ex.textContent="Export "+CH[ch][1]+" list ("+num(reach)+")";ex.disabled=!sel||!sel.value||sel.value==="0";}}
 f.addEventListener("input",upd);f.addEventListener("change",upd);upd();
 }
-document.addEventListener("DOMContentLoaded",function(){meters();lb();camp();});
+function ui2(){
+document.addEventListener("click",function(e){var tr=e.target.closest&&e.target.closest("tr[data-href]");if(tr&&!e.target.closest("a,button,input,select,label,textarea")){window.location.href=tr.getAttribute("data-href");}});
+document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("[data-open-drawer]");if(!a){return;}var d=document.getElementById(a.getAttribute("data-open-drawer"));if(d){e.preventDefault();d.open=true;d.scrollIntoView({block:"nearest",behavior:"smooth"});var i=d.querySelector("select,input,button");if(i){i.focus();}}});
+document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("[data-copy]");if(!b){return;}var t=document.getElementById(b.getAttribute("data-copy"));if(t&&navigator.clipboard){navigator.clipboard.writeText(t.value||t.textContent||"").then(function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy";},1500);});}});
+var bar=document.getElementById("bulkForm");
+if(bar){var picks=function(){return qsa("[data-bulk-pick]");};var refresh=function(){var n=picks().filter(function(x){return x.checked;}).length;bar.hidden=n===0;var c=qs("[data-bulk-count]",bar);if(c){c.textContent=n+" selected";}var all=qs("[data-bulk-all]");if(all){var p=picks();all.checked=p.length>0&&n===p.length;all.indeterminate=n>0&&n<p.length;}};
+document.addEventListener("change",function(e){if(e.target.matches("[data-bulk-pick]")){refresh();}if(e.target.matches("[data-bulk-all]")){picks().forEach(function(x){x.checked=e.target.checked;});refresh();}});
+var clr=qs("[data-bulk-clear]",bar);if(clr){clr.addEventListener("click",function(){picks().forEach(function(x){x.checked=false;});refresh();});}refresh();}
+var map=document.getElementById("mapForm");
+if(map){map.addEventListener("change",function(e){var s=e.target.closest("select[data-col]");if(!s){return;}var cell=s.closest("tr").lastElementChild;var v=s.value,pill="";if(v==="__ignore__"){pill="<span class=\"resPill ign\">Ignored · not imported</span>";}else if(v===""){pill="<span class=\"resPill custom\">Kept as custom</span>";}else if(["display_name","dob","email","phone"].indexOf(v)>-1){pill="<span class=\"resPill sens\">Matched · sensitive</span>";}else{pill="<span class=\"resPill\">Matched</span>";}cell.innerHTML=pill;});}
+}
+document.addEventListener("DOMContentLoaded",function(){meters();lb();camp();ui2();});
 })();
 JS
         . '</script>';
@@ -1904,10 +2325,12 @@ function mapped_header_names(array $mapping): array
     foreach ($mapping as $field => $hname) {
         $field = (string)$field;
         $hname = (string)$hname;
-        if (!in_array($field, core_import_field_keys(), true) || $hname === '' || $hname === '__generate__') {
+        if ($hname === '' || $hname === '__generate__') {
             continue;
         }
-        $out[$hname] = true;
+        if (in_array($field, core_import_field_keys(), true) || str_starts_with($field, 'ignore:')) {
+            $out[$hname] = true;
+        }
     }
     return $out;
 }
@@ -1970,6 +2393,9 @@ function map_row(array $headers, array $row, array $mapping): array
     $out = [];
     foreach ($mapping as $field => $hname) {
         $hname = (string)$hname;
+        if (!in_array((string)$field, core_import_field_keys(), true)) {
+            continue;
+        }
         $storeField = storage_field_for_import((string)$field);
         if ($hname === '__generate__') {
             continue;
@@ -3208,7 +3634,7 @@ function segment_criteria(array $segRow): array
     }
     $ruleIds = array_values(array_unique(array_filter(array_map('intval', (array)($criteria['rule_ids'] ?? [])), fn($x) => $x > 0)));
     $where = is_string($criteria['where'] ?? null) ? trim((string)$criteria['where']) : '';
-    return [$ruleIds, $where];
+    return [$ruleIds, where_with_consent($where, clean_consent($criteria['consent'] ?? []))];
 }
 
 function estimate_segment_size(PDO $pdo, array $ruleIds, string $where): int
@@ -4466,22 +4892,75 @@ function page_meta(string $tab): array
     $meta = [
         'dashboard' => ['Today', 'Renewals due, opportunities and data health for your book.'],
         'renewals' => ['Renewals', 'Work the next 120 days of expirations: stage, owner and contact.'],
-        'profiles' => ['Book', 'Every policy in one table. Edit cells inline; open a row to see why it scored the way it did.'],
-        'segments' => ['Lists', 'Build call and email lists in plain language. Counts respect consent and opt-outs.'],
-        'campaigns' => ['Campaigns', 'Size outreach before you spend: reachable, conversions, net and break-even.'],
-        'import' => ['Import & health', 'Bring in AMS or spreadsheet exports, re-import to update, and fix data gaps.'],
-        'rules' => ['Scoring rules', 'Readable rules that set risk tiers and tags. Highest priority runs first.'],
-        'settings' => ['Settings', 'Currency, terminology, LTV assumptions, consent, users, retention and audit.'],
+        'profiles' => ['Book', 'Every policy, scored. Select one to see why it got its tier.'],
+        'segments' => ['Lists', 'Build a list in plain language. It refreshes when the book changes, and exports respect consent.'],
+        'campaigns' => ['Campaigns', 'Model outreach before you spend. Projections from your own lists and assumptions, not guarantees.'],
+        'import' => ['Import & health', 'Bring in your AMS export. Existing policies are updated, new ones added, and every extra column is kept.'],
+        'rules' => ['Scoring rules', 'Readable rules that set retention-risk tiers and tags. Highest priority runs first.'],
+        'settings' => ['Settings', 'Agency, currency, terminology, LTV assumptions, consent, users, retention and audit.'],
         'account' => ['Account', 'Your password and two-step verification.'],
     ];
     return $meta[$tab] ?? [ucfirst($tab), ''];
 }
 
-function nav_item(string $label, string $tab, string $current, ?int $count = null): string
+function tab_url(string $tab, array $params = []): string
+{
+    $base = (string)($_SERVER['PHP_SELF'] ?? 'liteinsurance.php');
+    $q = http_build_query(array_filter(['tab' => $tab] + $params, static fn($v) => $v !== null && $v !== ''));
+    return $base . ($q !== '' ? '?' . $q : '');
+}
+
+function nav_icon(string $tab): string
+{
+    $p = [
+        'dashboard' => '<path d="M2.5 7L8 2.5 13.5 7v6.5h-11z"/><path d="M6.5 13.5V9.5h3v4"/>',
+        'renewals' => '<rect x="2.5" y="3.5" width="11" height="10" rx="1.5"/><path d="M2.5 6.5h11M5.5 2v3M10.5 2v3"/>',
+        'profiles' => '<path d="M4 2.5h6l2.5 2.5v8.5H4z"/><path d="M6 8h4M6 10.5h4"/>',
+        'segments' => '<path d="M2.5 4h11M4.5 8h7M6.5 12h3"/>',
+        'campaigns' => '<circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2.5"/>',
+        'import' => '<path d="M8 2.5v8M5 7.5l3 3 3-3M3 13.5h10"/>',
+        'rules' => '<circle cx="4" cy="5" r="1.5"/><circle cx="4" cy="11" r="1.5"/><path d="M5.5 5h8M5.5 11h8"/>',
+        'settings' => '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M3.6 12.4L5 11M11 5l1.4-1.4"/>',
+    ];
+    return '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">' . ($p[$tab] ?? '') . '</svg>';
+}
+
+function nav_item(string $label, string $tab, string $current, ?int $count = null, string $tone = ''): string
 {
     $cls = ($tab === $current) ? 'navItem navOn' : 'navItem';
-    $badge = ($count !== null && $count > 0) ? '<span class="navCount">' . h((string)$count) . '</span>' : '';
-    return '<a class="' . h($cls) . '" href="' . h(self_url(['tab' => $tab])) . '"' . ($tab === $current ? ' aria-current="page"' : '') . '><span>' . h($label) . '</span>' . $badge . '</a>';
+    $badge = ($count !== null && $count > 0) ? '<span class="navCount' . ($tone === 'warn' ? ' navWarn' : '') . '">' . h(number_format($count)) . '</span>' : '';
+    return '<a class="' . h($cls) . '" href="' . h(tab_url($tab)) . '"' . ($tab === $current ? ' aria-current="page"' : '') . '>' . nav_icon($tab) . '<span class="navLabel">' . h($label) . '</span>' . $badge . '</a>';
+}
+
+function nav_counts(PDO $pdo): array
+{
+    $days = sql_days_to_expiry();
+    $open = "expiration_date IS NOT NULL AND expiration_date <> '' AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND " . sql_in_force();
+    $max = max(renewal_cadence());
+    $st = $pdo->prepare("SELECT SUM(CASE WHEN $days BETWEEN 0 AND 30 THEN 1 ELSE 0 END) AS today, SUM(CASE WHEN $days BETWEEN -30 AND ? THEN 1 ELSE 0 END) AS ren FROM policyholders WHERE $open");
+    $st->execute([$max]);
+    $r = $st->fetch() ?: [];
+    return [
+        'today' => (int)($r['today'] ?? 0),
+        'renewals' => (int)($r['ren'] ?? 0),
+        'lists' => (int)$pdo->query('SELECT COUNT(*) FROM segments')->fetchColumn(),
+        'imputed' => (int)$pdo->query('SELECT COUNT(*) FROM policyholders WHERE is_imputed = 1')->fetchColumn(),
+    ];
+}
+
+function workspace_box(PDO $pdo, bool $isAdmin): string
+{
+    $name = trim(setting('agency_name', ''));
+    $n = (int)$pdo->query('SELECT COUNT(*) FROM policyholders')->fetchColumn();
+    $last = (string)($pdo->query('SELECT MAX(created_at) FROM imports')->fetchColumn() ?: '');
+    $ts = $last !== '' ? strtotime($last) : false;
+    $sub = number_format($n) . ' ' . ($n === 1 ? 'policy' : 'policies') . ($ts ? ' · synced ' . gmdate('j M', $ts) : ($n ? '' : ' · nothing imported yet'));
+    $inner = '<span class="wsMeta"><span class="wsName">' . h($name !== '' ? $name : 'Your agency') . '</span><span class="wsSub">' . h($sub) . '</span></span>'
+        . '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M4 5.5l3-3 3 3M4 8.5l3 3 3-3"/></svg>';
+    if (!$isAdmin) {
+        return '<div class="wsBox">' . $inner . '</div>';
+    }
+    return '<a class="wsBox" href="' . h(tab_url('import')) . '" title="Import a newer export or check data health">' . $inner . '</a>';
 }
 
 function render_app(PDO $pdo, array $user, string $tab): void
@@ -4492,9 +4971,11 @@ function render_app(PDO $pdo, array $user, string $tab): void
     [$title, $subtitle] = page_meta($tab);
     if ($tab === 'renewals') {
         $subtitle = renewals_subtitle($pdo);
+    } elseif (in_array($tab, ['dashboard', 'profiles'], true)) {
+        $subtitle = page_subtitle($pdo, $tab, $subtitle);
     }
     $isAdmin = (string)$user['role'] === 'admin';
-    $dueSoon = (int)$pdo->query('SELECT COUNT(*) FROM policyholders WHERE expiration_date IS NOT NULL AND ' . sql_days_to_expiry() . " BETWEEN 0 AND 30 AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND " . sql_in_force())->fetchColumn();
+    $counts = nav_counts($pdo);
 
     echo '<!doctype html><html lang="en"><head>';
     echo '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">';
@@ -4505,25 +4986,31 @@ function render_app(PDO $pdo, array $user, string $tab): void
     echo '<div class="appShell">';
 
     echo '<aside class="sideNav" aria-label="Main">';
-    echo '<a class="brand" href="' . h(self_url(['tab' => 'dashboard', 'id' => null, 'q' => null, 'view' => null, 'edit' => null])) . '">' . logo_svg(true) . '<span>' . h(APP_NAME) . '</span></a>';
+    echo '<a class="brand" href="' . h(tab_url('dashboard')) . '">' . logo_svg(true) . '<span>' . h(APP_NAME) . '</span></a>';
+    echo workspace_box($pdo, $isAdmin);
     echo '<div class="navGroup">Work</div>';
-    echo nav_item('Today', 'dashboard', $tab);
-    echo nav_item('Renewals', 'renewals', $tab, $dueSoon);
+    echo nav_item('Today', 'dashboard', $tab, $counts['today']);
+    echo nav_item('Renewals', 'renewals', $tab, $counts['renewals']);
     echo nav_item('Book', 'profiles', $tab);
     if ($isAdmin) {
-        echo nav_item('Lists', 'segments', $tab);
+        echo nav_item('Lists', 'segments', $tab, $counts['lists']);
         echo nav_item('Campaigns', 'campaigns', $tab);
-        echo '<div class="navGroup">Setup</div>';
-        echo nav_item('Import & health', 'import', $tab);
+        echo '<div class="navGroup">Data</div>';
+        echo nav_item('Import & health', 'import', $tab, $counts['imputed'], 'warn');
+        echo '<div class="navGroup">Admin</div>';
         echo nav_item('Scoring rules', 'rules', $tab);
         echo nav_item('Settings', 'settings', $tab);
     }
-    echo '<div class="sideFoot"><a class="userPill' . ($tab === 'account' ? ' userPillOn' : '') . '" href="' . h(self_url(['tab' => 'account', 'id' => null, 'q' => null, 'view' => null, 'edit' => null])) . '" title="Account: ' . h((string)$user['email']) . '"><span class="userEmail">' . h((string)$user['email']) . '</span><span class="pillRole">' . h((string)$user['role']) . '</span>' . ((int)($user['totp_enabled'] ?? 0) === 1 ? '<span class="pillRole" title="Two-step verification on">2FA</span>' : '') . '</a>';
-    echo '<form method="post" action="' . h(self_url(['action' => null])) . '">' . csrf_field() . '<input type="hidden" name="action" value="logout"><button class="navLogout" type="submit">Sign out</button></form></div>';
+    $email = (string)$user['email'];
+    $local = strpos($email, '@') !== false ? (string)strstr($email, '@', true) : $email;
+    echo '<div class="sideFoot"><div class="userRow">';
+    echo '<a class="userCard' . ($tab === 'account' ? ' userCardOn' : '') . '" href="' . h(tab_url('account')) . '" title="Account: ' . h($email) . '"><span class="userAvatar">' . h(owner_initials($email)) . '</span><span class="userMeta"><span class="userName">' . h($local !== '' ? $local : $email) . '</span><span class="userRole">' . h(ucfirst((string)$user['role'])) . ' · signed in' . ((int)($user['totp_enabled'] ?? 0) === 1 ? ' · 2FA' : '') . '</span></span></a>';
+    echo '<form method="post" action="' . h(self_url(['action' => null])) . '">' . csrf_field() . '<input type="hidden" name="action" value="logout"><button class="navLogout" type="submit" title="Sign out" aria-label="Sign out"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.5H3.5v11H6M10 5l3 3-3 3M13 8H6"/></svg></button></form>';
+    echo '</div><div class="sideVer">v' . h(APP_VERSION) . ' · PHP ' . h(PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION) . ' · SQLite</div></div>';
     echo '</aside>';
 
     echo '<header class="topBar"><div class="topTitle"><h1 class="h1">' . h($title) . '</h1><div class="muted">' . h($subtitle) . '</div></div>';
-    echo $tab === 'renewals' ? '' : '<form class="topSearch" method="get" role="search"><input type="hidden" name="tab" value="profiles"><input class="input" type="search" name="q" placeholder="Search policy #, ' . h(strtolower(lbl('client'))) . ', household" aria-label="Search the book" value="' . h($tab === 'profiles' ? (string)($_GET['q'] ?? '') : '') . '"></form>';
+    echo in_array($tab, ['renewals', 'segments', 'campaigns', 'import'], true) ? '' : '<form class="topSearch" method="get" role="search"><input type="hidden" name="tab" value="profiles"><input class="input" type="search" name="q" placeholder="Search policy, ' . h(strtolower(lbl('client'))) . ' or household" aria-label="Search the book" value="' . h($tab === 'profiles' ? (string)($_GET['q'] ?? '') : '') . '"></form>';
     echo page_actions($tab);
     echo '</header>';
 
@@ -4564,6 +5051,26 @@ function render_app(PDO $pdo, array $user, string $tab): void
     echo '</body></html>';
 }
 
+function page_subtitle(PDO $pdo, string $tab, string $fallback): string
+{
+    $n = (int)$pdo->query('SELECT COUNT(*) FROM policyholders')->fetchColumn();
+    if ($n === 0) {
+        return $fallback;
+    }
+    if ($tab === 'dashboard') {
+        $last = $pdo->query('SELECT filename, created_at FROM imports ORDER BY created_at DESC, id DESC LIMIT 1')->fetch() ?: null;
+        $when = $last ? strtotime((string)$last['created_at']) : false;
+        $ago = '';
+        if ($when) {
+            $mins = max(0, (int)floor((time() - $when) / 60));
+            $ago = $mins < 1 ? 'just now' : ($mins < 60 ? $mins . ' min ago' : ($mins < 1440 ? (int)floor($mins / 60) . ' h ago' : gmdate('j M', $when)));
+        }
+        return gmdate('l, j F', strtotime(li_today() . ' UTC') ?: time()) . ($last ? ' · book refreshed from ' . (string)$last['filename'] . ($ago !== '' ? ' ' . $ago : '') : '');
+    }
+    $hh = (int)$pdo->query("SELECT COUNT(DISTINCT household_id) FROM policyholders WHERE household_id IS NOT NULL AND household_id <> ''")->fetchColumn();
+    return number_format($n) . ($n === 1 ? ' policy' : ' policies') . ($hh ? ' · ' . number_format($hh) . ' households' : '') . ' · masked names; reveal is logged';
+}
+
 function kpi(string $label, string $value, string $sub = '', string $tone = ''): string
 {
     return '<div class="kpi' . ($tone !== '' ? ' kpi-' . h($tone) : '') . '"><div class="kpiLabel">' . h($label) . '</div><div class="kpiValue">' . h($value) . '</div>' . ($sub !== '' ? '<div class="kpiSub">' . h($sub) . '</div>' : '') . '</div>';
@@ -4580,137 +5087,230 @@ function current_is_admin(): bool
     return is_array($u) && (string)($u['role'] ?? '') === 'admin';
 }
 
+function risk_pill(?string $tier): string
+{
+    $t = (string)$tier !== '' ? (string)$tier : 'Unknown';
+    return '<span class="tier tierDot tier-' . h(preg_replace('/[^a-z]+/', '', strtolower($t))) . '">' . h($t) . '</span>';
+}
+
+function status_pill(?string $status): string
+{
+    $s = (string)$status !== '' ? (string)$status : 'not_started';
+    $labels = renewal_statuses();
+    return '<span class="stPill stp-' . h($s) . '">' . h($labels[$s] ?? $s) . '</span>';
+}
+
+function annual_premium(float $sum): float
+{
+    return setting('premium_period', 'monthly') === 'annual' ? $sum : $sum * 12;
+}
+
+function sql_risk_rank(): string
+{
+    return "CASE risk_tier WHEN 'High' THEN 0 WHEN 'Review' THEN 1 WHEN 'Medium' THEN 2 WHEN 'Low' THEN 3 ELSE 4 END";
+}
+
 function render_tab_dashboard(PDO $pdo): void
 {
     $days = sql_days_to_expiry();
     $inForce = sql_in_force();
     $total = (int)$pdo->query('SELECT COUNT(*) FROM policyholders')->fetchColumn();
-    $win = (int)($_GET['win'] ?? 30);
-    if (!in_array($win, [30, 60, 90, 120], true)) {
-        $win = 30;
-    }
 
     render_first_run_checklist($pdo, $total);
     if ($total === 0) {
         return;
     }
+    $open = "expiration_date IS NOT NULL AND expiration_date <> '' AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND $inForce";
 
-    $agg = $pdo->query("SELECT COUNT(*) AS n, COALESCE(SUM(premium_amount),0) AS prem, AVG(ltv_estimate) AS ltv FROM policyholders WHERE $inForce")->fetch() ?: [];
-    $due30 = $pdo->query("SELECT COUNT(*) AS n, COALESCE(SUM(premium_amount),0) AS prem FROM policyholders WHERE expiration_date IS NOT NULL AND $days BETWEEN 0 AND 30 AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND $inForce")->fetch() ?: [];
-    $atRisk = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE expiration_date IS NOT NULL AND $days BETWEEN 0 AND 90 AND risk_tier IN ('High','Review') AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND $inForce")->fetchColumn();
-    $nOpt = sql_not_opted_out();
-    $reach = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE $inForce AND $nOpt AND ((consent_email = 1 AND email IS NOT NULL AND email <> '') OR ((consent_sms = 1 OR consent_phone = 1) AND phone IS NOT NULL AND phone <> ''))")->fetchColumn();
-    $nForce = max(1, (int)($agg['n'] ?? 0));
-    $periodWord = setting('premium_period', 'monthly') === 'annual' ? 'annual' : 'monthly';
-
-    echo '<div class="kpiGrid kpi5">';
-    echo kpi('Policies in force', number_format((int)($agg['n'] ?? 0)), money_whole($agg['prem'] ?? 0) . ' ' . $periodWord . ' premium');
-    echo kpi('Renewals ≤ 30 days', number_format((int)($due30['n'] ?? 0)), money_whole($due30['prem'] ?? 0) . ' premium at stake', (int)($due30['n'] ?? 0) > 0 ? 'acc' : '');
-    echo kpi('At-risk renewals ≤ 90d', number_format($atRisk), 'High or Review tier', $atRisk > 0 ? 'warn' : '');
-    echo kpi('Contactable', (string)round($reach * 100 / $nForce) . '%', number_format($reach) . ' with consent, not opted out');
-    echo kpi('Avg lifetime value', money_whole($agg['ltv'] ?? null), 'per in-force policy');
+    // KPI row
+    $r90 = $pdo->query("SELECT COUNT(*) AS n, COALESCE(SUM(premium_amount),0) AS p, SUM(CASE WHEN risk_tier IN ('High','Review') THEN 1 ELSE 0 END) AS risk FROM policyholders WHERE $open AND $days BETWEEN 0 AND 90")->fetch() ?: [];
+    $hh = $pdo->query("SELECT COUNT(*) AS hh, SUM(CASE WHEN c = 1 THEN 1 ELSE 0 END) AS mono, SUM(c) AS pol FROM (SELECT COALESCE(NULLIF(household_id,''), 'solo:' || id) AS hk, COUNT(*) AS c FROM policyholders WHERE $inForce GROUP BY hk)")->fetch() ?: [];
+    $agg = $pdo->query("SELECT AVG(ltv_estimate) AS ltv FROM policyholders WHERE $inForce AND ltv_estimate IS NOT NULL")->fetch() ?: [];
+    $conf = (int)round((float)$pdo->query('SELECT AVG(confidence_score) FROM policyholders')->fetchColumn());
+    $imputed = (int)$pdo->query('SELECT COUNT(*) FROM policyholders WHERE is_imputed = 1')->fetchColumn();
+    $hhN = (int)($hh['hh'] ?? 0);
+    echo '<div class="kpiRow">';
+    echo kpi_card('Renewals · next 90 days', number_format((int)($r90['n'] ?? 0)), money_whole(annual_premium((float)($r90['p'] ?? 0))) . ' annual premium');
+    echo kpi_card('At-risk renewals', number_format((int)($r90['risk'] ?? 0)), 'High or Review retention risk', (int)($r90['risk'] ?? 0) > 0 ? 'bad' : '');
+    echo kpi_card('Policies per household', $hhN > 0 ? number_format((int)($hh['pol'] ?? 0) / $hhN, 2) : '—', number_format((int)($hh['mono'] ?? 0)) . ' of ' . number_format($hhN) . ' households are monoline');
+    echo kpi_card('Average LTV', money_whole($agg['ltv'] ?? null), 'premium × remaining term × retention');
+    echo kpi_card('Data confidence', (string)$conf, number_format($imputed) . ' records with imputed fields', '', $imputed > 0 ? 'warn' : '');
     echo '</div>';
 
-    // Worklist
-    $st = $pdo->prepare("SELECT id, policy_number, name, policy_type, line_of_business, expiration_date, premium_amount, risk_tier, renewal_status, renewal_owner, $days AS d FROM policyholders WHERE expiration_date IS NOT NULL AND $days BETWEEN 0 AND ? AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND $inForce ORDER BY expiration_date ASC, id ASC LIMIT 12");
-    $st->execute([$win]);
-    $work = $st->fetchAll();
-    $cnt = $pdo->prepare("SELECT COUNT(*) FROM policyholders WHERE expiration_date IS NOT NULL AND $days BETWEEN 0 AND ? AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND $inForce");
-    $cnt->execute([$win]);
-    $workTotal = (int)$cnt->fetchColumn();
-
-    echo '<div class="card"><div class="cardHead"><div><div class="h2">Renewal worklist</div><div class="muted">Open renewals expiring in the next ' . h((string)$win) . ' days, soonest first. Touchpoints follow your cadence (' . h(implode(' / ', renewal_cadence())) . ' days).</div></div>';
-    echo '<div class="chips">';
-    foreach ([30, 60, 90, 120] as $w) {
-        echo chip_link($w . ' days', ['tab' => 'dashboard', 'win' => (string)$w], $w === $win);
+    // Worklist buckets
+    $buckets = ['30' => [0, 30, '≤ 30 days'], '60' => [31, 60, '31–60'], '90' => [61, 90, '61–90'], '120' => [91, 120, '91–120']];
+    $w = (string)($_GET['w'] ?? '30');
+    if (!isset($buckets[$w])) {
+        $w = '30';
     }
-    echo '</div></div>';
-    echo '<div class="scrollX"><table class="table"><thead><tr><th>' . h(lbl('policy')) . '</th><th>' . h(lbl('client')) . '</th><th>' . h(lbl('policy_type')) . '</th><th>Expires</th><th>Next touch</th><th class="right">Premium</th><th>Tier</th><th>Stage</th><th>Owner</th><th></th></tr></thead><tbody>';
+    $bc = $pdo->query("SELECT SUM(CASE WHEN $days BETWEEN 0 AND 30 THEN 1 ELSE 0 END) AS b30, SUM(CASE WHEN $days BETWEEN 31 AND 60 THEN 1 ELSE 0 END) AS b60, SUM(CASE WHEN $days BETWEEN 61 AND 90 THEN 1 ELSE 0 END) AS b90, SUM(CASE WHEN $days BETWEEN 91 AND 120 THEN 1 ELSE 0 END) AS b120 FROM policyholders WHERE $open")->fetch() ?: [];
+    [$lo, $hi] = $buckets[$w];
+    $st = $pdo->prepare("SELECT id, policy_number, name, policy_type, line_of_business, expiration_date, premium_amount, prior_premium, risk_tier, renewal_status, renewal_owner, producer, $days AS d FROM policyholders WHERE $open AND $days BETWEEN ? AND ? ORDER BY d ASC, " . sql_risk_rank() . ', id ASC LIMIT 7');
+    $st->execute([$lo, $hi]);
+    $work = $st->fetchAll();
+    $inBucket = (int)($bc['b' . $w] ?? 0);
+
+    echo '<div class="todayGrid"><div class="card cardFlush">';
+    echo '<div class="cardHeadPad"><div><div class="h2">Renewal worklist</div><div class="muted">Sorted by days to expiry, then retention risk</div></div><nav class="seg" aria-label="Renewal window">';
+    foreach ($buckets as $k => [, , $label]) {
+        $k = (string)$k;
+        echo '<a class="' . ($k === $w ? 'on' : '') . '" href="' . h(tab_url('dashboard', ['w' => $k !== '30' ? $k : null])) . '"' . ($k === $w ? ' aria-current="true"' : '') . '>' . h($label) . '<b>' . h(number_format((int)($bc['b' . $k] ?? 0))) . '</b></a>';
+    }
+    echo '</nav></div>';
+    echo '<div class="scrollX"><table class="t2 dense"><thead><tr><th>Insured</th><th>' . h(lbl('policy')) . '</th><th>' . h(lbl('policy_type')) . '</th><th>Expires</th><th>Change</th><th>Risk</th><th>Owner</th><th>Status</th></tr></thead><tbody>';
     foreach ($work as $r) {
         $d = (int)$r['d'];
-        $touch = next_touch($d, (string)$r['expiration_date']);
-        echo '<tr><td class="mono">' . h((string)$r['policy_number']) . '</td><td>' . h(mask_name((string)$r['name'])) . '</td><td>' . h((string)($r['line_of_business'] ?: $r['policy_type'] ?: '—')) . '</td>';
-        echo '<td><span class="' . ($d <= 15 ? 'due' : '') . '">' . h(fmt_date((string)$r['expiration_date'])) . '</span> <span class="muted tiny">' . h(days_label($d)) . '</span></td>';
-        echo '<td class="' . ($touch['due'] ? 'due' : 'muted') . '">' . h($touch['label']) . '</td>';
-        echo '<td class="right">' . h(money_or_blank($r['premium_amount'] ?? null)) . '</td><td>' . tier_badge((string)($r['risk_tier'] ?? '')) . '</td><td>' . renewal_status_pill($r['renewal_status'] ?? null) . '</td><td>' . h((string)($r['renewal_owner'] ?: '—')) . '</td>';
-        echo '<td><a class="link" href="' . h(self_url(['tab' => 'profiles', 'id' => (string)$r['id'], 'win' => null])) . '">Open</a></td></tr>';
+        $url = tab_url('profiles', ['id' => (string)$r['id']]);
+        $assigned = trim((string)($r['renewal_owner'] ?? '')) !== '';
+        $chg = premium_change_html($r['premium_amount'] ?? null, $r['prior_premium'] ?? null);
+        echo '<tr class="rowLink" data-href="' . h($url) . '"><td><a class="ins" href="' . h($url) . '">' . h(mask_name((string)$r['name']) ?: (string)$r['policy_number']) . '</a></td><td class="mono">' . h((string)$r['policy_number']) . '</td><td>' . h((string)($r['line_of_business'] ?: $r['policy_type'] ?: '—')) . '</td>';
+        echo '<td>' . h(date_dmy((string)$r['expiration_date'])) . '<span class="sub' . ($d <= 15 ? ' due' : '') . '">' . h(days_words($d)) . '</span></td>';
+        echo '<td>' . ($chg !== '' ? trim($chg) : '<span class="muted">—</span>') . '</td>';
+        echo '<td>' . risk_pill((string)($r['risk_tier'] ?? '')) . '</td><td>' . owner_avatar($assigned ? (string)$r['renewal_owner'] : (string)($r['producer'] ?? ''), $assigned) . '</td><td>' . status_pill($r['renewal_status'] ?? null) . '</td></tr>';
     }
     if (!$work) {
         $noDates = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE expiration_date IS NULL OR expiration_date = ''")->fetchColumn();
-        echo '<tr><td colspan="10" class="muted">' . h($noDates === $total ? 'No expiration dates yet. Map an expiration or effective date column on import to fill this worklist.' : 'Nothing open in this window.') . '</td></tr>';
+        echo '<tr><td colspan="8" class="empty">' . h($noDates === $total ? 'No expiration dates yet. Map an expiration or effective date column on import to fill this worklist.' : 'Nothing open in this window.') . '</td></tr>';
     }
     echo '</tbody></table></div>';
-    echo '<div class="actionsRow"><a class="btnSecondary" href="' . h(self_url(['tab' => 'renewals', 'win' => (string)max(90, $win)])) . '">Open renewal board' . ($workTotal > count($work) ? ' (' . h((string)$workTotal) . ' in window)' : '') . '</a></div>';
+    echo '<div class="cardFoot"><span>Showing ' . h((string)count($work)) . ' of ' . h(number_format($inBucket)) . ' · Change = renewal premium vs last term; ≥ 10% suggests remarketing</span><a class="linkStrong" href="' . h(tab_url('renewals')) . '">Open Renewals →</a></div>';
     echo '</div>';
 
-    echo '<div class="grid2">';
-    // Opportunities
-    echo '<div class="card"><div class="h2">Opportunities</div>';
+    echo '<div class="stack">';
+    render_today_opportunities($pdo);
+    render_today_health($pdo, $imputed, $total);
+    render_today_consent($pdo);
+    echo '</div></div>';
+}
+
+function kpi_card(string $label, string $value, string $sub, string $valueTone = '', string $subTone = ''): string
+{
+    return '<div class="kpiCard"><div class="l">' . h($label) . '</div><div class="n' . ($valueTone !== '' ? ' ' . h($valueTone) : '') . '">' . h($value) . '</div><div class="s' . ($subTone !== '' ? ' ' . h($subTone) : '') . '">' . h($sub) . '</div></div>';
+}
+
+function date_dmy(string $date): string
+{
+    if (trim($date) === '') {
+        return '—';
+    }
+    $ts = strtotime(substr($date, 0, 10) . ' UTC');
+    return $ts ? gmdate('j M Y', $ts) : $date;
+}
+
+function days_words(?int $d): string
+{
+    if ($d === null) {
+        return '—';
+    }
+    if ($d < 0) {
+        return abs($d) . (abs($d) === 1 ? ' day' : ' days') . ' overdue';
+    }
+    if ($d === 0) {
+        return 'today';
+    }
+    return 'in ' . $d . ($d === 1 ? ' day' : ' days');
+}
+
+function opp_icon(string $kind): string
+{
+    $p = [
+        'stack' => '<rect x="2.5" y="5" width="7" height="7" rx="1"/><rect x="6.5" y="3" width="7" height="7" rx="1"/>',
+        'filter' => '<path d="M2.5 4h11M4.5 8h7M6.5 12h3"/>',
+        'star' => '<path d="M8 2.2l1.8 3.7 4 .6-2.9 2.8.7 4L8 11.4l-3.6 1.9.7-4-2.9-2.8 4-.6z"/>',
+        'up' => '<path d="M2.5 11.5l4-4 3 3 4-5"/><path d="M10 5.5h3.5V9"/>',
+    ];
+    return '<span class="oppIc"><svg viewBox="0 0 16 16" aria-hidden="true">' . ($p[$kind] ?? '') . '</svg></span>';
+}
+
+function render_today_opportunities(PDO $pdo): void
+{
+    $inForce = sql_in_force();
+    $days = sql_days_to_expiry();
+    $rows = [];
     $hhKnown = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE household_id IS NOT NULL AND household_id <> ''")->fetchColumn();
     if ($hhKnown > 0) {
-        $single = $pdo->query("SELECT id, policy_number, name, policy_type, ltv_estimate FROM policyholders p WHERE household_id IS NOT NULL AND household_id <> '' AND $inForce AND (SELECT COUNT(*) FROM policyholders h2 WHERE h2.household_id = p.household_id) = 1 ORDER BY ltv_estimate DESC LIMIT 5")->fetchAll();
-        $singleN = (int)$pdo->query("SELECT COUNT(*) FROM policyholders p WHERE household_id IS NOT NULL AND household_id <> '' AND $inForce AND (SELECT COUNT(*) FROM policyholders h2 WHERE h2.household_id = p.household_id) = 1")->fetchColumn();
-        echo '<div class="subHead"><span>Single-line households</span><span class="muted tiny">' . h(number_format($singleN)) . ' · cross-sell or round out</span></div>';
-        echo '<table class="table compact"><tbody>';
-        foreach ($single as $r) {
-            echo '<tr><td class="mono"><a class="link" href="' . h(self_url(['tab' => 'profiles', 'id' => (string)$r['id']])) . '">' . h((string)$r['policy_number']) . '</a></td><td>' . h(mask_name((string)$r['name'])) . '</td><td>' . h((string)($r['policy_type'] ?? '')) . '</td><td class="right">' . h(money_whole($r['ltv_estimate'] ?? null)) . '</td></tr>';
+        $mono = (int)$pdo->query("SELECT COUNT(*) FROM (SELECT household_id FROM policyholders WHERE household_id IS NOT NULL AND household_id <> '' AND $inForce GROUP BY household_id HAVING COUNT(*) = 1)")->fetchColumn();
+        $rows[] = ['stack', 'Monoline households', 'Households with only one policy: round them out', $mono, 'Build list', tab_url('segments', ['new' => '1', 'preset' => 'single'])];
+    }
+    $seg = $pdo->query('SELECT id, name, rule_ids FROM segments ORDER BY COALESCE(last_run_at, \'\') DESC, id DESC LIMIT 1')->fetch();
+    if ($seg) {
+        $c = safe_json((string)($seg['rule_ids'] ?? ''));
+        $stats = is_array($c['stats'] ?? null) ? (array)$c['stats'] : null;
+        $cnt = $stats ? (int)($stats['count'] ?? 0) : null;
+        if ($cnt === null) {
+            try {
+                [$ruleIds, $where] = segment_criteria($seg);
+                $cnt = (int)segment_stats($pdo, $ruleIds, $where)['count'];
+            } catch (Throwable $e) {
+                $cnt = 0;
+            }
         }
-        if (!$single) {
-            echo '<tr><td class="muted">Every household already holds more than one policy.</td></tr>';
-        }
-        echo '</tbody></table>';
-    } else {
-        echo '<div class="empty">Map a household or customer ID on import to find single-line households to round out.</div>';
+        $desc = is_array($c) && trim((string)($c['description'] ?? '')) !== '' ? (string)$c['description'] : 'Saved list';
+        $rows[] = ['filter', (string)$seg['name'], $desc, $cnt, 'Open', tab_url('segments', ['edit' => (string)$seg['id']])];
     }
-    $jump = $pdo->query("SELECT id, policy_number, name, premium_amount, prior_premium, $days AS d FROM policyholders WHERE prior_premium IS NOT NULL AND prior_premium > 0 AND premium_amount >= prior_premium * 1.10 AND expiration_date IS NOT NULL AND $days BETWEEN 0 AND 120 AND $inForce ORDER BY (premium_amount - prior_premium) DESC LIMIT 5")->fetchAll();
-    echo '<div class="subHead"><span>Premium up 10%+ at renewal</span><span class="muted tiny">remarket before they shop</span></div>';
-    echo '<table class="table compact"><tbody>';
-    foreach ($jump as $r) {
-        $pct = (float)$r['prior_premium'] > 0 ? round(((float)$r['premium_amount'] / (float)$r['prior_premium'] - 1) * 100) : 0;
-        echo '<tr><td class="mono"><a class="link" href="' . h(self_url(['tab' => 'profiles', 'id' => (string)$r['id']])) . '">' . h((string)$r['policy_number']) . '</a></td><td>' . h(mask_name((string)$r['name'])) . '</td><td class="right">+' . h((string)$pct) . '%</td><td class="muted">' . h(days_label((int)$r['d'])) . '</td></tr>';
+    $jump = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE prior_premium IS NOT NULL AND prior_premium > 0 AND premium_amount >= prior_premium * 1.10 AND expiration_date IS NOT NULL AND $days BETWEEN 0 AND 120 AND $inForce")->fetchColumn();
+    if ($jump > 0 || count($rows) < 2) {
+        $rows[] = ['up', 'Premium up 10%+ at renewal', 'Remarket before they shop around', $jump, 'Open', tab_url('renewals', ['chg' => '1'])];
     }
-    if (!$jump) {
-        echo '<tr><td class="muted">No renewal increases detected. Re-import a newer export to compare premiums.</td></tr>';
+    if (count($rows) < 3) {
+        $avg = (float)$pdo->query("SELECT AVG(ltv_estimate) FROM policyholders WHERE $inForce AND ltv_estimate IS NOT NULL")->fetchColumn();
+        $st = $pdo->prepare("SELECT COUNT(*) FROM policyholders WHERE $inForce AND ltv_estimate >= ? AND expiration_date IS NOT NULL AND $days BETWEEN 0 AND 90");
+        $st->execute([$avg * 1.25]);
+        $rows[] = ['star', 'High-LTV renewals due a review', 'LTV 25% above average, renewing in 90 days', (int)$st->fetchColumn(), 'Open', tab_url('profiles', ['view' => 'renewing'])];
     }
-    echo '</tbody></table>';
-    $top = $pdo->query("SELECT id, policy_number, name, region, ltv_estimate, risk_tier FROM policyholders WHERE $inForce ORDER BY ltv_estimate DESC LIMIT 5")->fetchAll();
-    echo '<div class="subHead"><span>Top LTV</span><span class="muted tiny">protect these at renewal</span></div><table class="table compact"><tbody>';
-    foreach ($top as $r) {
-        echo '<tr><td class="mono"><a class="link" href="' . h(self_url(['tab' => 'profiles', 'id' => (string)$r['id']])) . '">' . h((string)$r['policy_number']) . '</a></td><td>' . h(mask_name((string)$r['name'])) . '</td><td>' . h((string)($r['region'] ?? '')) . '</td><td class="right">' . h(money_whole($r['ltv_estimate'] ?? null)) . '</td><td>' . tier_badge((string)($r['risk_tier'] ?? '')) . '</td></tr>';
+    echo '<div class="card cardFlush"><div class="cardHeadPad"><div><div class="h2">Opportunities</div><div class="muted">From your saved and suggested lists</div></div></div>';
+    foreach (array_slice($rows, 0, 3) as [$icon, $title, $desc, $n, $cta, $url]) {
+        echo '<a class="oppRow" href="' . h($url) . '">' . opp_icon($icon) . '<span><strong>' . h($title) . '</strong><span class="muted">' . h($desc) . '</span></span><span class="oppNum"><b>' . h(number_format((int)$n)) . '</b><em>' . h($cta) . '</em></span></a>';
     }
-    echo '</tbody></table></div>';
+    echo '</div>';
+}
 
-    // Health + consent
-    echo '<div class="card"><div class="h2">Data health</div>';
-    $health = [
-        ['Missing expiration date', "expiration_date IS NULL OR expiration_date = ''", 'no_expiry'],
-        ['No email or phone', "(email IS NULL OR email = '') AND (phone IS NULL OR phone = '')", 'no_contact'],
-        ['Has filled-in values', 'is_imputed = 1', 'imputed'],
-        ['Low data confidence (< 60)', 'confidence_score < 60', 'low_conf'],
-        ['Risk tier unknown', "risk_tier IS NULL OR risk_tier = 'Unknown'", 'unknown_tier'],
-    ];
-    echo '<table class="table compact"><tbody>';
-    foreach ($health as [$label, $where, $view]) {
-        $n = (int)$pdo->query('SELECT COUNT(*) FROM policyholders WHERE ' . $where)->fetchColumn();
-        $pct = $total > 0 ? (int)round($n * 100 / $total) : 0;
-        echo '<tr><td>' . h($label) . '</td><td class="meterCell"><span class="meter"><span class="meterFill' . ($pct >= 25 ? ' meterWarn' : '') . '" data-w="' . h((string)$pct) . '"></span></span></td><td class="right">' . h(number_format($n)) . '</td><td class="right">' . ($n > 0 ? '<a class="link" href="' . h(self_url(['tab' => 'profiles', 'view' => $view])) . '">Fix</a>' : '<span class="muted">✓</span>') . '</td></tr>';
+function render_today_health(PDO $pdo, int $imputed, int $total): void
+{
+    $fields = [];
+    try {
+        foreach ($pdo->query("SELECT je.value AS f, COUNT(*) AS c FROM policyholders, json_each(policyholders.metadata, '$.imputed_fields') AS je GROUP BY je.value ORDER BY c DESC LIMIT 5")->fetchAll() as $r) {
+            $fields[(string)$r['f']] = (int)$r['c'];
+        }
+    } catch (Throwable $e) {
+        $fields = [];
     }
-    echo '</tbody></table>';
-    $c = $pdo->query("SELECT SUM(consent_email = 1) AS e, SUM(consent_sms = 1) AS s, SUM(consent_phone = 1) AS p, SUM(CASE WHEN opt_out_at IS NOT NULL AND opt_out_at <> '' THEN 1 ELSE 0 END) AS o, SUM(CASE WHEN consent_email = 0 AND consent_sms = 0 AND consent_phone = 0 THEN 1 ELSE 0 END) AS none FROM policyholders")->fetch() ?: [];
-    echo '<div class="subHead"><span>Consent on file</span><span class="muted tiny">exports and campaign reach respect these</span></div>';
-    echo '<div class="statRow">';
-    foreach ([['Email', $c['e'] ?? 0], ['SMS', $c['s'] ?? 0], ['Calls', $c['p'] ?? 0], ['Opted out', $c['o'] ?? 0], ['None recorded', $c['none'] ?? 0]] as [$l, $v]) {
-        echo '<div class="stat"><div class="statValue">' . h(number_format((int)$v)) . '</div><div class="statLabel">' . h($l) . '</div></div>';
+    $noExpiry = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE expiration_date IS NULL OR expiration_date = ''")->fetchColumn();
+    if ($noExpiry > 0) {
+        $fields = ['expiration_date' => $noExpiry] + $fields;
+    }
+    echo '<div class="card cardFlush"><div class="cardHeadPad"><div><div class="h2">Data health</div><div class="muted">' . h($imputed > 0 ? number_format($imputed) . ' records have imputed fields' : 'Every scoring field came from your file') . '</div></div><a class="btnSecondary" href="' . h(tab_url('profiles', ['view' => 'issues'])) . '">Fix queue</a></div>';
+    if ($fields) {
+        echo '<div class="hbars">';
+        foreach (array_slice($fields, 0, 5, true) as $f => $c) {
+            $pct = $total > 0 ? (int)round($c * 100 / $total) : 0;
+            echo '<div class="hbar" title="' . h(number_format($c) . ' of ' . number_format($total) . ($f === 'expiration_date' ? ' records have no expiration date' : ' records had ' . $f . ' filled in from book averages')) . '"><span>' . h($f) . '</span><i><b data-w="' . h((string)max(2, $pct)) . '"></b></i><strong>' . h(number_format($c)) . '</strong></div>';
+        }
+        echo '</div>';
+    } else {
+        echo '<div class="pad muted">No gaps found. Re-imports keep it that way by updating records in place.</div>';
     }
     echo '</div>';
-    $dist = $pdo->query("SELECT COALESCE(risk_tier,'Unknown') AS tier, COUNT(*) AS c FROM policyholders GROUP BY tier ORDER BY c DESC")->fetchAll();
-    echo '<div class="subHead"><span>Risk tier distribution</span></div><table class="table compact"><tbody>';
-    foreach ($dist as $r) {
-        $pct = $total > 0 ? (int)round((int)$r['c'] * 100 / $total) : 0;
-        echo '<tr><td>' . tier_badge((string)$r['tier']) . '</td><td class="meterCell"><span class="meter"><span class="meterFill" data-w="' . h((string)$pct) . '"></span></span></td><td class="right">' . h((string)$r['c']) . '</td></tr>';
+}
+
+function render_today_consent(PDO $pdo): void
+{
+    $inForce = sql_in_force();
+    $nOpt = sql_not_opted_out();
+    $c = $pdo->query("SELECT SUM(CASE WHEN consent_phone = 1 AND phone IS NOT NULL AND phone <> '' AND $nOpt THEN 1 ELSE 0 END) AS p, SUM(CASE WHEN consent_sms = 1 AND phone IS NOT NULL AND phone <> '' AND $nOpt THEN 1 ELSE 0 END) AS s, SUM(CASE WHEN consent_email = 1 AND email IS NOT NULL AND email <> '' AND $nOpt THEN 1 ELSE 0 END) AS e, SUM(CASE WHEN NOT $nOpt THEN 1 ELSE 0 END) AS o, SUM(CASE WHEN $nOpt AND COALESCE(consent_email,0) = 0 AND COALESCE(consent_sms,0) = 0 AND COALESCE(consent_phone,0) = 0 THEN 1 ELSE 0 END) AS none FROM policyholders WHERE $inForce")->fetch() ?: [];
+    $recent = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE opt_out_at IS NOT NULL AND opt_out_at <> '' AND opt_out_at >= '" . gmdate('Y-m-d', time() - 14 * 86400) . "'")->fetchColumn();
+    echo '<div class="card cardFlush"><div class="cardHeadPad"><div><div class="h2">Consent &amp; opt-outs</div><div class="muted">Phone and text exports respect these automatically</div></div></div><ul class="dots">';
+    if ($recent > 0) {
+        echo '<li class="warn">' . h(number_format($recent)) . ' opt-out' . ($recent === 1 ? '' : 's') . ' in the last 14 days: honour them within 10 business days</li>';
     }
-    echo '</tbody></table></div>';
-    echo '</div>';
+    if ((int)($c['o'] ?? 0) > 0) {
+        echo '<li class="warn">' . h(number_format((int)$c['o'])) . ' opted out of all contact: left out of every export</li>';
+    }
+    if ((int)($c['none'] ?? 0) > 0) {
+        echo '<li class="warn">' . h(number_format((int)$c['none'])) . ' have no consent recorded on any channel</li>';
+    }
+    echo '<li>' . h(number_format((int)($c['p'] ?? 0))) . ' can be called · ' . h(number_format((int)($c['s'] ?? 0))) . ' texted · ' . h(number_format((int)($c['e'] ?? 0))) . ' emailed</li>';
+    echo '</ul></div>';
 }
 
 function render_first_run_checklist(PDO $pdo, int $total): void
@@ -4894,13 +5494,34 @@ function renewal_filter_hidden(array $keep = ['owner', 'line', 'risk', 'chg']): 
 
 function page_actions(string $tab): string
 {
-    if ($tab !== 'renewals') {
-        return '';
+    $admin = current_is_admin();
+    $out = '';
+    if ($tab === 'renewals') {
+        $out .= '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="renewal_export_ics">' . renewal_filter_hidden() . '<button class="btnSecondary btnLg" type="submit">Calendar feed (.ics)</button></form>'
+            . '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="renewal_export_calls">' . renewal_filter_hidden() . '<button class="btn btnLg" type="submit" title="Only call-consented, not opted-out ' . h(strtolower(lbl('clients'))) . ' with open renewals">Export call list</button></form>';
+    } elseif ($tab === 'dashboard' && $admin) {
+        $out .= '<a class="btnSecondary btnLg" href="' . h(tab_url('import')) . '">Import CSV</a><a class="btn btnLg" href="' . h(tab_url('segments', ['new' => '1'])) . '">New list</a>';
+    } elseif ($tab === 'profiles') {
+        $view = (string)($_GET['view'] ?? '');
+        if ($admin) {
+            $out .= '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="book_export">' . book_filter_hidden() . '<button class="btnSecondary btnLg" type="submit" title="Opted-out records are left out">Export CSV</button></form>';
+            $out .= '<a class="btn btnLg" href="' . h(tab_url('segments', ['new' => '1', 'preset' => $view !== '' ? $view : 'all'])) . '">Save as list</a>';
+        }
+    } elseif ($tab === 'segments' && $admin) {
+        $edit = (int)($_GET['edit'] ?? 0);
+        if ($edit > 0) {
+            $out .= '<a class="btnSecondary btnLg" href="' . h(tab_url('segments', ['dup' => (string)$edit])) . '">Duplicate</a>';
+        }
+        $out .= '<button class="btn btnLg" type="submit" form="listForm" name="action" value="segment_save">Save list</button>';
+    } elseif ($tab === 'campaigns' && $admin) {
+        $out .= '<form method="post" id="campCallForm">' . csrf_field() . '<input type="hidden" name="action" value="export_segment_prepare"><input type="hidden" name="id" value="" data-camp-seg><input type="hidden" name="channel" value="phone" data-camp-ch><button class="btnSecondary btnLg" type="submit" data-camp-export>Export call list</button></form>';
+        $out .= '<button class="btn btnLg" type="submit" form="campaignForm">Save scenario</button>';
+    } elseif ($tab === 'import' && $admin) {
+        $out .= '<a class="btnSecondary btnLg" href="' . h(self_url(['action' => 'download_sample_csv'])) . '">Download sample CSV</a>';
+    } elseif ($tab === 'rules' && $admin) {
+        $out .= '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="export_rules"><button class="btnSecondary btnLg" type="submit">Export rules JSON</button></form><a class="btn btnLg" href="' . h(tab_url('rules')) . '#ruleEditor">New rule</a>';
     }
-    return '<div class="topActions">'
-        . '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="renewal_export_ics">' . renewal_filter_hidden() . '<button class="btnSecondary btnLg" type="submit">Calendar feed (.ics)</button></form>'
-        . '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="renewal_export_calls">' . renewal_filter_hidden() . '<button class="btn btnLg" type="submit" title="Only call-consented, not opted-out ' . h(strtolower(lbl('clients'))) . ' with open renewals">Export call list</button></form>'
-        . '</div>';
+    return $out !== '' ? '<div class="topActions">' . $out . '</div>' : '';
 }
 
 function render_tab_renewals(PDO $pdo): void
@@ -5067,38 +5688,29 @@ function book_views(): array
 {
     $days = sql_days_to_expiry();
     return [
-        '' => ['All', ''],
-        'renewing' => ['Renewing ≤ 90d', "expiration_date IS NOT NULL AND $days BETWEEN 0 AND 90"],
-        'at_risk' => ['High / Review', "risk_tier IN ('High','Review')"],
-        'low_conf' => ['Low confidence', 'confidence_score < 60'],
-        'no_contact' => ['No contact', "(email IS NULL OR email = '') AND (phone IS NULL OR phone = '')"],
-        'no_expiry' => ['No expiry date', "(expiration_date IS NULL OR expiration_date = '')"],
+        '' => ['All policies', ''],
+        'renewing' => ['Renewing ≤ 90 days', "expiration_date IS NOT NULL AND $days BETWEEN 0 AND 90"],
+        'at_risk' => ['High retention risk', "risk_tier IN ('High','Review')"],
+        'issues' => ['Data issues', "(is_imputed = 1 OR confidence_score < 60 OR expiration_date IS NULL OR expiration_date = '')"],
+        'low_conf' => ['Low confidence (< 60)', 'confidence_score < 60'],
+        'no_contact' => ['No email or phone', "(email IS NULL OR email = '') AND (phone IS NULL OR phone = '')"],
+        'no_expiry' => ['No expiration date', "(expiration_date IS NULL OR expiration_date = '')"],
         'imputed' => ['Filled-in values', 'is_imputed = 1'],
         'unknown_tier' => ['Tier unknown', "(risk_tier IS NULL OR risk_tier = 'Unknown')"],
         'opted_out' => ['Opted out', "(opt_out_at IS NOT NULL AND opt_out_at <> '')"],
     ];
 }
 
-function render_tab_profiles(PDO $pdo): void
+function book_filters(): array
 {
-    $q = trim((string)($_GET['q'] ?? ''));
-    $tier = trim((string)($_GET['tier'] ?? ''));
-    $region = trim((string)($_GET['region'] ?? ''));
-    $view = (string)($_GET['view'] ?? '');
     $views = book_views();
+    $view = (string)($_GET['view'] ?? ($_POST['view'] ?? ''));
     if (!isset($views[$view])) {
         $view = '';
     }
-    $page = max(1, (int)($_GET['page'] ?? 1));
-    $limit = 25;
-    $offset = ($page - 1) * $limit;
-    $isAdmin = current_is_admin();
-
-    $openId = (int)($_GET['id'] ?? 0);
-    if ($openId > 0) {
-        render_policy_panel($pdo, $openId);
-    }
-
+    $q = trim((string)($_GET['q'] ?? ($_POST['q'] ?? '')));
+    $tier = trim((string)($_GET['tier'] ?? ($_POST['tier'] ?? '')));
+    $region = trim((string)($_GET['region'] ?? ($_POST['region'] ?? '')));
     $where = [];
     $args = [];
     if ($q !== '') {
@@ -5116,101 +5728,143 @@ function render_tab_profiles(PDO $pdo): void
     if ($view !== '' && $views[$view][1] !== '') {
         $where[] = '(' . $views[$view][1] . ')';
     }
-    $whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
-    $st = $pdo->prepare('SELECT COUNT(*) FROM policyholders ' . $whereSql);
-    $st->execute($args);
-    $total = (int)$st->fetchColumn();
+    return ['view' => $view, 'q' => $q, 'tier' => $tier, 'region' => $region, 'sql' => $where ? implode(' AND ', $where) : '1=1', 'args' => $args];
+}
 
-    $order = $view === 'renewing' ? 'expiration_date ASC, id ASC' : 'id DESC';
-    $st = $pdo->prepare('SELECT id, policy_number, name, age, policy_type, region, premium_amount, tenure_months, sum_assured, ltv_estimate, risk_tier, confidence_score, is_imputed, metadata, expiration_date, renewal_status FROM policyholders ' . $whereSql . ' ORDER BY ' . $order . ' LIMIT ' . (int)$limit . ' OFFSET ' . (int)$offset);
-    $st->execute($args);
+function book_filter_hidden(): string
+{
+    $f = book_filters();
+    $out = '';
+    foreach (['view', 'q', 'tier', 'region'] as $k) {
+        if ($f[$k] !== '') {
+            $out .= '<input type="hidden" name="' . h($k) . '" value="' . h($f[$k]) . '">';
+        }
+    }
+    return $out;
+}
+
+function render_tab_profiles(PDO $pdo): void
+{
+    $f = book_filters();
+    $views = book_views();
+    $view = $f['view'];
+    $page = max(1, (int)($_GET['page'] ?? 1));
+    $limit = 12;
+    $offset = ($page - 1) * $limit;
+    $isAdmin = current_is_admin();
+    $days = sql_days_to_expiry();
+
+    $st = $pdo->prepare('SELECT COUNT(*) FROM policyholders WHERE ' . $f['sql']);
+    $st->execute($f['args']);
+    $total = (int)$st->fetchColumn();
+    $pages = max(1, (int)ceil($total / $limit));
+    if ($page > $pages) {
+        $page = $pages;
+        $offset = ($page - 1) * $limit;
+    }
+    $st = $pdo->prepare("SELECT id, policy_number, name, policy_type, line_of_business, premium_amount, ltv_estimate, risk_tier, confidence_score, expiration_date, renewal_status, status, $days AS d FROM policyholders WHERE " . $f['sql'] . " ORDER BY CASE WHEN expiration_date IS NULL OR expiration_date = '' THEN 1 ELSE 0 END, expiration_date ASC, id ASC LIMIT " . (int)$limit . ' OFFSET ' . (int)$offset);
+    $st->execute($f['args']);
     $rows = $st->fetchAll();
-    $customDefs = $pdo->query('SELECT field_key, label FROM custom_field_defs WHERE enabled = 1 ORDER BY field_key ASC LIMIT 4')->fetchAll();
+    $openId = (int)($_GET['id'] ?? 0);
+    if ($openId <= 0 && $rows) {
+        $openId = (int)$rows[0]['id'];
+    }
     $tiers = $pdo->query("SELECT DISTINCT risk_tier FROM policyholders WHERE risk_tier IS NOT NULL AND risk_tier <> '' ORDER BY risk_tier")->fetchAll(PDO::FETCH_COLUMN);
     $regions = $pdo->query("SELECT DISTINCT region FROM policyholders WHERE region IS NOT NULL AND region <> '' ORDER BY region LIMIT 100")->fetchAll(PDO::FETCH_COLUMN);
+    $keep = ['q' => $f['q'] ?: null, 'tier' => $f['tier'] ?: null, 'region' => $f['region'] ?: null];
 
-    echo '<div class="card"><div class="cardHead"><div><div class="h2">' . h(lbl('clients')) . ' and policies</div><div class="muted">' . h(number_format($total)) . ' match' . ($total === 1 ? 'es' : '') . '. Saved views:</div></div></div>';
-    echo '<div class="chips chipsWrap">';
+    echo '<div class="bookWrap"><div class="bookMain">';
+    echo '<nav class="vtabs" aria-label="Saved views">';
+    $primary = ['', 'renewing', 'at_risk', 'issues'];
+    foreach ($primary as $key) {
+        $n = (int)$pdo->query('SELECT COUNT(*) FROM policyholders' . ($views[$key][1] !== '' ? ' WHERE ' . $views[$key][1] : ''))->fetchColumn();
+        echo '<a class="' . ($key === $view ? 'on' : '') . '" href="' . h(tab_url('profiles', ['view' => $key !== '' ? $key : null] + $keep)) . '"' . ($key === $view ? ' aria-current="page"' : '') . '>' . h($views[$key][0]) . '<b>' . h(number_format($n)) . '</b></a>';
+    }
+    if (!in_array($view, $primary, true)) {
+        echo '<a class="on" aria-current="page" href="' . h(tab_url('profiles', ['view' => $view] + $keep)) . '">' . h($views[$view][0]) . '<b>' . h(number_format($total)) . '</b></a>';
+    }
+    echo '<details><summary>+ More views</summary><div class="pop">';
     foreach ($views as $key => [$label, $sql]) {
-        echo chip_link($label, ['tab' => 'profiles', 'view' => $key !== '' ? $key : null, 'page' => null, 'id' => null], $key === $view);
+        if (in_array($key, $primary, true)) {
+            continue;
+        }
+        $n = (int)$pdo->query('SELECT COUNT(*) FROM policyholders WHERE ' . $sql)->fetchColumn();
+        echo '<a href="' . h(tab_url('profiles', ['view' => $key] + $keep)) . '"><span>' . h($label) . '</span><span class="muted">' . h(number_format($n)) . '</span></a>';
     }
-    echo '</div>';
-    echo '<form method="get" class="filterBar"><input type="hidden" name="tab" value="profiles">' . ($view !== '' ? '<input type="hidden" name="view" value="' . h($view) . '">' : '');
-    echo '<input class="input" name="q" value="' . h($q) . '" placeholder="Policy #, name, household or email" aria-label="Search">';
-    echo '<select class="select" name="tier" aria-label="Risk tier"><option value="">Any tier</option>';
+    echo '</div></details></nav>';
+
+    echo '<div class="fchips">';
+    $base = ['view' => $view !== '' ? $view : null] + $keep;
+    foreach (['q' => 'Search', 'tier' => 'Risk', 'region' => 'Region'] as $k => $label) {
+        if ($f[$k] !== '') {
+            echo '<a class="fchip" href="' . h(tab_url('profiles', [$k => null] + $base)) . '" title="Remove this filter">' . h($label . ': ' . $f[$k]) . '<span aria-hidden="true">×</span></a>';
+        }
+    }
+    echo '<details class="addFilter"><summary>+ Add filter</summary><form method="get" class="pop"><input type="hidden" name="tab" value="profiles">' . ($view !== '' ? '<input type="hidden" name="view" value="' . h($view) . '">' : '');
+    echo '<label class="label" for="bq">Policy #, name, household or email</label><input class="input" id="bq" name="q" value="' . h($f['q']) . '">';
+    echo '<label class="label" for="bt">Risk tier</label><select class="select" id="bt" name="tier"><option value="">Any tier</option>';
     foreach ($tiers as $t) {
-        echo '<option' . ($tier === (string)$t ? ' selected' : '') . '>' . h((string)$t) . '</option>';
+        echo '<option' . ($f['tier'] === (string)$t ? ' selected' : '') . '>' . h((string)$t) . '</option>';
     }
-    echo '</select><select class="select" name="region" aria-label="Region"><option value="">Any region</option>';
+    echo '</select><label class="label" for="br">Region</label><select class="select" id="br" name="region"><option value="">Any region</option>';
     foreach ($regions as $rg) {
-        echo '<option' . ($region === (string)$rg ? ' selected' : '') . '>' . h((string)$rg) . '</option>';
+        echo '<option' . ($f['region'] === (string)$rg ? ' selected' : '') . '>' . h((string)$rg) . '</option>';
     }
-    echo '</select><button class="btnSecondary" type="submit">Filter</button><a class="link" href="' . h(self_url(['tab' => 'profiles', 'q' => null, 'tier' => null, 'region' => null, 'view' => null, 'page' => null, 'id' => null])) . '">Reset</a></form>';
-
-    echo '<div class="muted" id="profileInlineStatus">Showing ' . h((string)count($rows)) . ' of ' . h((string)$total) . '. ' . h($isAdmin ? 'Edit cells directly; LTV, risk tier, confidence, and segments refresh after save.' : 'Read-only for your role. Open a row for details and to log contact.') . '</div>';
-    echo '<input type="hidden" id="profileInlineCsrf" value="' . h(csrf_token()) . '">';
-    echo '<div class="scrollX"><table class="table bookTable"><thead><tr><th>Record / Policy ID</th><th>Display name</th><th>Expires</th><th>Age</th><th>Type</th><th>Region</th><th class="right">Premium</th><th class="right">Tenure</th><th class="right">' . h(lbl('sum_assured')) . '</th><th class="right">LTV</th><th>Tier</th><th class="right">Conf</th><th>Imputed</th>';
-    foreach ($customDefs as $def) {
-        echo '<th>' . h((string)$def['label']) . '</th>';
-    }
-    echo '<th></th></tr></thead><tbody>';
-    foreach ($rows as $r) {
-        $low = (int)$r['confidence_score'] < 60;
-        $meta = safe_json((string)($r['metadata'] ?? '{}'));
-        $custom = is_array($meta['custom_fields'] ?? null) ? (array)$meta['custom_fields'] : [];
-        $policyId = h((string)(int)$r['id']);
-        $isOpen = (int)$r['id'] === $openId;
-        echo '<tr class="' . trim(($low ? 'rowLow' : '') . ($isOpen ? ' rowOpen' : '')) . '">';
-        echo profile_cell_input($r, 'policy_number', (string)$r['policy_number'], 'policy');
-        echo profile_cell_input($r, 'name', $isAdmin ? (string)$r['name'] : mask_name((string)$r['name']), 'name');
-        echo profile_cell_input($r, 'expiration_date', (string)($r['expiration_date'] ?? ''), 'date');
-        echo profile_cell_input($r, 'age', (string)($r['age'] ?? ''), 'num');
-        echo profile_cell_input($r, 'policy_type', (string)($r['policy_type'] ?? ''));
-        echo profile_cell_input($r, 'region', (string)($r['region'] ?? ''));
-        echo profile_cell_input($r, 'premium_amount', (string)($r['premium_amount'] ?? ''), 'num');
-        echo profile_cell_input($r, 'tenure_months', (string)($r['tenure_months'] ?? ''), 'num');
-        echo profile_cell_input($r, 'sum_assured', (string)($r['sum_assured'] ?? ''), 'num');
-        echo '<td class="right" data-derived-field="ltv_estimate" data-policy-id="' . $policyId . '">' . h(money_or_blank($r['ltv_estimate'] ?? null)) . '</td>';
-        echo '<td data-derived-field="risk_tier" data-policy-id="' . $policyId . '">' . h((string)($r['risk_tier'] ?? 'Unknown')) . '</td>';
-        echo '<td class="right" data-derived-field="confidence_score" data-policy-id="' . $policyId . '">' . h((string)($r['confidence_score'] ?? 0)) . '</td>';
-        echo '<td>' . ((int)$r['is_imputed'] === 1 ? '<span class="badge">Yes</span>' : '<span class="badge mutedBadge">No</span>') . '</td>';
-        foreach ($customDefs as $def) {
-            $v = $custom[(string)$def['field_key']] ?? '';
-            echo profile_cell_input($r, 'custom.' . (string)$def['field_key'], is_bool($v) ? ($v ? 'true' : 'false') : (string)$v);
-        }
-        echo '<td><a class="link" href="' . h(self_url(['tab' => 'profiles', 'id' => (string)$r['id']])) . '#panel">Open</a></td>';
-        echo '</tr>';
-    }
-    if (!$rows) {
-        echo '<tr><td colspan="' . h((string)(14 + count($customDefs))) . '" class="muted">No policyholders found.</td></tr>';
-    }
-    echo '</tbody></table></div>';
-
-    $pages = (int)ceil(max(1, $total) / $limit);
-    if ($pages > 1) {
-        echo '<nav class="pager" aria-label="Pages">';
-        $from = max(1, $page - 4);
-        $to = min($pages, $from + 9);
-        if ($from > 1) {
-            echo '<a class="pagerOff" href="' . h(self_url(['tab' => 'profiles', 'page' => '1'])) . '">1</a><span class="muted">…</span>';
-        }
-        for ($i = $from; $i <= $to; $i++) {
-            echo '<a class="' . ($i === $page ? 'pagerOn' : 'pagerOff') . '" href="' . h(self_url(['tab' => 'profiles', 'page' => (string)$i])) . '">' . h((string)$i) . '</a>';
-        }
-        if ($to < $pages) {
-            echo '<span class="muted">…</span><a class="pagerOff" href="' . h(self_url(['tab' => 'profiles', 'page' => (string)$pages])) . '">' . h((string)$pages) . '</a>';
-        }
-        echo '</nav>';
-    }
-    echo '</div>';
+    echo '</select><button class="btn" type="submit">Apply</button></form></details>';
+    echo '<span class="fcount">' . h(number_format($total)) . ' result' . ($total === 1 ? '' : 's') . ' · sorted by expiry</span></div>';
 
     if ($isAdmin) {
-        echo '<div class="card"><div class="h2">Repair (bulk fill)</div><div class="muted">Bulk-fill missing fields.</div>';
+        echo '<form method="post" id="bulkForm" class="bulkBar" hidden>' . csrf_field() . '<input type="hidden" name="action" value="bulk_update">' . book_filter_hidden();
+        echo '<strong data-bulk-count>0 selected</strong>';
+        echo '<select name="bulk_status" aria-label="Set renewal status" data-autosubmit><option value="">Set renewal status…</option>';
+        foreach (renewal_statuses() as $k => $l) {
+            echo '<option value="' . h($k) . '">' . h($l) . '</option>';
+        }
+        echo '</select><input name="bulk_owner" maxlength="120" placeholder="Assign owner…" aria-label="Owner"><button type="submit" name="op" value="owner">Assign</button><button type="submit" name="op" value="export">Export</button><button class="bulkClear" type="button" data-bulk-clear>Clear</button></form>';
+    }
+    echo '<input type="hidden" id="profileInlineCsrf" value="' . h(csrf_token()) . '">';
+    echo '<div class="card cardFlush"><div class="scrollX"><table class="t2 dense"><thead><tr>' . ($isAdmin ? '<th class="ck"><input type="checkbox" data-bulk-all aria-label="Select every policy on this page"></th>' : '') . '<th>Insured</th><th>' . h(lbl('policy')) . '</th><th>' . h(lbl('policy_type')) . '</th><th class="r">Premium/mo</th><th class="r">LTV</th><th>Risk</th><th>Confidence</th><th>Expires</th></tr></thead><tbody>';
+    $period = setting('premium_period', 'monthly');
+    foreach ($rows as $r) {
+        $id = (int)$r['id'];
+        $url = tab_url('profiles', ['id' => (string)$id, 'view' => $view !== '' ? $view : null, 'page' => $page > 1 ? (string)$page : null] + $keep);
+        $d = $r['d'] !== null ? (int)$r['d'] : null;
+        $hot = $d !== null && $d <= 15 && $d >= -30 && !in_array((string)$r['renewal_status'], ['renewed', 'lost'], true);
+        $c = (int)($r['confidence_score'] ?? 0);
+        $prem = $r['premium_amount'] === null || $r['premium_amount'] === '' ? null : ($period === 'annual' ? (float)$r['premium_amount'] / 12 : (float)$r['premium_amount']);
+        echo '<tr class="rowLink' . ($id === $openId ? ' rowOpen' : '') . '" data-href="' . h($url) . '">';
+        if ($isAdmin) {
+            echo '<td class="ck"><input type="checkbox" name="ids[]" value="' . h((string)$id) . '" form="bulkForm" data-bulk-pick aria-label="Select ' . h((string)$r['policy_number']) . '"></td>';
+        }
+        echo '<td><a class="ins" href="' . h($url) . '">' . h(mask_name((string)$r['name']) ?: (string)$r['policy_number']) . '</a></td><td class="mono">' . h((string)$r['policy_number']) . '</td><td>' . h((string)($r['line_of_business'] ?: $r['policy_type'] ?: '—')) . '</td>';
+        echo '<td class="r">' . h($prem === null ? '—' : money_or_blank($prem)) . '</td><td class="r"><strong data-derived-field="ltv_estimate" data-policy-id="' . h((string)$id) . '">' . h(money_whole($r['ltv_estimate'] ?? null)) . '</strong></td>';
+        echo '<td>' . risk_pill((string)($r['risk_tier'] ?? '')) . '</td><td><span class="conf' . ($c < 80 ? ' mid' : '') . '"><span class="trk"><i data-w="' . h((string)$c) . '"></i></span><b>' . h((string)$c) . '</b></span></td>';
+        echo '<td class="' . ($hot ? 'due' : '') . '">' . h(date_dmy((string)($r['expiration_date'] ?? ''))) . '</td></tr>';
+    }
+    if (!$rows) {
+        echo '<tr><td colspan="9" class="empty">No ' . h(strtolower(lbl('clients'))) . ' match these filters.</td></tr>';
+    }
+    echo '</tbody></table></div>';
+    $from = $total ? $offset + 1 : 0;
+    echo '<div class="cardFoot"><span>' . h(number_format($from) . '–' . number_format($offset + count($rows)) . ' of ' . number_format($total)) . '</span><span class="pager2">';
+    echo '<a class="linkStrong' . ($page <= 1 ? ' off' : '') . '" href="' . h(tab_url('profiles', ['page' => $page > 2 ? (string)($page - 1) : null, 'view' => $view !== '' ? $view : null] + $keep)) . '">← Previous</a>';
+    echo '<a class="linkStrong' . ($page >= $pages ? ' off' : '') . '" href="' . h(tab_url('profiles', ['page' => (string)min($pages, $page + 1), 'view' => $view !== '' ? $view : null] + $keep)) . '">Next page →</a></span></div></div>';
+    echo '<div class="muted tiny" id="profileInlineStatus">' . h($isAdmin ? 'Select rows to change status, assign an owner or export. Open a policy and choose Edit to change its fields; LTV, tier and confidence rescore on save.' : 'Read-only for your role. Open a policy for details and to log contact.') . '</div>';
+
+    if ($isAdmin) {
+        echo '<details class="card"><summary class="h2">Bulk fill missing fields</summary>';
         echo '<form method="post" class="form">' . csrf_field() . '<input type="hidden" name="action" value="repair_apply">';
         echo '<div class="grid2"><div><label class="label">Set region where missing</label><input class="input" name="set_region" maxlength="80" placeholder="Unknown"></div>';
-        echo '<div><label class="label">Set policy_type where missing</label><input class="input" name="set_policy_type" maxlength="80" placeholder="term"></div></div>';
-        echo '<div><button class="btnSecondary" type="submit">Apply repair</button></div></form></div>';
+        echo '<div><label class="label">Set ' . h(strtolower(lbl('policy_type'))) . ' where missing</label><input class="input" name="set_policy_type" maxlength="80" placeholder="term"></div></div>';
+        echo '<div><button class="btnSecondary" type="submit">Apply repair</button></div></form></details>';
     }
+    echo '</div><aside class="bookPanel" aria-label="Policy detail">';
+    if ($openId > 0) {
+        render_policy_panel($pdo, $openId);
+    } else {
+        echo '<div class="pSec"><div class="muted">Select a policy to see why it was scored the way it was.</div></div>';
+    }
+    echo '</aside></div>';
 }
 
 function render_policy_panel(PDO $pdo, int $id): void
@@ -5219,9 +5873,10 @@ function render_policy_panel(PDO $pdo, int $id): void
     $st->execute([$id]);
     $ph = $st->fetch();
     if (!$ph) {
-        echo '<div class="card"><div class="muted">That record no longer exists.</div></div>';
+        echo '<div class="pSec"><div class="muted">That record no longer exists.</div></div>';
         return;
     }
+    $isAdmin = current_is_admin();
     $rec = policyholder_record_from_row($ph);
     $meta = safe_json((string)($ph['metadata'] ?? '{}'));
     $meta = is_array($meta) ? $meta : [];
@@ -5230,130 +5885,242 @@ function render_policy_panel(PDO $pdo, int $id): void
     $tierRule = (int)($meta['tier_rule_id'] ?? 0);
     $revealed = pii_revealed($id);
     $d = $rec['days_to_expiry'];
-    $closeUrl = self_url(['tab' => 'profiles', 'id' => null]);
+    $tier = $rec['risk_tier'] !== '' ? $rec['risk_tier'] : 'Unknown';
+    $editing = $isAdmin && (string)($_GET['pedit'] ?? '') === '1';
+    $line = (string)($rec['line_of_business'] !== '' ? $rec['line_of_business'] : $rec['policy_type']);
 
-    echo '<section class="card panel" id="panel" aria-label="Policy detail">';
-    echo '<div class="panelHead"><div><div class="panelTitle"><span class="mono">' . h($rec['policy_number']) . '</span>' . tier_badge($rec['risk_tier']) . renewal_status_pill($rec['renewal_status']) . ($rec['status'] !== '' ? '<span class="pill">' . h(ucfirst($rec['status'])) . '</span>' : '') . '</div>';
-    echo '<div class="panelName">' . h($revealed ? $rec['name'] : mask_name($rec['name'])) . '</div></div>';
-    echo '<div class="actionsRow">';
+    // Head
+    echo '<div class="pSec" id="panel"><div class="pName"><h2>' . h($revealed ? $rec['name'] : (mask_name($rec['name']) ?: $rec['policy_number'])) . '</h2>';
     if (!$revealed) {
-        echo '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="reveal_pii"><input type="hidden" name="id" value="' . h((string)$id) . '"><button class="btnSecondary btnSm" type="submit">Reveal name &amp; contact</button></form>';
+        echo '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="reveal_pii"><input type="hidden" name="id" value="' . h((string)$id) . '"><button class="revealBtn" type="submit" title="Revealing is recorded in the audit log"><svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5.2" width="8" height="5.3" rx="1"/><path d="M4 5.2V3.8a2 2 0 014 0v1.4"/></svg>Reveal name</button></form>';
+    } else {
+        echo '<span class="muted tiny">Revealed · logged</span>';
     }
-    echo '<a class="btnGhost btnSm" href="' . h($closeUrl) . '">Close</a></div></div>';
-    if (!$revealed) {
-        echo '<div class="muted tiny">Personal details are masked. Revealing is recorded in the audit log.</div>';
-    }
-
-    echo '<div class="grid3 panelGrid">';
-    echo '<div><div class="label">' . h(lbl('client')) . '</div><dl class="kv">';
-    echo '<dt>Household</dt><dd>' . ($rec['household_id'] !== '' ? '<a class="link" href="' . h(self_url(['tab' => 'profiles', 'q' => $rec['household_id'], 'id' => null, 'view' => null])) . '">' . h($rec['household_id']) . '</a> · ' . h((string)$rec['policies_in_household']) . ' polic' . ($rec['policies_in_household'] === 1 ? 'y' : 'ies') : '—') . '</dd>';
-    echo '<dt>Email</dt><dd>' . h($rec['email'] !== '' ? ($revealed ? $rec['email'] : mask_email($rec['email'])) : '—') . '</dd>';
-    echo '<dt>Phone</dt><dd>' . h($rec['phone'] !== '' ? ($revealed ? $rec['phone'] : mask_phone($rec['phone'])) : '—') . '</dd>';
-    echo '<dt>Age</dt><dd>' . h($rec['age'] !== null ? (string)$rec['age'] : '—') . '</dd>';
-    echo '<dt>Region</dt><dd>' . h($rec['region'] !== '' ? $rec['region'] : '—') . '</dd></dl>';
-    echo '<form method="post" class="consentForm">' . csrf_field() . '<input type="hidden" name="action" value="consent_update"><input type="hidden" name="id" value="' . h((string)$id) . '">';
-    echo '<div class="label">Consent</div><div class="checkRow">';
-    foreach (['consent_email' => 'Email', 'consent_sms' => 'SMS', 'consent_phone' => 'Calls'] as $k => $l) {
-        echo '<label class="check"><input type="checkbox" name="' . h($k) . '" value="1"' . ((int)$rec[$k] === 1 ? ' checked' : '') . '> ' . h($l) . '</label>';
-    }
-    echo '<label class="check"><input type="checkbox" name="opted_out" value="1"' . ($rec['opted_out'] === 1 ? ' checked' : '') . '> Opted out of all</label></div>';
-    echo '<button class="btnSecondary btnSm" type="submit">Save consent</button></form></div>';
-
-    echo '<div><div class="label">' . h(lbl('policy')) . '</div><dl class="kv">';
-    $lineLabel = implode(' · ', array_filter([$rec['line_of_business'], $rec['policy_type']], fn($x) => $x !== ''));
-    echo '<dt>' . h(lbl('policy_type')) . '</dt><dd>' . h($lineLabel !== '' ? $lineLabel : '—') . '</dd>';
-    echo '<dt>Carrier</dt><dd>' . h($rec['carrier'] !== '' ? $rec['carrier'] : '—') . '</dd>';
-    echo '<dt>' . h(lbl('producer')) . '</dt><dd>' . h($rec['producer'] !== '' ? $rec['producer'] : '—') . '</dd>';
-    echo '<dt>Term</dt><dd>' . h(fmt_date($rec['effective_date'])) . ' → ' . h(fmt_date($rec['expiration_date'])) . ($d !== null ? ' <span class="' . ($d <= 15 ? 'due' : 'muted') . '">' . h(days_label($d)) . '</span>' : '') . '</dd>';
-    $prem = money_or_blank($rec['premium_amount']);
-    if ($rec['prior_premium'] !== null && $rec['premium_amount'] !== null && (float)$rec['prior_premium'] > 0) {
-        $pct = round(((float)$rec['premium_amount'] / (float)$rec['prior_premium'] - 1) * 100);
-        $prem .= ' (was ' . money_or_blank($rec['prior_premium']) . ', ' . ($pct >= 0 ? '+' : '') . $pct . '%)';
-    }
-    echo '<dt>Premium</dt><dd>' . h($prem !== '' ? $prem : '—') . '</dd>';
-    echo '<dt>' . h(lbl('sum_assured')) . '</dt><dd>' . h(money_or_blank($rec['sum_assured']) ?: '—') . '</dd>';
-    echo '<dt>Tenure</dt><dd>' . h($rec['tenure_months'] !== null ? $rec['tenure_months'] . ' months' : '—') . '</dd></dl></div>';
-
-    $touch = next_touch($d, $rec['expiration_date']);
-    echo '<div><div class="label">Renewal</div><dl class="kv"><dt>Next touch</dt><dd class="' . ($touch['due'] ? 'due' : '') . '">' . h($touch['label']) . '</dd><dt>Last contact</dt><dd>' . h($ph['last_contacted_at'] ? fmt_date((string)$ph['last_contacted_at']) : 'never') . '</dd></dl>';
-    echo '<form method="post" class="form formTight">' . csrf_field() . '<input type="hidden" name="action" value="renewal_update"><input type="hidden" name="id" value="' . h((string)$id) . '">';
-    echo '<label class="label" for="rs">Stage</label><select class="select" id="rs" name="renewal_status">';
-    foreach (renewal_statuses() as $k => $l) {
-        echo '<option value="' . h($k) . '"' . ($k === $rec['renewal_status'] ? ' selected' : '') . '>' . h($l) . '</option>';
-    }
-    echo '</select><label class="label" for="ro">Owner</label><input class="input" id="ro" name="renewal_owner" maxlength="120" value="' . h($rec['renewal_owner']) . '" placeholder="Who is working this renewal">';
-    echo '<div><button class="btnSecondary btnSm" type="submit">Save renewal</button></div></form></div>';
     echo '</div>';
+    $since = $rec['effective_date'] !== '' ? strtotime(substr($rec['effective_date'], 0, 10) . ' UTC') : false;
+    echo '<div class="pMeta">' . h(implode(' · ', array_filter([$rec['policy_number'], $line, $rec['region'], $rec['carrier'], $since ? 'effective ' . gmdate('M Y', $since) : '']))) . '</div>';
+    $tags = is_array($meta['tags'] ?? null) ? (array)$meta['tags'] : [];
+    echo '<div class="pChips"><span data-derived-field="risk_tier" data-policy-id="' . h((string)$id) . '" hidden>' . h($tier) . '</span>' . risk_pill($tier) . implode('', array_map(fn($t) => '<span class="tagChip">' . h((string)$t) . '</span>', $tags)) . status_pill($rec['renewal_status']) . ($rec['opted_out'] === 1 ? '<span class="pill st-lost">Opted out</span>' : '') . '</div></div>';
 
-    // Why this score
+    // Why this tier
     $rulesById = [];
     foreach (load_rules_all($pdo) as $r) {
         $rulesById[(int)$r['id']] = $r;
     }
-    echo '<div class="whyGrid">';
-    echo '<div class="whyBox"><div class="whyTitle">Why ' . h($rec['risk_tier'] !== '' ? $rec['risk_tier'] : 'Unknown') . '</div>';
-    if ($hitIds) {
-        echo '<ol class="whyList">';
-        foreach ($hitIds as $rid) {
-            $r = $rulesById[$rid] ?? null;
-            $name = $r ? (string)$r['name'] : ('Rule #' . $rid . ' (deleted)');
-            echo '<li' . ($rid === $tierRule ? ' class="whySet"' : '') . '><div><strong>' . h($name) . '</strong>' . ($rid === $tierRule ? ' <span class="note">set the tier</span>' : '') . '</div>';
-            if ($r) {
-                echo '<div class="muted tiny">priority ' . h((string)$r['priority']) . ' · if ' . h(rule_conditions_summary($r['conditions'])) . ' → ' . h(rule_actions_summary(is_array($r['actions']) ? $r['actions'] : [])) . '</div>';
+    echo '<div class="pSec"><h3><span>Why “' . h($tier) . '” retention risk</span>' . ($isAdmin ? '<a href="' . h(tab_url('rules', $tierRule > 0 ? ['edit' => (string)$tierRule] : [])) . '">Edit rules</a>' : '') . '</h3>';
+    $set = $rulesById[$tierRule] ?? null;
+    if ($set) {
+        $conds = is_array($set['conditions']) ? $set['conditions'] : [];
+        $items = isset($conds['conditions']) && is_array($conds['conditions']) ? $conds['conditions'] : $conds;
+        echo '<div class="why2"><div class="why2Head">' . h((string)$set['name']) . '<span>priority ' . h((string)$set['priority']) . ' · matched</span></div><ul>';
+        $sym = ['>=' => '≥', '<=' => '≤', '!=' => '≠', 'in' => '∈', '==' => '=', 'contains' => 'contains', 'regex' => '~'];
+        foreach ((array)$items as $c) {
+            if (!is_array($c) || !isset($c['field'])) {
+                if (is_array($c)) {
+                    echo '<li>(group of conditions)</li>';
+                }
+                continue;
             }
-            echo '</li>';
+            $ok = eval_condition_leaf($rec, $c);
+            $actual = value_for_rule_field($rec, (string)$c['field']);
+            $actualText = $actual === null || $actual === '' ? 'blank' : (is_bool($actual) ? ($actual ? 'true' : 'false') : (string)$actual);
+            $v = $c['value'] ?? '';
+            $vText = is_array($v) ? implode(', ', array_map('strval', $v)) : (is_bool($v) ? ($v ? 'true' : 'false') : (string)$v);
+            $op = strtolower((string)($c['op'] ?? ''));
+            echo '<li class="' . ($ok ? '' : 'no') . '">' . h((string)$c['field'] . ' ' . $actualText . ' ' . ($sym[$op] ?? $op) . ' ' . $vText) . '</li>';
         }
-        echo '</ol>';
+        echo '</ul><div class="why2Then">→ ' . h(rule_actions_summary(is_array($set['actions']) ? $set['actions'] : [])) . '</div></div>';
     } else {
-        echo '<div class="muted">No enabled rule matched, so the tier stays Unknown. Rules run highest priority first; the first one that sets a tier wins.</div>';
+        echo '<div class="why2"><div class="why2Head">No rule set a tier</div><div class="pNote">Unknown means none of the enabled rules that set a tier matched. Rules run highest priority first; the first one that sets a tier wins.</div></div>';
     }
-    $tags = is_array($meta['tags'] ?? null) ? (array)$meta['tags'] : [];
-    if ($tags) {
-        echo '<div class="tagRow">' . implode('', array_map(fn($t) => '<span class="badge">' . h((string)$t) . '</span>', $tags)) . '</div>';
+    $others = array_values(array_filter($hitIds, fn($x) => $x !== $tierRule));
+    if ($others) {
+        $names = [];
+        $overridden = false;
+        foreach ($others as $rid) {
+            $r = $rulesById[$rid] ?? null;
+            $names[] = $r ? '“' . (string)$r['name'] . '” (priority ' . (int)$r['priority'] . ')' : 'rule #' . $rid . ' (deleted)';
+            if ($r && is_array($r['actions']) && (string)($r['actions']['set_risk_tier'] ?? '') !== '' && $set) {
+                $overridden = true;
+            }
+        }
+        echo '<p class="pNote">Also matched ' . h(implode(', ', $names)) . ($overridden ? ', overridden by the higher-priority rule' : '') . '.</p>';
     }
     echo '</div>';
 
+    // LTV
     $b = ltv_breakdown($rec);
-    echo '<div class="whyBox"><div class="whyTitle">Lifetime value ' . h($b ? money_or_blank($b['ltv']) : '—') . '</div>';
+    echo '<div class="pSec"><h3><span>Lifetime value <span data-derived-field="ltv_estimate" data-policy-id="' . h((string)$id) . '">' . h($b ? money_whole($b['ltv']) : '—') . '</span></span></h3>';
     if ($b) {
-        echo '<div class="formula">';
-        echo '<span>' . h(money_or_blank($b['monthly'])) . '<em>monthly premium' . ($b['premium_period'] === 'annual' ? ' (' . h(money_or_blank($b['premium'])) . ' ÷ 12)' : '') . '</em></span><b>×</b>';
-        echo '<span>' . h((string)$b['remaining']) . '<em>months left (' . h((string)$b['term_months']) . ' − ' . h((string)$b['tenure']) . ' tenure)</em></span><b>×</b>';
-        echo '<span>' . h(number_format($b['multiplier'], 2)) . '<em>cross-sell (' . h($b['multiplier_source']) . ')</em></span><b>×</b>';
-        echo '<span>' . h(number_format($b['retention'], 2)) . '<em>retention</em></span>';
-        echo '</div><div class="muted tiny">Assumptions live in Settings. Change them and recompute to update every policy.</div>';
+        echo '<div class="formula2">' . h(money_or_blank($b['monthly'])) . '/mo <em>×</em> ' . h((string)$b['remaining']) . ' months left <em>×</em> ' . h(number_format($b['multiplier'], 2)) . ' ' . h((string)$b['multiplier_source']) . ' <em>×</em> ' . h(number_format($b['retention'], 2)) . ' retention</div>';
+        echo '<p class="pNote">Months left = ' . h((string)$b['term_months']) . '-month relationship − ' . h((string)$b['tenure']) . ' months tenure' . ($b['premium_period'] === 'annual' ? '; annual premium ' . h(money_or_blank($b['premium'])) . ' ÷ 12' : '') . '. Assumptions are set in Settings.</p>';
     } else {
-        echo '<div class="muted">Needs premium, tenure and policy type. Fill those in and the value appears.</div>';
+        echo '<p class="pNote">Needs premium, tenure and ' . h(strtolower(lbl('policy_type'))) . '. Fill those in and the value appears.</p>';
     }
     echo '</div>';
 
+    // Confidence
     $cb = confidence_breakdown($rec, $imputed, count($hitIds));
-    echo '<div class="whyBox"><div class="whyTitle">Data confidence ' . h((string)$rec['confidence_score']) . '</div><table class="table compact"><tbody>';
-    foreach ($cb['lines'] as [$label, $pts]) {
-        echo '<tr><td>' . h((string)$label) . '</td><td class="right mono">' . h(($pts > 0 && $label !== 'Starting score' ? '+' : '') . (string)$pts) . '</td></tr>';
+    echo '<div class="pSec"><h3><span>Data confidence <span data-derived-field="confidence_score" data-policy-id="' . h((string)$id) . '">' . h((string)$rec['confidence_score']) . '</span></span>' . ($isAdmin && ($imputed || $cb['total'] < 100) ? '<a href="' . h(self_url(['pedit' => '1', 'id' => (string)$id])) . '#panel">Fix now</a>' : '') . '</h3>';
+    $chips = '';
+    foreach ($imputed as $fname) {
+        $chips .= '<span class="chipWarn">−10 ' . h(str_replace('_', ' ', $fname)) . ' imputed</span>';
     }
-    echo '<tr class="rowTotal"><td>Score</td><td class="right mono">' . h((string)$cb['total']) . '</td></tr></tbody></table></div>';
+    foreach ($cb['lines'] as [$label, $pts]) {
+        if ((int)$pts === -5) {
+            $chips .= '<span class="chipWarn">−5 ' . h(strtolower((string)$label)) . '</span>';
+        } elseif ((int)$pts > 0 && $label !== 'Starting score') {
+            $chips .= '<span class="chipOk">+' . h((string)$pts) . ' ' . h(count($hitIds) . ' rule' . (count($hitIds) === 1 ? '' : 's') . ' matched') . '</span>';
+        }
+    }
+    echo $chips !== '' ? $chips : '<span class="chipOk">Every scoring field came from your file</span>';
     echo '</div>';
 
-    // Contact log
+    // Details
+    $owner = $rec['renewal_owner'] !== '' ? $rec['renewal_owner'] : ($rec['producer'] !== '' ? $rec['producer'] . ' (producer)' : '—');
+    $tick = static fn(bool $ok): string => $ok ? '✓' : '—';
+    $consent = 'Phone ' . $tick((int)$rec['consent_phone'] === 1 && $rec['opted_out'] !== 1) . '  Email ' . $tick((int)$rec['consent_email'] === 1 && $rec['opted_out'] !== 1) . '  SMS ' . $tick((int)$rec['consent_sms'] === 1 && $rec['opted_out'] !== 1);
+    $hot = $d !== null && $d <= 15 && !in_array($rec['renewal_status'], ['renewed', 'lost'], true);
+    $periodWord = setting('premium_period', 'monthly') === 'annual' ? 'year' : 'month';
+    $custom = is_array($meta['custom_fields'] ?? null) ? (array)$meta['custom_fields'] : [];
+    echo '<div class="pSec"><h3><span>Details</span>' . ($isAdmin ? '<a href="' . h(self_url(['pedit' => $editing ? null : '1', 'id' => (string)$id])) . '#panel">' . ($editing ? 'Done' : 'Edit') . '</a>' : '') . '</h3><dl class="kv2">';
+    if ($editing) {
+        $cell = static function (string $field, string $value, string $label) use ($ph): string {
+            return '<dt><label for="pc_' . h($field) . '">' . h($label) . '</label></dt><dd><input class="profileCellInput" id="pc_' . h($field) . '" data-policy-cell data-policy-id="' . h((string)(int)$ph['id']) . '" data-field="' . h($field) . '" value="' . h($value) . '"></dd>';
+        };
+        if ($revealed) {
+            echo $cell('name', $rec['name'], 'Display name');
+        }
+        echo $cell('age', $rec['age'] !== null ? (string)$rec['age'] : '', 'Age');
+        echo $cell('policy_type', $rec['policy_type'], lbl('policy_type'));
+        echo $cell('region', $rec['region'], 'Region');
+        echo $cell('premium_amount', $rec['premium_amount'] !== null ? (string)$rec['premium_amount'] : '', 'Premium / ' . $periodWord);
+        echo $cell('tenure_months', $rec['tenure_months'] !== null ? (string)$rec['tenure_months'] : '', 'Tenure (months)');
+        echo $cell('sum_assured', $rec['sum_assured'] !== null ? (string)$rec['sum_assured'] : '', lbl('sum_assured'));
+        echo $cell('expiration_date', $rec['expiration_date'], 'Expiration date');
+        foreach (array_slice($custom, 0, 4, true) as $k => $v) {
+            echo $cell('custom.' . (string)$k, is_bool($v) ? ($v ? 'true' : 'false') : (string)$v, 'custom.' . (string)$k);
+        }
+    } else {
+        echo '<dt>Age</dt><dd>' . h($rec['age'] !== null ? (string)$rec['age'] : '—') . '</dd>';
+        $prem = $rec['premium_amount'] !== null ? money_or_blank($rec['premium_amount']) . ' / ' . $periodWord : '—';
+        if ($rec['prior_premium'] !== null && $rec['premium_amount'] !== null && (float)$rec['prior_premium'] > 0) {
+            $pct = ((float)$rec['premium_amount'] / (float)$rec['prior_premium'] - 1) * 100;
+            $prem .= ' (' . ($pct >= 0 ? '+' : '−') . number_format(abs($pct), 1) . '%)';
+        }
+        echo '<dt>Premium</dt><dd>' . h($prem) . '</dd>';
+        echo '<dt>Tenure</dt><dd>' . h($rec['tenure_months'] !== null ? $rec['tenure_months'] . ' months' : '—') . '</dd>';
+        echo '<dt>' . h(lbl('sum_assured')) . '</dt><dd>' . h($rec['sum_assured'] !== null ? money_whole($rec['sum_assured']) : '—') . '</dd>';
+        echo '<dt>Expires</dt><dd class="' . ($hot ? 'due' : '') . '">' . h(date_dmy($rec['expiration_date']) . ($d !== null ? ' · ' . days_words($d) : '')) . '</dd>';
+        echo '<dt>Owner</dt><dd>' . h($owner) . '</dd>';
+        echo '<dt>Household</dt><dd>' . ($rec['household_id'] !== '' ? '<a class="link" href="' . h(tab_url('profiles', ['q' => $rec['household_id']])) . '">' . h($rec['household_id']) . '</a> · ' . h((string)$rec['policies_in_household']) . ' polic' . ($rec['policies_in_household'] === 1 ? 'y' : 'ies') : '—') . '</dd>';
+        echo '<dt>Email</dt><dd>' . h($rec['email'] !== '' ? ($revealed ? $rec['email'] : mask_email($rec['email'])) : '—') . '</dd>';
+        echo '<dt>Phone</dt><dd>' . h($rec['phone'] !== '' ? ($revealed ? $rec['phone'] : mask_phone($rec['phone'])) : '—') . '</dd>';
+        echo '<dt>Consent</dt><dd>' . h($rec['opted_out'] === 1 ? 'Opted out of all contact' : $consent) . '</dd>';
+        foreach (array_slice($custom, 0, 4, true) as $k => $v) {
+            echo '<dt>custom.' . h((string)$k) . '</dt><dd>' . h(is_bool($v) ? ($v ? 'true' : 'false') : (string)$v) . '</dd>';
+        }
+    }
+    echo '</dl>' . ($editing ? '<p class="pNote">Changes save when you leave a field or press Enter; LTV, tier and confidence rescore at once.</p>' : '') . '</div>';
+
+    // Actions
+    $touch = next_touch($d, $rec['expiration_date']);
+    echo '<div class="pActions">';
+    echo '<a class="btnDark" href="#d-log" data-open-drawer="d-log">Log a call</a>';
+    echo '<a class="btnSecondary" href="#d-status" data-open-drawer="d-status">Set status</a>';
+    if ($isAdmin) {
+        echo '<a class="btnSecondary" href="' . h(self_url(['pedit' => $editing ? null : '1', 'id' => (string)$id])) . '#panel">' . ($editing ? 'Done' : 'Edit') . '</a>';
+    }
+    echo '</div>';
+    echo '<div class="pDrawer">';
+    echo '<details id="d-log"><summary>Log contact · next touch ' . h($touch['label']) . '</summary><div><form method="post" class="form formTight">' . csrf_field() . '<input type="hidden" name="action" value="contact_log"><input type="hidden" name="id" value="' . h((string)$id) . '">';
+    echo '<div class="grid2"><select class="select" name="channel" aria-label="Channel"><option value="call">Call</option><option value="email">Email</option><option value="sms">SMS</option><option value="meeting">Meeting</option><option value="mail">Mail</option></select>';
+    echo '<select class="select" name="outcome" aria-label="Outcome"><option value="reached">Reached</option><option value="left_message">Left message</option><option value="no_answer">No answer</option><option value="quoted">Quoted</option><option value="renewed">Renewed</option><option value="not_interested">Not interested</option></select></div>';
+    echo '<input class="input" name="note" maxlength="500" placeholder="Note (optional)" aria-label="Note"><div><button class="btnDark" type="submit">Log contact</button></div></form></div></details>';
+    echo '<details id="d-status"><summary>Renewal status and owner</summary><div><form method="post" class="form formTight">' . csrf_field() . '<input type="hidden" name="action" value="renewal_update"><input type="hidden" name="id" value="' . h((string)$id) . '">';
+    echo '<label class="label" for="rs">Status</label><select class="select" id="rs" name="renewal_status">';
+    foreach (renewal_statuses() as $k => $l) {
+        echo '<option value="' . h($k) . '"' . ($k === $rec['renewal_status'] ? ' selected' : '') . '>' . h($l) . '</option>';
+    }
+    echo '</select><label class="label" for="ro">Owner</label><input class="input" id="ro" name="renewal_owner" maxlength="120" value="' . h($rec['renewal_owner']) . '" placeholder="Who is working this renewal">';
+    echo '<div><button class="btnSecondary" type="submit">Save</button></div></form></div></details>';
+    echo '<details><summary>Consent and opt-out</summary><div><form method="post" class="form formTight">' . csrf_field() . '<input type="hidden" name="action" value="consent_update"><input type="hidden" name="id" value="' . h((string)$id) . '"><div class="checkRow">';
+    foreach (['consent_phone' => 'Calls', 'consent_sms' => 'SMS', 'consent_email' => 'Email'] as $k => $l) {
+        echo '<label class="check"><input type="checkbox" name="' . h($k) . '" value="1"' . ((int)$rec[$k] === 1 ? ' checked' : '') . '> ' . h($l) . '</label>';
+    }
+    echo '<label class="check"><input type="checkbox" name="opted_out" value="1"' . ($rec['opted_out'] === 1 ? ' checked' : '') . '> Opted out of all</label></div><div><button class="btnSecondary" type="submit">Save consent</button></div></form></div></details>';
     $log = $pdo->prepare('SELECT c.ts, c.channel, c.outcome, c.note, u.email AS user_email FROM contact_log c LEFT JOIN users u ON u.id = c.user_id WHERE c.policyholder_id = ? ORDER BY c.ts DESC, c.id DESC LIMIT 10');
     $log->execute([$id]);
     $entries = $log->fetchAll();
-    echo '<div class="grid2 panelLog"><div><div class="label">Contact history</div>';
+    echo '<details id="d-history"><summary>Contact history (' . h((string)count($entries)) . ')' . ($ph['last_contacted_at'] ? ' · last ' . h(date_dmy((string)$ph['last_contacted_at'])) : '') . '</summary><div>';
     if ($entries) {
-        echo '<ul class="timeline">';
+        echo '<ul class="timeline2">';
         foreach ($entries as $e) {
-            echo '<li><div><strong>' . h(ucfirst((string)$e['channel'])) . '</strong> · ' . h(str_replace('_', ' ', (string)$e['outcome'])) . ' <span class="muted tiny">' . h((string)$e['ts']) . ' · ' . h((string)($e['user_email'] ?? 'system')) . '</span></div>' . ((string)$e['note'] !== '' ? '<div class="muted">' . h((string)$e['note']) . '</div>' : '') . '</li>';
+            echo '<li><strong>' . h(ucfirst((string)$e['channel'])) . '</strong> · ' . h(str_replace('_', ' ', (string)$e['outcome'])) . ' <span class="muted tiny">' . h(date_dmy((string)$e['ts'])) . ' · ' . h((string)($e['user_email'] ?? 'system')) . '</span>' . ((string)$e['note'] !== '' ? '<div class="muted">' . h((string)$e['note']) . '</div>' : '') . '</li>';
         }
         echo '</ul>';
     } else {
         echo '<div class="muted">No contact logged yet.</div>';
     }
-    echo '</div><form method="post" class="form formTight">' . csrf_field() . '<input type="hidden" name="action" value="contact_log"><input type="hidden" name="id" value="' . h((string)$id) . '">';
-    echo '<div class="label">Log contact</div><div class="grid2"><select class="select" name="channel" aria-label="Channel"><option value="call">Call</option><option value="email">Email</option><option value="sms">SMS</option><option value="meeting">Meeting</option><option value="mail">Mail</option></select>';
-    echo '<select class="select" name="outcome" aria-label="Outcome"><option value="reached">Reached</option><option value="left_message">Left message</option><option value="no_answer">No answer</option><option value="quoted">Quoted</option><option value="renewed">Renewed</option><option value="not_interested">Not interested</option></select></div>';
-    echo '<input class="input" name="note" maxlength="500" placeholder="Note (optional)" aria-label="Note"><div><button class="btn btnSm" type="submit">Log contact</button></div></form></div>';
-    echo '</section>';
+    echo '</div></details></div>';
+}
+
+function handle_book_export(PDO $pdo, array $user): void
+{
+    $f = book_filters();
+    book_csv_out($pdo, $user, 'WHERE ' . $f['sql'], $f['args'], 'book');
+}
+
+function book_csv_out(PDO $pdo, array $user, string $whereSql, array $args, string $label): void
+{
+    $st = $pdo->prepare('SELECT * FROM policyholders ' . $whereSql . ' AND ' . sql_not_opted_out() . ' ORDER BY id ASC LIMIT 20000');
+    $st->execute($args);
+    $rows = $st->fetchAll();
+    audit($pdo, (int)$user['id'], 'book.export', ['label' => $label, 'rows' => count($rows)]);
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="liteinsurance_' . $label . '_' . gmdate('Ymd') . '.csv"');
+    $out = fopen('php://output', 'wb');
+    $cols = ['policy_number', 'name', 'line_of_business', 'policy_type', 'carrier', 'region', 'premium_amount', 'prior_premium', 'expiration_date', 'renewal_status', 'renewal_owner', 'producer', 'household_id', 'email', 'phone', 'consent_email', 'consent_sms', 'consent_phone', 'ltv_estimate', 'risk_tier', 'confidence_score'];
+    fputcsv($out, $cols);
+    foreach ($rows as $r) {
+        fputcsv($out, array_map(static fn(string $c): string => (string)($r[$c] ?? ''), $cols));
+    }
+    fclose($out);
+}
+
+function handle_bulk_update(PDO $pdo, array $user): void
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['ids'] ?? [])), fn($x) => $x > 0)));
+    $op = (string)($_POST['op'] ?? '');
+    $status = (string)($_POST['bulk_status'] ?? '');
+    if ($op === '' && $status !== '') {
+        $op = 'status';
+    }
+    $back = ['tab' => 'profiles', 'view' => (string)($_POST['view'] ?? '') ?: null, 'q' => (string)($_POST['q'] ?? '') ?: null, 'tier' => (string)($_POST['tier'] ?? '') ?: null, 'region' => (string)($_POST['region'] ?? '') ?: null];
+    if (!$ids) {
+        flash('error', 'Select at least one policy first.');
+        redirect_to($back);
+    }
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    if ($op === 'export') {
+        book_csv_out($pdo, $user, 'WHERE id IN (' . $ph . ')', $ids, 'selected');
+        return;
+    }
+    if ($op === 'status' && array_key_exists($status, renewal_statuses())) {
+        $pdo->prepare('UPDATE policyholders SET renewal_status = ?, updated_at = ? WHERE id IN (' . $ph . ')')->execute(array_merge([$status === 'not_started' ? null : $status, now_iso()], $ids));
+        audit($pdo, (int)$user['id'], 'renewals.bulk_status', ['ids' => $ids, 'status' => $status]);
+        flash('success', 'Set ' . count($ids) . ' renewal' . (count($ids) === 1 ? '' : 's') . ' to ' . renewal_statuses()[$status] . '.');
+        redirect_to($back);
+    }
+    if ($op === 'owner') {
+        $owner = mb_substr(trim((string)($_POST['bulk_owner'] ?? '')), 0, 120);
+        $pdo->prepare('UPDATE policyholders SET renewal_owner = ?, updated_at = ? WHERE id IN (' . $ph . ')')->execute(array_merge([$owner !== '' ? $owner : null, now_iso()], $ids));
+        audit($pdo, (int)$user['id'], 'renewals.bulk_owner', ['ids' => $ids, 'owner' => $owner]);
+        flash('success', ($owner !== '' ? 'Assigned ' . count($ids) . ' to ' . $owner : 'Cleared the owner on ' . count($ids)) . '.');
+        redirect_to($back);
+    }
+    flash('error', 'Pick a status, an owner or Export.');
+    redirect_to($back);
 }
 
 function handle_contact_log(PDO $pdo, array $user): void
@@ -5449,30 +6216,99 @@ function list_builder_catalog(PDO $pdo): array
 function list_presets(): array
 {
     return [
-        'Renewing in 90 days' => ['logic' => 'AND', 'rows' => [['f' => 'days_to_expiry', 'op' => 'between', 'v' => '0', 'v2' => '90'], ['f' => 'renewal_status', 'op' => 'in', 'v' => 'not_started, contacted']]],
-        'High-risk renewals' => ['logic' => 'AND', 'rows' => [['f' => 'days_to_expiry', 'op' => 'between', 'v' => '0', 'v2' => '120'], ['f' => 'risk_tier', 'op' => 'in', 'v' => 'High, Review']]],
-        'Single-line households' => ['logic' => 'AND', 'rows' => [['f' => 'policies_in_household', 'op' => 'eq', 'v' => '1'], ['f' => 'opted_out', 'op' => 'no', 'v' => '']]],
-        'Email-consented, high LTV' => ['logic' => 'AND', 'rows' => [['f' => 'consent_email', 'op' => 'yes', 'v' => ''], ['f' => 'ltv_estimate', 'op' => 'gte', 'v' => '8000']]],
-        'Data repair queue' => ['logic' => 'OR', 'rows' => [['f' => 'confidence_score', 'op' => 'lt', 'v' => '70'], ['f' => 'expiration_date', 'op' => 'empty', 'v' => '']]],
+        'renewing' => ['Renewing in 90 days', 'Open renewals to work this quarter', ['logic' => 'AND', 'rows' => [['f' => 'days_to_expiry', 'op' => 'between', 'v' => '0', 'v2' => '90'], ['f' => 'renewal_status', 'op' => 'in', 'v' => 'not_started, contacted']]]],
+        'at_risk' => ['High-risk renewals', 'High or Review tier, renewing within 120 days', ['logic' => 'AND', 'rows' => [['f' => 'days_to_expiry', 'op' => 'between', 'v' => '0', 'v2' => '120'], ['f' => 'risk_tier', 'op' => 'in', 'v' => 'High, Review']]]],
+        'single' => ['Monoline households', 'One policy in the household: cross-sell home, auto or life', ['logic' => 'AND', 'rows' => [['f' => 'policies_in_household', 'op' => 'eq', 'v' => '1'], ['f' => 'opted_out', 'op' => 'no', 'v' => '']]]],
+        'email_ltv' => ['Email-consented, high LTV', 'Worth a personal check-in before renewal', ['logic' => 'AND', 'rows' => [['f' => 'consent_email', 'op' => 'yes', 'v' => ''], ['f' => 'ltv_estimate', 'op' => 'gte', 'v' => '8000']]]],
+        'winback' => ['Win-back: lapsed or cancelled', 'Former clients you can still contact', ['logic' => 'AND', 'rows' => [['f' => 'status', 'op' => 'in', 'v' => 'lapsed, cancelled, non-renewed'], ['f' => 'opted_out', 'op' => 'no', 'v' => '']]]],
+        'issues' => ['Data repair queue', 'Imputed, low-confidence or missing an expiration date', ['logic' => 'OR', 'rows' => [['f' => 'confidence_score', 'op' => 'lt', 'v' => '70'], ['f' => 'is_imputed', 'op' => 'yes', 'v' => ''], ['f' => 'expiration_date', 'op' => 'empty', 'v' => '']]]],
     ];
+}
+
+function book_view_preset(string $view): ?array
+{
+    $map = [
+        'all' => ['Whole book', 'Every policy', ['logic' => 'AND', 'rows' => []]],
+        'renewing' => null,
+        'at_risk' => ['High retention risk', 'High or Review tier', ['logic' => 'AND', 'rows' => [['f' => 'risk_tier', 'op' => 'in', 'v' => 'High, Review']]]],
+        'low_conf' => ['Low data confidence', 'Confidence below 60', ['logic' => 'AND', 'rows' => [['f' => 'confidence_score', 'op' => 'lt', 'v' => '60']]]],
+        'no_expiry' => ['No expiration date', 'Records missing a renewal date', ['logic' => 'AND', 'rows' => [['f' => 'expiration_date', 'op' => 'empty', 'v' => '']]]],
+        'imputed' => ['Filled-in values', 'Records with imputed fields', ['logic' => 'AND', 'rows' => [['f' => 'is_imputed', 'op' => 'yes', 'v' => '']]]],
+        'unknown_tier' => ['Tier unknown', 'No rule set a tier', ['logic' => 'AND', 'rows' => [['f' => 'risk_tier', 'op' => 'eq', 'v' => 'Unknown']]]],
+        'opted_out' => ['Opted out', 'Everyone who opted out of contact', ['logic' => 'AND', 'rows' => [['f' => 'opted_out', 'op' => 'yes', 'v' => '']]]],
+    ];
+    $presets = list_presets();
+    if (isset($presets[$view])) {
+        return $presets[$view];
+    }
+    return $map[$view] ?? null;
+}
+
+function clean_consent($v): array
+{
+    return array_values(array_intersect(['phone', 'sms', 'email'], array_map('strval', (array)$v)));
+}
+
+function where_with_consent(string $where, array $consent): string
+{
+    $map = ['phone' => 'consent_phone = 1', 'sms' => 'consent_sms = 1', 'email' => 'consent_email = 1'];
+    $parts = [];
+    foreach (clean_consent($consent) as $c) {
+        $parts[] = $map[$c];
+    }
+    if (!$parts) {
+        return $where;
+    }
+    $parts[] = 'opted_out = 0';
+    $c = implode(' AND ', $parts);
+    return trim($where) === '' ? $c : '(' . $where . ') AND ' . $c;
 }
 
 function render_tab_segments(PDO $pdo): void
 {
     $editId = (int)($_GET['edit'] ?? 0);
-    $editing = null;
-    if ($editId > 0) {
-        $st = $pdo->prepare('SELECT * FROM segments WHERE id = ?');
-        $st->execute([$editId]);
-        $editing = $st->fetch();
-    }
+    $dupId = (int)($_GET['dup'] ?? 0);
+    $isNew = (string)($_GET['new'] ?? '') === '1';
+    $presetKey = (string)($_GET['preset'] ?? '');
     $segments = $pdo->query('SELECT id, name, rule_ids, last_run_at FROM segments ORDER BY id DESC')->fetchAll();
     $rules = $pdo->query('SELECT id, name, priority FROM rules ORDER BY priority DESC, id DESC')->fetchAll();
     $consentRequired = setting('consent_required_for_exports', '1') === '1';
+    if ($editId <= 0 && $dupId <= 0 && !$isNew && $presetKey === '' && $segments) {
+        $editId = (int)$segments[0]['id'];
+    }
+    $source = null;
+    foreach ($segments as $s) {
+        if ((int)$s['id'] === ($dupId > 0 ? $dupId : $editId)) {
+            $source = $s;
+        }
+    }
+    $sid = 0;
+    $name = '';
+    $desc = '';
+    $consent = ['phone'];
+    $criteria = ['rule_ids' => [], 'where' => '', 'builder' => null];
+    if ($source) {
+        $c = safe_json((string)$source['rule_ids']);
+        $c = is_array($c) ? $c : [];
+        $criteria['rule_ids'] = is_array($c['rule_ids'] ?? null) ? array_map('intval', (array)$c['rule_ids']) : [];
+        $criteria['where'] = is_string($c['where'] ?? null) ? (string)$c['where'] : '';
+        $criteria['builder'] = is_array($c['builder'] ?? null) ? $c['builder'] : null;
+        $desc = (string)($c['description'] ?? '');
+        $consent = clean_consent($c['consent'] ?? []);
+        if ($dupId > 0) {
+            $name = 'Copy of ' . (string)$source['name'];
+        } else {
+            $sid = (int)$source['id'];
+            $name = (string)$source['name'];
+        }
+    } elseif ($presetKey !== '' && ($p = book_view_preset($presetKey))) {
+        [$name, $desc, $criteria['builder']] = $p;
+    }
+    $builderJson = json_encode($criteria['builder'] ?? ($criteria['where'] === '' ? ['logic' => 'AND', 'rows' => [['f' => 'days_to_expiry', 'op' => 'between', 'v' => '0', 'v2' => '90']]] : null), JSON_UNESCAPED_SLASHES);
 
-    echo '<div class="grid2 gridWide">';
-    echo '<div class="card"><div class="h2">Lists</div><div class="muted">Sizes are refreshed when you save or estimate. Reach counts only consented, not-opted-out ' . h(strtolower(lbl('clients'))) . '.</div>';
-    echo '<div class="scrollX"><table class="table"><thead><tr><th>Name</th><th class="right">Size</th><th class="right">Email</th><th class="right">SMS</th><th class="right">Call</th><th>Last run</th></tr></thead><tbody>';
+    echo '<div class="listsGrid">';
+    // Saved lists + templates
+    echo '<div class="card savedCard"><div class="savedHead"><div class="h2">Saved lists</div><a class="linkStrong" href="' . h(tab_url('segments', ['new' => '1'])) . '">+ New</a></div>';
     foreach ($segments as $s) {
         $c = safe_json((string)($s['rule_ids'] ?? ''));
         $stats = is_array($c['stats'] ?? null) ? (array)$c['stats'] : null;
@@ -5484,51 +6320,41 @@ function render_tab_segments(PDO $pdo): void
                 $stats = null;
             }
         }
-        $cell = static fn(string $k): string => $stats ? number_format((int)($stats[$k] ?? 0)) : '—';
-        echo '<tr' . ((int)$s['id'] === $editId ? ' class="rowOpen"' : '') . '><td><a class="link" href="' . h(self_url(['tab' => 'segments', 'edit' => (string)$s['id']])) . '">' . h((string)$s['name']) . '</a></td><td class="right">' . h($cell('count')) . '</td><td class="right">' . h($cell('email')) . '</td><td class="right">' . h($cell('sms')) . '</td><td class="right">' . h($cell('phone')) . '</td><td class="muted">' . h($s['last_run_at'] ? substr((string)$s['last_run_at'], 0, 10) : '—') . '</td>';
-        echo '</tr>';
+        $ran = $s['last_run_at'] ? strtotime((string)$s['last_run_at']) : false;
+        $when = $ran ? (gmdate('Y-m-d', $ran) === gmdate('Y-m-d') ? 'Refreshed today' : 'Refreshed ' . gmdate('j M', $ran)) : 'Not refreshed yet';
+        echo '<a class="sl' . ((int)$s['id'] === $sid ? ' on' : '') . '" href="' . h(tab_url('segments', ['edit' => (string)$s['id']])) . '"' . ((int)$s['id'] === $sid ? ' aria-current="page"' : '') . '><strong>' . h((string)$s['name']) . '</strong><b>' . h($stats ? number_format((int)($stats['count'] ?? 0)) : '—') . '</b><span>' . h($when) . '</span></a>';
     }
     if (!$segments) {
-        echo '<tr><td colspan="6" class="muted">No lists yet. Start from a preset on the right.</td></tr>';
+        echo '<div class="muted pad">No lists yet. Start from a template.</div>';
     }
-    echo '</tbody></table></div></div>';
-
-    $sid = 0;
-    $name = '';
-    $criteria = ['rule_ids' => [], 'where' => '', 'builder' => null];
-    if ($editing) {
-        $sid = (int)$editing['id'];
-        $name = (string)$editing['name'];
-        $c = safe_json((string)$editing['rule_ids']);
-        if (is_array($c)) {
-            $criteria['rule_ids'] = is_array($c['rule_ids'] ?? null) ? array_map('intval', (array)$c['rule_ids']) : [];
-            $criteria['where'] = is_string($c['where'] ?? null) ? (string)$c['where'] : '';
-            $criteria['builder'] = is_array($c['builder'] ?? null) ? $c['builder'] : null;
-        }
-    }
-    $builderJson = json_encode($criteria['builder'] ?? ($criteria['where'] === '' ? ['logic' => 'AND', 'rows' => [['f' => 'days_to_expiry', 'op' => 'between', 'v' => '0', 'v2' => '90']]] : null), JSON_UNESCAPED_SLASHES);
-
-    echo '<div class="card"><div class="cardHead"><div class="h2">' . h($sid > 0 ? 'Edit list' : 'New list') . '</div>' . ($sid > 0 ? '<a class="link" href="' . h(self_url(['tab' => 'segments', 'edit' => null])) . '">New list</a>' : '') . '</div>';
-    echo '<div class="chips chipsWrap" aria-label="Presets">';
-    foreach (list_presets() as $label => $preset) {
-        echo '<button class="chip" type="button" data-preset="' . h((string)json_encode($preset, JSON_UNESCAPED_SLASHES)) . '" data-preset-name="' . h($label) . '">' . h($label) . '</button>';
+    echo '<div class="eyebrow tplHead">Templates</div>';
+    foreach (list_presets() as [$label, $pdesc, $preset]) {
+        echo '<button class="tpl" type="button" data-preset="' . h((string)json_encode($preset, JSON_UNESCAPED_SLASHES)) . '" data-preset-name="' . h($label) . '" data-preset-desc="' . h($pdesc) . '">' . h($label) . '</button>';
     }
     echo '</div>';
-    echo '<form method="post" class="form" id="listForm">' . csrf_field();
+
+    // Builder
+    echo '<form method="post" class="builderCol" id="listForm">' . csrf_field();
     if ($sid > 0) {
         echo '<input type="hidden" name="id" value="' . h((string)$sid) . '">';
     }
-    echo '<label class="label" for="listName">Name</label><input class="input" id="listName" name="name" required maxlength="120" value="' . h($name) . '">';
+    echo '<div class="card builderCard">';
+    echo '<input class="titleInput" id="listName" name="name" required maxlength="120" placeholder="Name this list" aria-label="List name" value="' . h($name) . '">';
+    echo '<input class="descInput" name="description" maxlength="200" placeholder="Who is this list for? (optional)" aria-label="Description" value="' . h($desc) . '">';
     echo '<div class="lb" id="listBuilder" data-catalog="' . h((string)json_encode(list_builder_catalog($pdo), JSON_UNESCAPED_SLASHES)) . '" data-initial="' . h((string)$builderJson) . '">';
-    echo '<div class="lbHead"><span class="label">Include policies where</span><select class="select selectSm" id="lbLogic" aria-label="Match"><option value="AND">all of these are true</option><option value="OR">any of these is true</option></select></div>';
-    echo '<div id="lbRows"></div><div class="actionsRow"><button class="btnSecondary btnSm" type="button" id="lbAdd">Add condition</button></div>';
+    echo '<div class="showRow"><span>Show policies where</span><select class="select" id="lbLogic" aria-label="Match"><option value="AND">all</option><option value="OR">any</option></select><span>of these are true</span></div>';
+    echo '<div id="lbRows"></div><div class="lbAddRow"><button class="linkBtn2" type="button" id="lbAdd">+ Add condition</button></div>';
     echo '<input type="hidden" name="builder_json" id="lbJson" value="">';
+    echo '</div><div class="divider2"></div>';
+    echo '<div class="consentPick"><strong>Leave out contacts without consent for</strong><div class="checkRow">';
+    foreach (['phone' => 'Phone calls', 'sms' => 'Text messages', 'email' => 'Email'] as $k => $l) {
+        echo '<label class="check"><input type="checkbox" name="consent[]" value="' . h($k) . '"' . (in_array($k, $consent, true) ? ' checked' : '') . ' data-lb-consent> ' . h($l) . '</label>';
+    }
+    echo '</div><div class="muted tiny">Opted-out records are always left out of exports' . ($consentRequired ? ', and every export is filtered by consent for its channel' : '') . '.</div></div>';
     echo '</div>';
-    echo '<div class="lbCount" id="listCount" aria-live="polite">' . h($criteria['where'] !== '' || $criteria['builder'] ? 'Counting…' : 'Add a condition to see the count.') . '</div>';
-    echo '<details class="advanced"' . ($criteria['where'] !== '' && !$criteria['builder'] ? ' open' : '') . '><summary>Advanced: expression and scoring rules</summary>';
-    echo '<label class="label" for="listWhere">WHERE-style expression (written by the builder; edit by hand if you need parentheses)</label><textarea class="textarea" id="listWhere" name="where" rows="3" maxlength="800" spellcheck="false">' . h((string)$criteria['where']) . '</textarea>';
-    echo '<div class="muted tiny">Fields: ' . h(implode(', ', array_keys(filter_field_catalog()))) . ', plus custom.field_key such as custom.renewal_probability. Operators: = != &gt; &lt; &gt;= &lt;= IN LIKE IS NULL, combined with AND / OR / NOT.</div>';
-    echo '<div class="label">Also require these scoring rules to match</div><div class="checkGrid">';
+    echo '<div class="codeBox"><div class="codeHead"><span>Advanced · filter text (the conditions above write it; edit it for parentheses or NOT)</span><button type="button" data-copy="listWhere">Copy</button></div>';
+    echo '<textarea class="textarea" id="listWhere" name="where" rows="2" maxlength="800" spellcheck="false" aria-label="Filter text">' . h((string)$criteria['where']) . '</textarea>';
+    echo '<details' . ($criteria['rule_ids'] ? ' open' : '') . '><summary>Also require scoring rules to match' . ($criteria['rule_ids'] ? ' (' . count($criteria['rule_ids']) . ')' : '') . '</summary><div class="checkGrid">';
     foreach ($rules as $r) {
         $rid = (int)$r['id'];
         echo '<label class="check"><input type="checkbox" name="rule_ids[]" value="' . h((string)$rid) . '"' . (in_array($rid, (array)$criteria['rule_ids'], true) ? ' checked' : '') . '> ' . h((string)$r['name']) . '</label>';
@@ -5536,22 +6362,30 @@ function render_tab_segments(PDO $pdo): void
     if (!$rules) {
         echo '<div class="muted">No rules available.</div>';
     }
-    echo '</div></details>';
-    echo '<div class="actionsRow"><button class="btn" type="submit" name="action" value="segment_save">Save list</button><button class="btnSecondary" type="submit" name="action" value="segment_estimate">Refresh count</button></div>';
+    echo '</div><div class="muted tiny">Fields: ' . h(implode(', ', array_keys(filter_field_catalog()))) . ', plus custom.field_key. Operators: = != &gt; &lt; &gt;= &lt;= IN LIKE IS NULL, with AND / OR / NOT.</div></details></div>';
+    echo '<noscript><div class="actionsRow"><button class="btn" type="submit" name="action" value="segment_save">Save list</button></div></noscript>';
     echo '</form>';
+
+    // Live result + preview
+    echo '<div class="stack"><div class="card" id="listResult"><div class="eyebrow">Live result</div>';
+    echo '<div class="big"><b data-lr="count">—</b><span data-lr="hh">policies</span></div>';
+    echo '<dl class="res"><dt>Average LTV</dt><dd data-lr="ltv">—</dd><dt>Monthly premium</dt><dd data-lr="prem">—</dd><dt>Reachable by phone</dt><dd data-lr="phone">—</dd><dt>Left out: no consent</dt><dd class="warn" data-lr="left">—</dd></dl>';
+    echo '<div class="lbCount" id="listCount" aria-live="polite">Counting…</div>';
     if ($sid > 0) {
-        echo '<div class="divider"></div><div class="h3">Export this list</div><div class="muted tiny">' . h($consentRequired ? 'Consent-filtered: only records consented for the channel and not opted out.' : 'Opt-outs are always excluded except for internal exports.') . '</div>';
-        echo '<div class="actionsRow"><form method="post" class="exportBar">' . csrf_field() . '<input type="hidden" name="id" value="' . h((string)$sid) . '"><select class="select selectSm" name="channel" aria-label="Export channel"><option value="email">Email-consented</option><option value="sms">SMS-consented</option><option value="phone">Call-consented</option><option value="mail">Mail (excl. opt-outs)</option>' . ($consentRequired ? '' : '<option value="all">Everyone (internal)</option>') . '</select><button class="btnSecondary btnSm" type="submit" name="action" value="export_segment_prepare">Export CSV</button></form>';
-        echo '<form method="post" data-confirm="Delete this list?">' . csrf_field() . '<input type="hidden" name="id" value="' . h((string)$sid) . '"><button class="btnGhost btnSm" type="submit" name="action" value="segment_delete">Delete list</button></form></div>';
+        $first = $consent[0] ?? 'mail';
+        echo '<form method="post" class="resBtns">' . csrf_field() . '<input type="hidden" name="id" value="' . h((string)$sid) . '"><input type="hidden" name="action" value="export_segment_prepare"><input type="hidden" name="channel" value="' . h($first) . '" data-lr-channel><button class="btnDark" type="submit" data-lr="export" title="Consent-filtered for the first channel ticked above; mail if none">Export CSV</button><a class="btnSecondary" href="' . h(tab_url('campaigns', ['seg' => (string)$sid])) . '">Simulate</a></form>';
+        echo '<form method="post" class="actionsRow" data-confirm="Delete this list?">' . csrf_field() . '<input type="hidden" name="id" value="' . h((string)$sid) . '"><button class="linkBtn" type="submit" name="action" value="segment_delete">Delete list</button></form>';
+    } else {
+        echo '<p class="muted tiny">Save the list to export it or simulate a campaign.</p>';
     }
-    echo '</div>';
+    echo '</div><div class="card cardFlush" id="listPreview"><div class="pvHead"><div class="h2">Preview</div><span class="muted tiny" data-lr="pvcount"></span></div><div data-lr="pv"><div class="pad muted">Counting…</div></div></div></div>';
     echo '</div>';
 }
 
-function segment_payload(PDO $pdo, array $ruleIds, string $where, $builder): array
+function segment_payload(PDO $pdo, array $ruleIds, string $where, $builder, array $consent = [], string $description = ''): array
 {
-    $stats = segment_stats($pdo, $ruleIds, $where);
-    $payload = ['rule_ids' => $ruleIds, 'where' => $where, 'mode' => 'rules_and_where', 'stats' => ['count' => $stats['count'], 'email' => $stats['email'], 'sms' => $stats['sms'], 'phone' => $stats['phone'], 'mail' => $stats['mail']]];
+    $stats = segment_stats($pdo, $ruleIds, where_with_consent($where, $consent));
+    $payload = ['rule_ids' => $ruleIds, 'where' => $where, 'mode' => 'rules_and_where', 'consent' => clean_consent($consent), 'description' => mb_substr(trim($description), 0, 200), 'stats' => ['count' => $stats['count'], 'email' => $stats['email'], 'sms' => $stats['sms'], 'phone' => $stats['phone'], 'mail' => $stats['mail']]];
     if (is_array($builder) && isset($builder['rows']) && is_array($builder['rows'])) {
         $payload['builder'] = ['logic' => (string)($builder['logic'] ?? 'AND') === 'OR' ? 'OR' : 'AND', 'rows' => array_slice(array_values(array_filter($builder['rows'], 'is_array')), 0, 20)];
     }
@@ -5565,13 +6399,15 @@ function handle_segment_save(PDO $pdo, array $user): void
     $ruleIds = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['rule_ids'] ?? [])), fn($x) => $x > 0)));
     $where = trim((string)($_POST['where'] ?? ''));
     $builder = safe_json((string)($_POST['builder_json'] ?? ''));
+    $consent = clean_consent($_POST['consent'] ?? []);
+    $description = (string)($_POST['description'] ?? '');
     if ($name === '') {
         flash('error', 'List name is required.');
-        redirect_to(['tab' => 'segments']);
+        redirect_to(['tab' => 'segments', 'edit' => $id > 0 ? (string)$id : null, 'new' => $id > 0 ? null : '1']);
     }
     try {
         validate_filter_expr($where);
-        [$payload, $stats] = segment_payload($pdo, $ruleIds, $where, $builder);
+        [$payload, $stats] = segment_payload($pdo, $ruleIds, $where, $builder, $consent, $description);
     } catch (Throwable $e) {
         flash('error', 'That filter is not valid: ' . $e->getMessage());
         redirect_to(['tab' => 'segments', 'edit' => $id > 0 ? (string)$id : null]);
@@ -5587,7 +6423,7 @@ function handle_segment_save(PDO $pdo, array $user): void
         audit($pdo, (int)$user['id'], 'segments.create', ['id' => $id, 'name' => $name, 'count' => $stats['count']]);
         flash('success', 'List created · ' . $stats['count'] . ' policies.');
     }
-    redirect_to(['tab' => 'segments', 'edit' => (string)$id]);
+    redirect_to(['tab' => 'segments', 'edit' => (string)$id, 'new' => null, 'preset' => null, 'dup' => null]);
 }
 
 function handle_segment_estimate(PDO $pdo, array $user): void
@@ -5621,10 +6457,34 @@ function handle_segment_count(PDO $pdo): void
     header('Content-Type: application/json; charset=utf-8');
     $ruleIds = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['rule_ids'] ?? [])), fn($x) => $x > 0)));
     $where = trim((string)($_POST['where'] ?? ''));
+    $consent = clean_consent($_POST['consent'] ?? []);
     try {
         validate_filter_expr($where);
-        $stats = segment_stats($pdo, $ruleIds, $where);
-        echo json_encode(['ok' => true] + $stats, JSON_UNESCAPED_SLASHES);
+        $base = segment_stats($pdo, $ruleIds, $where);
+        $stats = $consent ? segment_stats($pdo, $ruleIds, where_with_consent($where, $consent)) : $base;
+        $live = ['ltv_sum' => 0.0, 'ltv_n' => 0, 'hh' => [], 'preview' => []];
+        segment_iterate($pdo, $ruleIds, where_with_consent($where, $consent), static function (array $ph, array $rec) use (&$live): void {
+            if ($ph['ltv_estimate'] !== null && $ph['ltv_estimate'] !== '') {
+                $live['ltv_sum'] += (float)$ph['ltv_estimate'];
+                $live['ltv_n']++;
+            }
+            $live['hh'][(string)($ph['household_id'] ?: 'solo:' . $ph['id'])] = true;
+            if (count($live['preview']) < 5) {
+                $live['preview'][] = ['name' => mask_name((string)$ph['name']) ?: (string)$ph['policy_number'], 'policy' => (string)$ph['policy_number'], 'line' => (string)($ph['line_of_business'] ?: $ph['policy_type'] ?: ''), 'ltv' => $ph['ltv_estimate'] !== null ? money_whole($ph['ltv_estimate']) : '—', 'tier' => (string)($ph['risk_tier'] ?: 'Unknown'), 'id' => (int)$ph['id']];
+            }
+        });
+        $premium = (float)$stats['premium'];
+        if (setting('premium_period', 'monthly') === 'annual') {
+            $premium /= 12;
+        }
+        echo json_encode(['ok' => true] + $stats + [
+            'base_count' => $base['count'],
+            'left_out' => max(0, $base['count'] - $stats['count']),
+            'avg_ltv' => $live['ltv_n'] ? money_whole($live['ltv_sum'] / $live['ltv_n']) : '—',
+            'households' => count($live['hh']),
+            'monthly_premium' => money_whole($premium),
+            'preview' => $live['preview'],
+        ], JSON_UNESCAPED_SLASHES);
     } catch (Throwable $e) {
         echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
     }
@@ -5738,14 +6598,33 @@ function campaign_model(int $size, int $reachable, float $rate, float $avg, floa
 function render_tab_campaigns(PDO $pdo): void
 {
     $segments = $pdo->query('SELECT id, name, rule_ids FROM segments ORDER BY id DESC')->fetchAll();
-    $campaigns = $pdo->query('SELECT c.id, c.name, c.assumptions, c.projected_revenue, c.created_at, s.name AS segment_name FROM campaigns c LEFT JOIN segments s ON s.id = c.segment_id ORDER BY c.created_at DESC, c.id DESC LIMIT 20')->fetchAll();
+    $campaigns = $pdo->query('SELECT c.id, c.name, c.segment_id, c.assumptions, c.projected_revenue, c.created_at, s.name AS segment_name FROM campaigns c LEFT JOIN segments s ON s.id = c.segment_id ORDER BY c.created_at DESC, c.id DESC LIMIT 6')->fetchAll();
     $viewId = (int)($_GET['view'] ?? 0);
+    $shown = null;
+    foreach ($campaigns as $c) {
+        if ((int)$c['id'] === $viewId) {
+            $shown = $c;
+        }
+    }
+    $a = $shown ? safe_json((string)($shown['assumptions'] ?? '{}')) : null;
+    $a = is_array($a) ? $a : [];
+    $segPick = (int)($_GET['seg'] ?? ($shown ? (int)$shown['segment_id'] : 0));
+    $channel = (string)($a['channel'] ?? 'phone');
+    if (!array_key_exists($channel, campaign_channels())) {
+        $channel = 'phone';
+    }
+    $rate = isset($a['cross_sell_rate']) ? (float)$a['cross_sell_rate'] * 100 : 5.0;
+    $avg = isset($a['avg_offer_value']) ? (float)$a['avg_offer_value'] : 1200.0;
+    $cost = isset($a['campaign_cost_per_contact']) ? (float)$a['campaign_cost_per_contact'] : 2.5;
+    $lift = isset($a['conversion_lift']) ? (float)$a['conversion_lift'] * 100 : 0.0;
+    $total = (int)$pdo->query('SELECT COUNT(*) FROM campaigns')->fetchColumn();
+    $letter = $shown ? (string)$shown['name'] : 'Scenario ' . chr(65 + ($total % 26));
+    $cur = currency_symbol();
 
-    echo '<div class="grid2 gridWide">';
-    echo '<div class="card"><div class="h2">Scenario</div><div class="muted">Reach comes from consent on file. Numbers update as you type; save to keep a scenario.</div>';
-    echo '<form method="post" class="form" id="campaignForm">' . csrf_field() . '<input type="hidden" name="action" value="campaign_save">';
-    echo '<label class="label" for="cName">Campaign name</label><input class="input" id="cName" name="name" required maxlength="120" value="Cross-sell test">';
-    echo '<div class="grid2"><div><label class="label" for="cSeg">List</label><select class="select" id="cSeg" name="segment_id" required>';
+    echo '<div class="campGrid">';
+    echo '<form method="post" class="card campForm" id="campaignForm">' . csrf_field() . '<input type="hidden" name="action" value="campaign_save">';
+    echo '<div class="eyebrow eyebrowAcc">' . h($shown ? 'Saved scenario · saving makes a copy' : $letter) . '</div><div class="campTitle" data-camp-title' . ($shown ? ' data-fixed="1"' : '') . '>' . h($shown ? (string)$shown['name'] : 'New scenario') . '</div>';
+    echo '<label class="fld">List<select class="select" name="segment_id" required data-camp-list>';
     foreach ($segments as $s) {
         $c = safe_json((string)($s['rule_ids'] ?? ''));
         $stats = is_array($c['stats'] ?? null) ? (array)$c['stats'] : null;
@@ -5757,72 +6636,62 @@ function render_tab_campaigns(PDO $pdo): void
                 $stats = ['count' => 0, 'email' => 0, 'sms' => 0, 'phone' => 0, 'mail' => 0];
             }
         }
-        echo '<option value="' . h((string)$s['id']) . '" data-size="' . h((string)(int)($stats['count'] ?? 0)) . '" data-email="' . h((string)(int)($stats['email'] ?? 0)) . '" data-sms="' . h((string)(int)($stats['sms'] ?? 0)) . '" data-phone="' . h((string)(int)($stats['phone'] ?? 0)) . '" data-mail="' . h((string)(int)($stats['mail'] ?? 0)) . '">' . h((string)$s['name']) . ' (' . h(number_format((int)($stats['count'] ?? 0))) . ')</option>';
+        echo '<option value="' . h((string)$s['id']) . '"' . ((int)$s['id'] === $segPick ? ' selected' : '') . ' data-name="' . h((string)$s['name']) . '" data-size="' . h((string)(int)($stats['count'] ?? 0)) . '" data-email="' . h((string)(int)($stats['email'] ?? 0)) . '" data-sms="' . h((string)(int)($stats['sms'] ?? 0)) . '" data-phone="' . h((string)(int)($stats['phone'] ?? 0)) . '" data-mail="' . h((string)(int)($stats['mail'] ?? 0)) . '">' . h((string)$s['name'] . ' · ' . number_format((int)($stats['count'] ?? 0))) . '</option>';
     }
     if (!$segments) {
-        echo '<option value="0">No lists yet — build one under Lists</option>';
+        echo '<option value="0">No lists yet: build one under Lists</option>';
     }
-    echo '</select></div><div><label class="label" for="cCh">Channel</label><select class="select" id="cCh" name="channel">';
-    foreach (campaign_channels() as $k => $l) {
-        echo '<option value="' . h($k) . '">' . h($l) . '</option>';
+    echo '</select></label>';
+    echo '<div class="fld">Channel<div class="segctl" role="radiogroup" aria-label="Channel">';
+    foreach (['phone' => 'Phone', 'email' => 'Email', 'sms' => 'SMS', 'mail' => 'Mail'] as $k => $l) {
+        echo '<label><input type="radio" name="channel" value="' . h($k) . '"' . ($k === $channel ? ' checked' : '') . '><span>' . h($l) . '</span></label>';
     }
-    echo '</select></div></div>';
-    echo '<div class="grid2"><div><label class="label" for="cRate">Conversion rate</label><input class="input" id="cRate" name="cross_sell_rate" type="number" step="0.001" min="0" max="1" value="0.05"></div>';
-    echo '<div><label class="label" for="cAvg">Revenue per conversion</label><input class="input" id="cAvg" name="avg_offer_value" type="number" step="0.01" min="0" value="1200"></div></div>';
-    echo '<div class="grid2"><div><label class="label" for="cCost">Cost per contact</label><input class="input" id="cCost" name="campaign_cost_per_contact" type="number" step="0.01" min="0" value="2.50"></div>';
-    echo '<div><label class="label" for="cLift">Conversion lift</label><input class="input" id="cLift" name="conversion_lift" type="number" step="0.01" min="0" value="0"></div></div>';
-    echo '<div class="funnel" id="funnel" aria-live="polite">';
-    foreach ([['size', 'On the list'], ['reach', 'Reachable on channel'], ['conv', 'Expected conversions']] as [$k, $l]) {
-        echo '<div class="fnRow"><span class="fnLabel">' . h($l) . '</span><span class="fnBar"><span class="fnFill" data-fn-bar="' . h($k) . '"></span></span><span class="fnValue" data-fn="' . h($k) . '">—</span></div>';
-    }
-    echo '<div class="fnTotals"><div><div class="statLabel">Gross</div><div class="statValue" data-fn="gross">—</div></div><div><div class="statLabel">Cost</div><div class="statValue" data-fn="cost">—</div></div><div><div class="statLabel">Net</div><div class="statValue" data-fn="net">—</div></div><div><div class="statLabel">ROI</div><div class="statValue" data-fn="roi">—</div></div><div><div class="statLabel">Break-even rate</div><div class="statValue" data-fn="be">—</div></div></div>';
-    echo '</div>';
-    echo '<div class="actionsRow"><button class="btn" type="submit">Save scenario</button></div>';
-    echo '</form></div>';
+    echo '</div><span class="help" data-camp-help>Reach counts only consented, not opted-out contacts.</span></div>';
+    echo '<label class="fld">Cost per contact<span class="unit"><input class="input" name="campaign_cost_per_contact" type="number" step="0.01" min="0" value="' . h(number_format($cost, 2, '.', '')) . '"><span>' . h($cur !== '' ? $cur : 'USD') . '</span></span><span class="help">Staff time plus dialer or send cost</span></label>';
+    echo '<label class="fld">Expected conversion rate<span class="unit"><input class="input" name="cross_sell_rate_pct" type="number" step="0.1" min="0" max="100" value="' . h(rtrim(rtrim(number_format($rate, 2, '.', ''), '0'), '.') ?: '0') . '"><span>%</span></span><span class="help">Use your own past results; this is a placeholder</span></label>';
+    echo '<label class="fld">Average new annual premium<span class="unit"><input class="input" name="avg_offer_value" type="number" step="1" min="0" value="' . h((string)round($avg)) . '"><span>' . h($cur !== '' ? $cur : 'USD') . '</span></span></label>';
+    echo '<label class="fld">Lift from offer or discount<span class="unit"><input class="input" name="conversion_lift_pct" type="number" step="1" min="0" max="500" value="' . h((string)round($lift)) . '"><span>%</span></span></label>';
+    echo '<input type="hidden" name="name" value="">';
+    echo '<noscript><button class="btn" type="submit">Save scenario</button></noscript></form>';
 
-    $shown = null;
-    foreach ($campaigns as $c) {
-        if ($viewId === 0 || (int)$c['id'] === $viewId) {
-            $shown = $c;
-            break;
-        }
+    echo '<div class="stack"><div class="card"><div class="cardHead"><div class="h2">Projected funnel</div><span class="muted tiny">Updates as you type</span></div>';
+    foreach ([['', 'size', 'In list', 'data-camp-listname'], ['reach', 'reach', 'Reachable', 'data-camp-reachsub'], ['sales', 'conv', 'Expected sales', 'data-camp-convsub']] as [$cls, $k, $label, $subAttr]) {
+        echo '<div class="fn2' . ($cls !== '' ? ' ' . $cls : '') . '"><div><strong>' . h($label) . '</strong><span ' . $subAttr . '>—</span></div><i data-fn-bar="' . h($k) . '"></i><b data-fn="' . h($k) . '">—</b></div>';
     }
-    if ($shown) {
-        $a = safe_json((string)($shown['assumptions'] ?? '{}'));
-        $a = is_array($a) ? $a : [];
-        $size = max(1, (int)($a['segment_size'] ?? 0));
-        $reach = (int)($a['reachable'] ?? $a['contacts'] ?? 0);
-        $conv = (float)($a['expected_conversions'] ?? 0);
-        echo '<div class="card"><div class="h2">' . h((string)$shown['name']) . '</div><div class="muted">' . h((string)($shown['segment_name'] ?? '—')) . ' · saved ' . h((string)$shown['created_at']) . '</div><div class="funnel">';
-        foreach ([['On the list', (int)($a['segment_size'] ?? 0)], ['Reachable', $reach], ['Conversions', $conv]] as [$l, $v]) {
-            $pct = (int)round(min(100, ($v / $size) * 100));
-            echo '<div class="fnRow"><span class="fnLabel">' . h($l) . '</span><span class="fnBar"><span class="fnFill" data-w="' . h((string)max(1, $pct)) . '"></span></span><span class="fnValue">' . h(is_float($v) ? number_format($v, 1) : number_format($v)) . '</span></div>';
+    echo '<div class="tiles"><div class="tile"><div class="l">Gross new premium</div><div class="n" data-fn="gross">—</div></div><div class="tile neg"><div class="l">Contact cost</div><div class="n" data-fn="cost">—</div></div><div class="tile good" data-fn-nettile><div class="l">Net</div><div class="n" data-fn="net">—</div></div><div class="tile"><div class="l">Return on cost</div><div class="n" data-fn="roi">—</div></div></div>';
+    echo '<div class="callout"><svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.8"/><path d="M7 6.2v3.6M7 4.2v.1"/></svg><span>Break-even at a <b data-fn="be">—</b> conversion rate. Formula: net = reachable × rate × premium × (1 + lift) − reachable × cost.</span></div></div>';
+
+    echo '<div class="card"><div class="cardHead"><div class="h2">Saved scenarios</div><span class="muted tiny">Same list, different assumptions</span></div>';
+    if ($campaigns) {
+        $best = null;
+        $nets = [];
+        foreach ($campaigns as $c) {
+            $ca = safe_json((string)($c['assumptions'] ?? '{}'));
+            $ca = is_array($ca) ? $ca : [];
+            $nets[(int)$c['id']] = isset($ca['net_revenue']) ? (float)$ca['net_revenue'] : (float)($c['projected_revenue'] ?? 0);
         }
-        $be = $a['break_even_rate'] ?? null;
-        echo '<div class="fnTotals"><div><div class="statLabel">Gross</div><div class="statValue">' . h(money_whole($a['gross_revenue'] ?? 0)) . '</div></div><div><div class="statLabel">Cost</div><div class="statValue">' . h(money_whole($a['estimated_cost'] ?? 0)) . '</div></div><div><div class="statLabel">Net</div><div class="statValue">' . h(money_whole($a['net_revenue'] ?? 0)) . '</div></div><div><div class="statLabel">Break-even rate</div><div class="statValue">' . h($be === null ? '—' : number_format((float)$be * 100, 2) . '%') . '</div></div></div></div>';
-        echo '<div class="muted tiny">Assumed ' . h(number_format((float)($a['cross_sell_rate'] ?? 0) * 100, 1)) . '% conversion, ' . h(money_or_blank($a['avg_offer_value'] ?? 0)) . ' per conversion, ' . h(money_or_blank($a['campaign_cost_per_contact'] ?? 0)) . ' per contact, ' . h(number_format((float)($a['conversion_lift'] ?? 0) * 100)) . '% lift.</div></div>';
+        arsort($nets);
+        $best = count($nets) > 1 ? (int)array_key_first($nets) : null;
+        echo '<div class="scns">';
+        foreach ($campaigns as $c) {
+            $ca = safe_json((string)($c['assumptions'] ?? '{}'));
+            $ca = is_array($ca) ? $ca : [];
+            $net = $nets[(int)$c['id']];
+            $reach = (int)($ca['reachable'] ?? $ca['contacts'] ?? 0);
+            $estCost = (float)($ca['estimated_cost'] ?? 0);
+            $gross = (float)($ca['gross_revenue'] ?? 0);
+            $ratio = $estCost > 0 ? $gross / $estCost : null;
+            $on = (int)$c['id'] === $viewId;
+            echo '<div class="scn' . ($on ? ' on' : '') . '"><div class="t"><a href="' . h(tab_url('campaigns', ['view' => (string)$c['id']])) . '">' . h((string)$c['name']) . '</a>' . ((int)$c['id'] === $best ? '<span class="best">Best net</span>' : '') . '</div>';
+            echo '<div class="d">' . h(number_format($reach) . ' contacts · ' . money_or_blank($ca['campaign_cost_per_contact'] ?? 0) . ' each · ' . money_whole($ca['avg_offer_value'] ?? 0) . ' premium' . ((string)($c['segment_name'] ?? '') !== '' ? ' · ' . (string)$c['segment_name'] : '')) . '</div>';
+            echo '<div class="v' . ($net < 0 ? ' neg' : '') . '">' . h(($net < 0 ? '−' : '') . money_whole(abs($net))) . '<small>net' . ($ratio !== null ? ' · ' . h(number_format($ratio, $ratio < 10 ? 1 : 0)) . '× cost' : '') . '</small></div>';
+            echo '<form method="post" data-confirm="Delete this scenario?">' . csrf_field() . '<input type="hidden" name="action" value="campaign_delete"><input type="hidden" name="id" value="' . h((string)$c['id']) . '"><button type="submit">Delete</button></form></div>';
+        }
+        echo '</div>';
     } else {
-        echo '<div class="card"><div class="h2">Result</div><div class="empty">Save a scenario to keep its funnel here and compare it with others.</div></div>';
+        echo '<div class="muted">Save a scenario to compare assumptions side by side.</div>';
     }
-    echo '</div>';
-    echo '<div class="card"><div class="h2">Saved scenarios</div>';
-    echo '<div class="scrollX"><table class="table"><thead><tr><th>Name</th><th>List · channel</th><th class="right">Reach</th><th class="right">Conv.</th><th class="right">Net</th><th class="right">ROI</th><th></th></tr></thead><tbody>';
-    foreach ($campaigns as $c) {
-        $a = safe_json((string)($c['assumptions'] ?? '{}'));
-        $a = is_array($a) ? $a : [];
-        $net = isset($a['net_revenue']) ? (float)$a['net_revenue'] : (float)($c['projected_revenue'] ?? 0);
-        $roi = isset($a['roi']) && $a['roi'] !== null ? (float)$a['roi'] : ((float)($a['estimated_cost'] ?? 0) > 0 ? $net / (float)$a['estimated_cost'] : null);
-        $ch = (string)($a['channel'] ?? '');
-        echo '<tr><td><a class="link" href="' . h(self_url(['tab' => 'campaigns', 'view' => (string)$c['id']])) . '">' . h((string)$c['name']) . '</a><div class="muted tiny">' . h((string)$c['created_at']) . '</div></td><td class="muted">' . h((string)($c['segment_name'] ?? '—')) . ($ch !== '' ? ' · ' . h(campaign_channels()[$ch] ?? $ch) : '') . '</td>';
-        echo '<td class="right">' . h(number_format((int)($a['reachable'] ?? $a['contacts'] ?? 0))) . '</td><td class="right">' . h(number_format((float)($a['expected_conversions'] ?? 0), 1)) . '</td><td class="right' . ($net < 0 ? ' neg' : '') . '">' . h(money_whole($net)) . '</td><td class="right">' . h($roi === null ? '—' : round($roi * 100) . '%') . '</td>';
-        echo '<td><form method="post" class="inline" data-confirm="Delete this scenario?">' . csrf_field() . '<input type="hidden" name="action" value="campaign_delete"><input type="hidden" name="id" value="' . h((string)$c['id']) . '"><button class="linkBtn" type="submit">Delete</button></form></td></tr>';
-    }
-    if (!$campaigns) {
-        echo '<tr><td colspan="7" class="muted">No scenarios yet.</td></tr>';
-    }
-    echo '</tbody></table></div>';
-
-    echo '</div>';
+    echo '</div></div></div>';
 }
 
 function handle_campaign_save(PDO $pdo, array $user): void
@@ -5833,12 +6702,14 @@ function handle_campaign_save(PDO $pdo, array $user): void
     if (!array_key_exists($channel, campaign_channels())) {
         $channel = 'email';
     }
-    $rate = max(0.0, min(1.0, (float)($_POST['cross_sell_rate'] ?? 0)));
+    $rate = isset($_POST['cross_sell_rate_pct']) ? (float)$_POST['cross_sell_rate_pct'] / 100 : (float)($_POST['cross_sell_rate'] ?? 0);
+    $lift = isset($_POST['conversion_lift_pct']) ? (float)$_POST['conversion_lift_pct'] / 100 : (float)($_POST['conversion_lift'] ?? 0);
+    $rate = max(0.0, min(1.0, $rate));
+    $lift = max(0.0, min(5.0, $lift));
     $avg = max(0.0, (float)($_POST['avg_offer_value'] ?? 0));
     $cost = max(0.0, (float)($_POST['campaign_cost_per_contact'] ?? 0));
-    $lift = max(0.0, (float)($_POST['conversion_lift'] ?? 0));
-    if ($name === '' || $segmentId <= 0) {
-        flash('error', 'Campaign name and list are required.');
+    if ($segmentId <= 0) {
+        flash('error', 'Pick a list first. Build one under Lists.');
         redirect_to(['tab' => 'campaigns']);
     }
     $st = $pdo->prepare('SELECT * FROM segments WHERE id = ?');
@@ -5847,6 +6718,11 @@ function handle_campaign_save(PDO $pdo, array $user): void
     if (!$seg) {
         flash('error', 'List not found.');
         redirect_to(['tab' => 'campaigns']);
+    }
+    if ($name === '') {
+        $n = (int)$pdo->query('SELECT COUNT(*) FROM campaigns')->fetchColumn();
+        $labels = ['phone' => 'Phone', 'email' => 'Email', 'sms' => 'SMS', 'mail' => 'Mail'];
+        $name = chr(65 + ($n % 26)) . ' · ' . ($labels[$channel] ?? $channel) . ', ' . rtrim(rtrim(number_format($rate * 100, 1, '.', ''), '0'), '.') . '%';
     }
     [$ruleIds, $where] = segment_criteria($seg);
     try {
@@ -5858,11 +6734,11 @@ function handle_campaign_save(PDO $pdo, array $user): void
     $model = campaign_model((int)$stats['count'], (int)$stats[$channel], $rate, $avg, $cost, $lift);
     $assumptions = ['channel' => $channel, 'cross_sell_rate' => $rate, 'avg_offer_value' => $avg, 'campaign_cost_per_contact' => $cost, 'conversion_lift' => $lift] + $model;
     $ins = $pdo->prepare('INSERT INTO campaigns (name, segment_id, assumptions, projected_revenue, created_at) VALUES (?, ?, ?, ?, ?)');
-    $ins->execute([$name, $segmentId, json_encode($assumptions, JSON_UNESCAPED_SLASHES), $model['gross_revenue'], now_iso()]);
+    $ins->execute([mb_substr($name, 0, 120), $segmentId, json_encode($assumptions, JSON_UNESCAPED_SLASHES), $model['gross_revenue'], now_iso()]);
     $newId = (int)$pdo->lastInsertId();
     audit($pdo, (int)$user['id'], 'campaigns.simulate', ['id' => $newId, 'segment_id' => $segmentId, 'channel' => $channel, 'projected_revenue' => $model['gross_revenue'], 'net_revenue' => $model['net_revenue']]);
-    flash('success', 'Scenario saved. Net revenue: ' . currency_symbol() . number_format($model['net_revenue'], 2) . ' from ' . $model['reachable'] . ' reachable contacts.');
-    redirect_to(['tab' => 'campaigns', 'view' => (string)$newId]);
+    flash('success', 'Saved “' . $name . '”. Net: ' . currency_symbol() . number_format($model['net_revenue'], 2) . ' from ' . $model['reachable'] . ' reachable contacts.');
+    redirect_to(['tab' => 'campaigns', 'view' => (string)$newId, 'seg' => null]);
 }
 
 function handle_campaign_delete(PDO $pdo, array $user): void
@@ -5887,6 +6763,7 @@ function render_tab_settings(PDO $pdo): void
     echo '<div class="grid2">';
     echo '<div class="card"><div class="h2">Workspace</div>';
     echo '<form method="post" class="form">' . csrf_field() . '<input type="hidden" name="action" value="settings_save"><input type="hidden" name="section" value="workspace">';
+    echo '<label class="label" for="sAgency">Agency name</label><input class="input" id="sAgency" name="agency_name" maxlength="80" placeholder="Shown at the top of the sidebar" value="' . h(setting('agency_name', '')) . '">';
     echo '<div class="grid2"><div><label class="label" for="sCur">Currency symbol</label><input class="input" id="sCur" name="currency_symbol" maxlength="4" value="' . h(currency_symbol()) . '"></div>';
     echo '<div><label class="label" for="sPer">Premium amounts are</label><select class="select" id="sPer" name="premium_period"><option value="monthly"' . ($a['premium_period'] === 'monthly' ? ' selected' : '') . '>Monthly</option><option value="annual"' . ($a['premium_period'] === 'annual' ? ' selected' : '') . '>Annual</option></select></div></div>';
     echo '<label class="label" for="sTerm">Terminology</label><select class="select" id="sTerm" name="terminology">';
@@ -5984,6 +6861,11 @@ function handle_settings_save(PDO $pdo, array $user): void
     $section = (string)($_POST['section'] ?? '');
     $changed = [];
     if ($section === 'workspace') {
+        $agency = trim((string)($_POST['agency_name'] ?? ''));
+        if (mb_strlen($agency) <= 80) {
+            setting_set($pdo, 'agency_name', $agency);
+            $changed[] = 'agency_name';
+        }
         $cur = trim((string)($_POST['currency_symbol'] ?? ''));
         if (mb_strlen($cur) <= 4) {
             setting_set($pdo, 'currency_symbol', $cur);
@@ -6166,96 +7048,146 @@ function recompute_all_policyholders(PDO $pdo): int
 
 function render_import_mapping(PDO $pdo, array $stage): void
 {
-    $headers = array_values(array_filter(array_map(fn($x) => trim(strip_bom((string)$x)), (array)$stage['headers']), fn($x) => $x !== ''));
-    $filename = (string)($stage['filename'] ?? 'upload.csv');
+    $rawHeaders = array_map(fn($x) => trim(strip_bom((string)$x)), (array)$stage['headers']);
+    $headers = array_values(array_filter($rawHeaders, fn($x) => $x !== ''));
     $saved = is_array($stage['mapping'] ?? null) ? (array)$stage['mapping'] : null;
-    $defaults = $saved ?? guess_import_mapping($headers);
+    $mapping = $saved ?? guess_import_mapping($headers);
     $fields = import_field_labels();
-    $groups = [
-        'Who and what' => ['record_id', 'display_name', 'household_id', 'policy_type', 'line_of_business', 'carrier', 'producer', 'status'],
-        'Money and dates' => ['premium_amount', 'sum_assured', 'tenure_months', 'effective_date', 'expiration_date'],
-        'Contact and consent' => ['email', 'phone', 'consent_email', 'consent_sms', 'consent_phone'],
-        'Profile' => ['dob', 'age', 'gender', 'region'],
-    ];
+    $byHeader = [];
+    foreach ($mapping as $field => $hname) {
+        $field = (string)$field;
+        $hname = (string)$hname;
+        if ($hname === '' || $hname === '__generate__') {
+            continue;
+        }
+        if (str_starts_with($field, 'ignore:')) {
+            $byHeader[$hname] = '__ignore__';
+        } elseif (isset($fields[$field]) && !isset($byHeader[$hname])) {
+            $byHeader[$hname] = $field;
+        }
+    }
+    $scan = stage_scan($stage);
     $ams = recognised_ams_columns($headers);
+    $matched = count(array_filter($byHeader, fn($f) => $f !== '__ignore__'));
+    $ignored = count(array_filter($byHeader, fn($f) => $f === '__ignore__'));
+    $custom = count($headers) - $matched - $ignored;
+    $sensitive = ['display_name', 'dob', 'email', 'phone'];
+    $used = [];
 
-    echo '<div class="card"><div class="cardHead"><div><div class="h2">Map columns</div><div class="muted">Staged file: <strong>' . h($filename) . '</strong> · ' . h((string)count($headers)) . ' columns. Unmapped CSV columns are preserved as typed custom fields in <code>metadata.custom_fields</code>.</div></div>';
+    echo '<div class="importGrid"><form method="post" class="card cardFlush" id="mapForm">' . csrf_field() . '<input type="hidden" name="action" value="import_preview">';
+    echo '<div class="cardHeadPad"><div><div class="h2">Map columns</div><div class="muted">' . h($matched . ' matched automatically · ' . $custom . ' kept as custom field' . ($custom === 1 ? '' : 's') . ' · ' . $ignored . ' ignored') . '</div></div>';
     if ($ams >= 3) {
-        echo '<span class="note">Recognised ' . h((string)$ams) . ' agency-system column names — mapping pre-filled.</span>';
+        echo '<span class="preset">Agency-system export <small>' . h((string)$ams) . ' known columns detected</small></span>';
+    } elseif ($saved) {
+        echo '<span class="preset">Your mapping <small>edited</small></span>';
     }
-    echo '</div>';
-    echo '<form method="post" class="form">' . csrf_field() . '<input type="hidden" name="action" value="import_preview">';
-    foreach ($groups as $title => $keys) {
-        echo '<div class="mapSection"><div class="label">' . h($title) . '</div><div class="gridMap">';
-        foreach ($keys as $key) {
-            $label = (string)($fields[$key] ?? $key);
-            $current = (string)($defaults[$key] ?? '');
-            echo '<div class="mapRow"><label class="mapLabel" for="map_' . h($key) . '">' . h($label) . '</label><select class="select" id="map_' . h($key) . '" name="map[' . h($key) . ']">';
-            echo '<option value="">' . h($key === 'display_name' ? 'Default from Record ID' : 'Not provided') . '</option>';
-            if ($key === 'record_id') {
-                echo '<option value="__generate__"' . ($current === '' || $current === '__generate__' ? ' selected' : '') . '>Generate from row number</option>';
-            }
-            foreach ($headers as $hname) {
-                $sel = ($current === $hname) ? ' selected' : '';
-                echo '<option value="' . h($hname) . '"' . $sel . '>' . h($hname) . '</option>';
-            }
-            echo '</select></div>';
+    echo '</div><div class="scrollX"><table class="t2 mapTable"><thead><tr><th>CSV column</th><th>Sample</th><th>LiteInsurance field</th><th>Result</th></tr></thead><tbody>';
+    foreach ($rawHeaders as $i => $hname) {
+        if ($hname === '') {
+            continue;
         }
-        echo '</div></div>';
+        $cur = $byHeader[$hname] ?? '';
+        $key = custom_field_key($hname, $used);
+        $sample = (string)($scan['samples'][$hname] ?? '');
+        $shown = $sample === '' ? '—' : mask_sample($cur !== '' && $cur !== '__ignore__' ? $cur : '', $sample);
+        if ($cur === '' && preg_match('/name|email|phone|birth|dob/i', $hname)) {
+            $shown = $sample === '' ? '—' : mask_name($sample);
+        }
+        echo '<tr><td>' . h($hname) . '</td><td class="mono">' . h($shown) . '</td><td><select class="select" name="cmap[' . h((string)$i) . ']" data-col="' . h($hname) . '">';
+        echo '<option value=""' . ($cur === '' ? ' selected' : '') . '>Custom field: custom.' . h($key) . '</option>';
+        echo '<option value="__ignore__"' . ($cur === '__ignore__' ? ' selected' : '') . '>Ignore this column</option>';
+        foreach ($fields as $fk => $fl) {
+            echo '<option value="' . h($fk) . '"' . ($cur === $fk ? ' selected' : '') . '>' . h($fl) . '</option>';
+        }
+        echo '</select></td><td>';
+        if ($cur === '__ignore__') {
+            echo '<span class="resPill ign">Ignored · not imported</span>';
+        } elseif ($cur === '') {
+            echo '<span class="resPill custom">Kept as custom</span>';
+        } elseif (in_array($cur, $sensitive, true)) {
+            echo '<span class="resPill sens">Matched · sensitive</span>';
+        } else {
+            echo '<span class="resPill">Matched</span>';
+        }
+        echo '</td></tr>';
     }
+    echo '</tbody></table></div>';
     $period = setting('premium_period', 'monthly');
-    echo '<div class="grid3"><div><label class="label" for="premium_period">Premium amounts are</label><select class="select" id="premium_period" name="premium_period"><option value="monthly"' . ($period === 'monthly' ? ' selected' : '') . '>Monthly</option><option value="annual"' . ($period === 'annual' ? ' selected' : '') . '>Annual (divided by 12 for LTV)</option></select></div>';
-    echo '<div><label class="label">Default region</label><input class="input" name="defaults[region]" maxlength="80" value="' . h((string)($stage['defaults']['region'] ?? 'Unknown')) . '"></div>';
-    echo '<div><label class="label">Default policy type</label><input class="input" name="defaults[policy_type]" maxlength="80" value="' . h((string)($stage['defaults']['policy_type'] ?? 'term')) . '"></div></div>';
-    echo '<div class="muted tiny">Re-importing a later export updates matching Record IDs instead of duplicating them. Renewal stage, owner, contact history and opt-outs are kept.</div>';
-    echo '<div class="actionsRow"><button class="btn" type="submit">Preview import</button></div></form></div>';
+    echo '<div class="mapOpts"><div><label class="label" for="premium_period">Premium amounts are</label><select class="select" id="premium_period" name="premium_period"><option value="monthly"' . ($period === 'monthly' ? ' selected' : '') . '>Monthly</option><option value="annual"' . ($period === 'annual' ? ' selected' : '') . '>Annual (divided by 12 for LTV)</option></select></div>';
+    echo '<div><label class="label" for="defRegion">Region when blank</label><input class="input" id="defRegion" name="defaults[region]" maxlength="80" value="' . h((string)($stage['defaults']['region'] ?? 'Unknown')) . '"></div>';
+    echo '<div><label class="label" for="defType">' . h(lbl('policy_type')) . ' when blank</label><input class="input" id="defType" name="defaults[policy_type]" maxlength="80" value="' . h((string)($stage['defaults']['policy_type'] ?? 'term')) . '"></div></div>';
+    echo '</form>';
 
-    if (isset($stage['preview']) && is_array($stage['preview'])) {
-        $stats = (array)($stage['preview']['stats'] ?? []);
-        $rows = (array)($stage['preview']['rows'] ?? []);
-        $total = (int)($stats['rows_total'] ?? 0);
-        $willUpdate = (int)($stats['will_update'] ?? 0);
-        echo '<div class="card"><div class="cardHead"><div><div class="h2">Preview</div><div class="muted">First ' . h((string)IMPORT_PREVIEW_ROWS) . ' rows after cleaning and imputation. Names are masked.</div></div></div>';
-        echo '<div class="kpiGrid">' . kpi('Rows detected', (string)$total) . kpi('New / updated', max(0, $total - $willUpdate) . ' / ' . $willUpdate) . kpi('Hard rejects (preview)', (string)($stats['hard_rejects_preview'] ?? 0)) . kpi('Mean premium', money_or_blank((float)($stats['mean_premium'] ?? 0))) . '</div>';
-        $cols = ['policy_number' => 'Record', 'name' => 'Name', 'policy_type' => 'Type', 'expiration_date' => 'Expires', 'status' => 'Status', 'household_id' => 'Household', 'contact' => 'Reachable by', 'premium_amount' => 'Premium', 'sum_assured' => 'Coverage', 'ltv_estimate' => 'LTV', 'risk_tier' => 'Tier', 'confidence_score' => 'Conf', 'is_imputed' => 'Imputed'];
-        $customCols = array_values(array_filter(array_slice(array_map(fn($d) => (string)($d['field_key'] ?? ''), (array)($stage['preview']['analysis']['custom_fields'] ?? [])), 0, 3)));
-        echo '<div class="scrollX"><table class="table"><thead><tr>';
-        foreach ($cols as $c => $label) {
-            echo '<th' . (in_array($c, ['premium_amount', 'sum_assured', 'ltv_estimate', 'confidence_score'], true) ? ' class="right"' : '') . '>' . h($label) . '</th>';
-        }
-        foreach ($customCols as $c) {
-            echo '<th>' . h('custom.' . $c) . '</th>';
-        }
-        echo '</tr></thead><tbody>';
-        foreach ($rows as $r) {
-            $low = (int)($r['confidence_score'] ?? 0) < 60;
-            echo '<tr class="' . ($low ? 'rowLow' : '') . '">';
-            foreach ($cols as $c => $label) {
-                $v = $r[$c] ?? '';
-                if (in_array($c, ['premium_amount', 'sum_assured', 'ltv_estimate'], true)) {
-                    echo '<td class="right">' . h(($v === '' || $v === null) ? '' : money_or_blank((float)$v)) . '</td>';
-                } elseif ($c === 'risk_tier') {
-                    echo '<td>' . tier_badge((string)$v) . '</td>';
-                } elseif ($c === 'is_imputed') {
-                    echo '<td>' . ((int)$v === 1 ? '<span class="badge">Yes</span>' : '<span class="badge mutedBadge">No</span>') . '</td>';
-                } else {
-                    echo '<td' . ($c === 'confidence_score' ? ' class="right"' : '') . '>' . h((string)$v) . '</td>';
-                }
-            }
-            $custom = is_array($r['custom_fields'] ?? null) ? (array)$r['custom_fields'] : [];
-            foreach ($customCols as $c) {
-                $v = $custom[$c] ?? '';
-                echo '<td>' . h(is_bool($v) ? ($v ? 'true' : 'false') : (string)$v) . '</td>';
-            }
-            echo '</tr>';
-        }
-        if (!$rows) {
-            echo '<tr><td colspan="' . h((string)(count($cols) + count($customCols))) . '" class="muted">No rows to preview.</td></tr>';
-        }
-        echo '</tbody></table></div>';
-        echo '<form method="post" class="actionsRow">' . csrf_field() . '<input type="hidden" name="action" value="import_commit"><button class="btn" type="submit">Confirm &amp; import ' . h((string)$total) . ' rows</button><span class="muted tiny">' . h((string)$willUpdate) . ' existing record(s) will be updated in place.</span></form>';
-        echo '</div>';
+    // What will happen (quick scan with the current mapping)
+    $recHdr = (string)array_search('record_id', $byHeader, true);
+    $expHdr = (string)array_search('expiration_date', $byHeader, true);
+    $effHdr = (string)array_search('effective_date', $byHeader, true);
+    $willUpdate = $recHdr !== '' ? import_existing_count($pdo, (string)$stage['path'], ['record_id' => $recHdr]) : 0;
+    $rows = (int)$scan['rows'];
+    $noExp = $expHdr !== '' ? $rows - (int)($scan['filled'][$expHdr] ?? 0) : $rows;
+    $noEff = $effHdr !== '' ? $rows - (int)($scan['filled'][$effHdr] ?? 0) : $rows;
+    $consentMapped = count(array_intersect(['consent_email', 'consent_sms', 'consent_phone'], array_values($byHeader))) > 0;
+    echo '<div class="stack"><div class="card"><div class="eyebrow">What will happen</div><div class="happen">';
+    echo '<div class="item"><span class="ic">↻</span><div><b>' . h(number_format($willUpdate)) . '</b><span>policies updated in place (matched on ' . h($recHdr !== '' ? $recHdr : 'Record ID') . ')</span></div></div>';
+    echo '<div class="item"><span class="ic ok">+</span><div><b>' . h(number_format(max(0, $rows - $willUpdate))) . '</b><span>new policies added' . ($recHdr === '' ? ' · Record IDs generated from row numbers' : '') . '</span></div></div>';
+    echo '<div class="item"><span class="ic warn">!</span><div><b>' . h(number_format($noExp)) . '</b><span>missing an expiration date · ' . h($effHdr !== '' && $noEff < $rows ? 'filled from the effective date + term, then flagged' : 'sent to the Data health queue') . '</span></div></div>';
+    echo '<div class="item"><span class="ic ok">✓</span><div><b>' . h(number_format(count($headers))) . '</b><span>columns read · nothing is written until you confirm on the next step</span></div></div>';
+    echo '</div></div>';
+    if (!$consentMapped) {
+        echo '<div class="warnBox"><strong>No consent column mapped</strong>Phone and text exports will leave these records out until consent is set. Map a consent column, or record consent later in Settings or on each policy.</div>';
     }
+    echo '<button class="btnDark btnBlock" type="submit" form="mapForm">Continue to review →</button>';
+    echo '<div class="muted tiny">Re-importing next month’s export updates these records; renewal status, owner, contact history and opt-outs are kept.</div></div></div>';
+}
+
+function render_import_review(PDO $pdo, array $stage, array $scan): void
+{
+    $stats = (array)($stage['preview']['stats'] ?? []);
+    $rows = (array)($stage['preview']['rows'] ?? []);
+    $total = (int)($stats['rows_total'] ?? 0);
+    $willUpdate = (int)($stats['will_update'] ?? 0);
+    $rejects = (int)($stats['hard_rejects_preview'] ?? 0);
+    echo '<div class="importGrid"><div class="card cardFlush"><div class="cardHeadPad"><div><div class="h2">Review</div><div class="muted">First ' . h((string)IMPORT_PREVIEW_ROWS) . ' rows after cleaning and imputation. Names are masked.</div></div><a class="btnSecondary" href="' . h(tab_url('import', ['remap' => '1'])) . '">← Back to mapping</a></div>';
+    $cols = ['policy_number' => 'Record', 'name' => 'Insured', 'policy_type' => lbl('policy_type'), 'expiration_date' => 'Expires', 'contact' => 'Reachable by', 'premium_amount' => 'Premium', 'ltv_estimate' => 'LTV', 'risk_tier' => 'Risk', 'is_imputed' => 'Imputed'];
+    echo '<div class="scrollX"><table class="t2 dense"><thead><tr>';
+    foreach ($cols as $c => $label) {
+        echo '<th' . (in_array($c, ['premium_amount', 'ltv_estimate', 'confidence_score'], true) ? ' class="r"' : '') . '>' . h($label) . '</th>';
+    }
+    echo '</tr></thead><tbody>';
+    foreach ($rows as $r) {
+        echo '<tr>';
+        foreach ($cols as $c => $label) {
+            $v = $r[$c] ?? '';
+            if ($c === 'premium_amount') {
+                echo '<td class="r">' . h(($v === '' || $v === null) ? '—' : money_or_blank((float)$v)) . '</td>';
+            } elseif ($c === 'ltv_estimate') {
+                echo '<td class="r">' . h(($v === '' || $v === null) ? '—' : money_whole((float)$v)) . '</td>';
+            } elseif ($c === 'risk_tier') {
+                echo '<td>' . risk_pill((string)$v) . '</td>';
+            } elseif ($c === 'is_imputed') {
+                echo '<td>' . ((int)$v === 1 ? '<span class="resPill sens">Yes</span>' : '<span class="muted">No</span>') . '</td>';
+            } elseif ($c === 'name') {
+                echo '<td class="ins">' . h(mask_name((string)$v)) . '</td>';
+            } elseif ($c === 'expiration_date') {
+                echo '<td>' . h(date_dmy((string)$v)) . '</td>';
+            } else {
+                echo '<td' . ($c === 'confidence_score' ? ' class="r"' : ($c === 'policy_number' ? ' class="mono"' : '')) . '>' . h((string)$v) . '</td>';
+            }
+        }
+        echo '</tr>';
+    }
+    if (!$rows) {
+        echo '<tr><td colspan="' . h((string)count($cols)) . '" class="empty">No rows to preview.</td></tr>';
+    }
+    echo '</tbody></table></div></div>';
+    echo '<div class="stack"><div class="card"><div class="eyebrow">What will happen</div><div class="happen">';
+    echo '<div class="item"><span class="ic">↻</span><div><b>' . h(number_format($willUpdate)) . '</b><span>policies updated in place</span></div></div>';
+    echo '<div class="item"><span class="ic ok">+</span><div><b>' . h(number_format(max(0, $total - $willUpdate))) . '</b><span>new policies added</span></div></div>';
+    echo '<div class="item"><span class="ic ' . ($rejects ? 'warn' : 'ok') . '">' . ($rejects ? '!' : '✓') . '</span><div><b>' . h(number_format($rejects)) . '</b><span>hard errors in the preview · ' . h($rejects ? 'those rows are skipped and logged' : 'nothing will be skipped') . '</span></div></div>';
+    echo '<div class="item"><span class="ic">$</span><div><b>' . h(money_or_blank((float)($stats['mean_premium'] ?? 0)) ?: '—') . '</b><span>mean premium after cleaning</span></div></div>';
+    echo '</div></div>';
+    echo '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="import_commit"><button class="btnDark btnBlock" type="submit">Import ' . h(number_format($total)) . ' rows →</button></form>';
+    echo '<div class="muted tiny">' . h(number_format($willUpdate)) . ' existing record(s) are updated in place. The staged file is deleted as soon as the import commits.</div></div></div>';
 }
 
 function handle_import_preview(PDO $pdo, array $user): void
@@ -6265,7 +7197,28 @@ function handle_import_preview(PDO $pdo, array $user): void
         flash('error', 'No staged import found.');
         redirect_to(['tab' => 'import']);
     }
-    $mapping = array_map('strval', (array)($_POST['map'] ?? []));
+    if (isset($_POST['cmap']) && is_array($_POST['cmap'])) {
+        // Column-centric form: each CSV column (by position) picks a field, "custom" (empty) or __ignore__.
+        $mapping = array_fill_keys(core_import_field_keys(), '');
+        $stageHeaders = array_map(fn($x) => trim(strip_bom((string)$x)), (array)$stage['headers']);
+        foreach ((array)$_POST['cmap'] as $i => $field) {
+            $hname = (string)($stageHeaders[(int)$i] ?? '');
+            $field = (string)$field;
+            if ($hname === '') {
+                continue;
+            }
+            if ($field === '__ignore__') {
+                $mapping['ignore:' . (int)$i] = $hname;
+            } elseif (in_array($field, core_import_field_keys(), true) && $mapping[$field] === '') {
+                $mapping[$field] = $hname;
+            }
+        }
+        if ($mapping['record_id'] === '') {
+            $mapping['record_id'] = '__generate__';
+        }
+    } else {
+        $mapping = array_map('strval', (array)($_POST['map'] ?? []));
+    }
     $defaults = (array)($_POST['defaults'] ?? []);
     $period = (string)($_POST['premium_period'] ?? '');
     if (in_array($period, ['monthly', 'annual'], true) && $period !== setting('premium_period', 'monthly')) {

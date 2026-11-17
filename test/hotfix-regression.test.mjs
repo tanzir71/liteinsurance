@@ -89,8 +89,11 @@ try {
   assert.match(page.text, /<h1 class="h1">Today<\/h1>/, 'admin should land on Today');
 
   page = await request(`${base}?tab=import`, { method: 'POST', body: form({ csrf_token: token(page.text), action: 'load_sample' }) });
+  // The mapping form is column-centric: each CSV column picks a LiteInsurance field.
   const mapping = {};
-  for (const m of page.text.matchAll(/name="map\[(\w+)\]">(?:(?!<\/select>)[\s\S])*?<option value="([^"]*)" selected/g)) mapping[`map[${m[1]}]`] = m[2];
+  for (const m of page.text.matchAll(/name="cmap\[(\d+)\]" data-col="([^"]*)">(?:(?!<\/select>)[\s\S])*?<option value="([^"]*)" selected/g)) {
+    if (m[3] !== '' && m[3] !== '__ignore__') mapping[`map[${m[3]}]`] = m[2];
+  }
   assert.equal(mapping['map[expiration_date]'], 'expiration_date', 'renewal columns should be auto-mapped');
   assert.equal(mapping['map[consent_email]'], 'email_opt_in', 'consent columns should be auto-mapped');
   const preview = { csrf_token: token(page.text), action: 'import_preview', premium_period: 'monthly', 'defaults[region]': 'Unknown', 'defaults[policy_type]': 'term', ...mapping };
