@@ -6,7 +6,7 @@ LiteInsurance — single-file PHP + SQLite (PDO) app for shared hosting
 
 Deploy:
 1) Upload `liteinsurance.php` into `public_html/`.
-2) Ensure PHP 8+ with PDO + SQLite enabled.
+2) Ensure PHP 8.1+ (8.3 recommended) with PDO + SQLite enabled.
 3) Ensure `public_html/` is writable so `liteinsurance.db` can be created.
 4) Visit `/liteinsurance.php` and register the first user (becomes Admin).
 5) Import → Download sample CSV, then Import → Upload to test.
@@ -22,7 +22,7 @@ const APP_NAME = 'LiteInsurance';
 const DB_PATH = __DIR__ . DIRECTORY_SEPARATOR . 'liteinsurance.db';
 const UPLOAD_DIR = __DIR__ . DIRECTORY_SEPARATOR . 'liteinsurance_uploads';
 const ACCENT_COLOR = '#2540ff';
-const CURRENCY_SYMBOL = '$';
+const LI_CURRENCY_SYMBOL = '$'; // default only: set it in Settings or CURRENCY_SYMBOL= in .env (the bare constant name collides with a PHP built-in)
 const SESSION_TIMEOUT_SECONDS = 30 * 60;
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const IMPORT_COMMIT_EVERY_ROWS = 300;
@@ -98,7 +98,7 @@ if (PHP_SAPI !== 'cli') {
     send_security_headers((string)$GLOBALS['CSP_NONCE']);
 }
 
-$action = (string)($_GET['action'] ?? ($_POST['action'] ?? ''));
+$action = request_action();
 if ($action === '' && PHP_SAPI === 'cli') {
     $map = cli_kv($argv ?? []);
     if (isset($map['action'])) {
@@ -116,6 +116,8 @@ session_init();
 try {
     $pdo = db();
     migrate($pdo);
+    $GLOBALS['LI_PDO'] = $pdo;
+    load_settings($pdo);
 } catch (Throwable $e) {
     li_log('setup.boot_error', [
         'type' => get_class($e),
@@ -288,12 +290,13 @@ function migrate(PDO $pdo): void
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_policyholders_region ON policyholders(region)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_custom_field_defs_enabled ON custom_field_defs(enabled, field_key)');
+    migrate_v11($pdo);
 }
 
 function route_web(PDO $pdo): void
 {
-    $action = (string)($_GET['action'] ?? ($_POST['action'] ?? ''));
-    $tab = (string)($_GET['tab'] ?? 'dashboard');
+    $action = request_action();
+    $tab = normalize_tab((string)($_GET['tab'] ?? 'dashboard'));
     $hasUsers = ((int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn() > 0);
 
     if (!$hasUsers && $action !== 'register' && $action !== 'register_form') {
@@ -427,6 +430,39 @@ function route_web(PDO $pdo): void
         return;
     }
 
+    $adminActions = [
+        'segment_count' => 'handle_segment_count',
+        'campaign_delete' => 'handle_campaign_delete',
+        'settings_save' => 'handle_settings_save',
+        'suppression_apply' => 'handle_suppression_apply',
+        'audit_export' => 'handle_audit_export',
+        'checklist_dismiss' => 'handle_checklist_dismiss',
+    ];
+    $userActions = [
+        'renewal_update' => 'handle_renewal_update',
+        'renewal_export_calls' => 'handle_renewal_export_calls',
+        'renewal_export_ics' => 'handle_renewal_export_ics',
+        'contact_log' => 'handle_contact_log',
+        'consent_update' => 'handle_consent_update',
+        'reveal_pii' => 'handle_reveal_pii',
+    ];
+    if (isset($adminActions[$action]) || isset($userActions[$action])) {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect_to(['action' => null]);
+        }
+        if (isset($adminActions[$action])) {
+            require_admin($user);
+            if ($action === 'segment_count') {
+                handle_segment_count($pdo);
+                return;
+            }
+            $adminActions[$action]($pdo, $user);
+            return;
+        }
+        $userActions[$action]($pdo, $user);
+        return;
+    }
+
     render_app($pdo, $user, $tab);
 }
 
@@ -441,16 +477,17 @@ function render_auth_page(string $mode, bool $hasUsers): void
     echo '<!doctype html><html lang="en"><head>';
     echo '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">';
     echo '<title>' . h(APP_NAME . ' — ' . $title) . '</title>';
+    echo '<link rel="icon" href="data:image/svg+xml,' . rawurlencode(logo_svg(false)) . '">';
     echo inter_font_css() . app_css();
     echo '</head><body>';
     echo '<main class="authWrap"><div class="authCard">';
-    echo '<div class="authBrand">' . h(APP_NAME) . '</div>';
+    echo '<div class="authBrand">' . logo_svg(false) . '<span>' . h(APP_NAME) . '</span></div>';
     echo '<h1 class="h1">' . h($title) . '</h1>';
     echo '<div class="muted">' . h($subtitle) . '</div>';
     if ($flash) {
         echo render_flash($flash);
     }
-    echo '<form method="post" class="form" autocomplete="on">';
+    echo '<form method="post" class="form" autocomplete="on" action="' . h(self_url(['action' => null])) . '">';
     echo '<input type="hidden" name="csrf_token" value="' . h($csrf) . '">';
     echo '<input type="hidden" name="action" value="' . h($isRegister ? 'register' : 'login') . '">';
     echo '<label class="label">Email</label><input class="input" type="email" name="email" required maxlength="190">';
@@ -596,139 +633,13 @@ function require_csrf(): void
     }
 }
 
-function render_app(PDO $pdo, array $user, string $tab): void
-{
-    $flash = consume_flash();
-    $tab = $tab !== '' ? $tab : 'dashboard';
-
-    echo '<!doctype html><html lang="en"><head>';
-    echo '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">';
-    echo '<title>' . h(APP_NAME . ' — ' . ucfirst($tab)) . '</title>';
-    echo inter_font_css() . app_css();
-    echo '</head><body>';
-    echo '<div class="appShell">';
-
-    echo '<header class="topBar">';
-    echo '<div class="brand">' . h(APP_NAME) . '</div>';
-    echo '<div class="topRight">';
-    echo '<div class="userPill">' . h((string)$user['email']) . '<span class="pillRole">' . h((string)$user['role']) . '</span></div>';
-    echo '<form method="post" class="inline"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="logout"><button class="btnSecondary" type="submit">Logout</button></form>';
-    echo '</div>';
-    echo '</header>';
-
-    echo '<aside class="sideNav">';
-    echo nav_item('Dashboard', 'dashboard', $tab);
-    echo nav_item('Import', 'import', $tab);
-    echo nav_item('Profiles', 'profiles', $tab);
-    echo nav_item('Rules', 'rules', $tab);
-    echo nav_item('Segments', 'segments', $tab);
-    echo nav_item('Campaigns', 'campaigns', $tab);
-    echo nav_item('Settings', 'settings', $tab);
-    echo '</aside>';
-
-    echo '<main class="main">';
-    if ($flash) {
-        echo render_flash($flash);
-    }
-    echo '<div class="pageHead"><h1 class="h1">' . h(ucfirst($tab)) . '</h1><div class="muted">Manage imports, rules, segments, and campaigns.</div></div>';
-
-    if ((string)$user['role'] !== 'admin' && in_array($tab, ['import', 'rules', 'segments', 'campaigns', 'settings'], true)) {
-        echo '<div class="card"><div class="h2">Admin required</div><div class="muted">This tab is available to admins only.</div></div>';
-    } else {
-        if ($tab === 'dashboard') {
-            render_tab_dashboard($pdo);
-        } elseif ($tab === 'import') {
-            render_tab_import($pdo);
-        } elseif ($tab === 'profiles') {
-            render_tab_profiles($pdo);
-        } elseif ($tab === 'rules') {
-            render_tab_rules($pdo);
-        } elseif ($tab === 'segments') {
-            render_tab_segments($pdo);
-        } elseif ($tab === 'campaigns') {
-            render_tab_campaigns($pdo);
-        } elseif ($tab === 'settings') {
-            render_tab_settings($pdo);
-        } else {
-            echo '<div class="card"><div class="muted">Unknown tab.</div></div>';
-        }
-    }
-    echo '</main>';
-    echo '<footer class="footer"><a class="link" href="SETUP.md" target="_blank" rel="noopener">Docs</a> · <a class="link" href="SECURITY.md" target="_blank" rel="noopener">Security</a></footer>';
-    echo '</div>';
-    echo app_js();
-    echo '</body></html>';
-}
-
-function render_tab_dashboard(PDO $pdo): void
-{
-    $total = (int)$pdo->query('SELECT COUNT(*) FROM policyholders')->fetchColumn();
-    $segments = (int)$pdo->query('SELECT COUNT(*) FROM segments')->fetchColumn();
-    $avgLtvRaw = $pdo->query('SELECT AVG(ltv_estimate) FROM policyholders')->fetchColumn();
-    $highRisk = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE risk_tier = 'High'")->fetchColumn();
-
-    echo '<div class="kpiGrid">';
-    echo kpi('Total policyholders', (string)$total);
-    echo kpi('Segments', (string)$segments);
-    echo kpi('Avg LTV', money_or_blank($avgLtvRaw === null ? null : (float)$avgLtvRaw));
-    echo kpi('High-risk', (string)$highRisk);
-    echo '</div>';
-
-    echo '<div class="grid2">';
-    echo '<div class="card"><div class="h2">Risk tier distribution</div>';
-    $dist = $pdo->query("SELECT COALESCE(risk_tier,'Unknown') AS tier, COUNT(*) AS c FROM policyholders GROUP BY tier ORDER BY c DESC")->fetchAll();
-    echo '<table class="table"><thead><tr><th>Tier</th><th class="right">Count</th></tr></thead><tbody>';
-    foreach ($dist as $r) {
-        echo '<tr><td>' . h((string)$r['tier']) . '</td><td class="right">' . h((string)$r['c']) . '</td></tr>';
-    }
-    if (!$dist) {
-        echo '<tr><td colspan="2" class="muted">No data yet.</td></tr>';
-    }
-    echo '</tbody></table></div>';
-
-    echo '<div class="card"><div class="h2">Top LTV</div>';
-    $top = $pdo->query('SELECT policy_number, name, region, ltv_estimate, risk_tier, confidence_score FROM policyholders ORDER BY ltv_estimate DESC LIMIT 8')->fetchAll();
-    echo '<table class="table"><thead><tr><th>Policy</th><th>Name</th><th>Region</th><th class="right">LTV</th><th>Tier</th><th class="right">Conf</th></tr></thead><tbody>';
-    foreach ($top as $r) {
-        echo '<tr><td>' . h((string)$r['policy_number']) . '</td><td>' . h(mask_name((string)$r['name'])) . '</td><td>' . h((string)($r['region'] ?? '')) . '</td><td class="right">' . h(money_or_blank($r['ltv_estimate'] ?? null)) . '</td><td>' . h((string)($r['risk_tier'] ?? 'Unknown')) . '</td><td class="right">' . h((string)($r['confidence_score'] ?? 0)) . '</td></tr>';
-    }
-    if (!$top) {
-        echo '<tr><td colspan="6" class="muted">No data yet.</td></tr>';
-    }
-    echo '</tbody></table></div>';
-    echo '</div>';
-
-    echo '<div class="grid2">';
-    echo '<div class="card"><div class="h2">Recent imports</div>';
-    $imports = $pdo->query('SELECT filename, rows_total, rows_imported, created_at FROM imports ORDER BY created_at DESC LIMIT 6')->fetchAll();
-    echo '<table class="table"><thead><tr><th>When</th><th>File</th><th class="right">Rows</th><th class="right">Imported</th></tr></thead><tbody>';
-    foreach ($imports as $r) {
-        echo '<tr><td>' . h((string)$r['created_at']) . '</td><td>' . h((string)$r['filename']) . '</td><td class="right">' . h((string)$r['rows_total']) . '</td><td class="right">' . h((string)$r['rows_imported']) . '</td></tr>';
-    }
-    if (!$imports) {
-        echo '<tr><td colspan="4" class="muted">No imports yet.</td></tr>';
-    }
-    echo '</tbody></table></div>';
-
-    echo '<div class="card"><div class="h2">Audit log</div>';
-    $audit = $pdo->query('SELECT a.ts, a.action, u.email AS user_email FROM audit_log a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.ts DESC LIMIT 10')->fetchAll();
-    echo '<table class="table"><thead><tr><th>Time</th><th>Action</th><th>User</th></tr></thead><tbody>';
-    foreach ($audit as $r) {
-        echo '<tr><td>' . h((string)$r['ts']) . '</td><td>' . h((string)$r['action']) . '</td><td>' . h((string)($r['user_email'] ?? 'system')) . '</td></tr>';
-    }
-    if (!$audit) {
-        echo '<tr><td colspan="3" class="muted">No events yet.</td></tr>';
-    }
-    echo '</tbody></table></div>';
-    echo '</div>';
-}
-
 function render_tab_import(PDO $pdo): void
 {
     $stage = $_SESSION['import_stage'] ?? null;
-    echo '<div class="actionsRow">';
+    echo '<div class="actionsRow actionsTop">';
     echo '<a class="btnSecondary" href="' . h(self_url(['action' => 'download_sample_csv'])) . '">Download sample CSV</a>';
     echo '<form method="post" class="inline"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="load_sample"><button class="btnSecondary" type="submit">Load sample rules + data</button></form>';
+    echo '<span class="muted tiny">Works with AMS exports (policy #, effective/expiration dates, line of business, company, producer, customer ID, email, phone) or any spreadsheet.</span>';
     echo '</div>';
 
     echo '<div class="grid2">';
@@ -739,135 +650,30 @@ function render_tab_import(PDO $pdo): void
     echo '<input class="input" type="file" name="csv" accept=".csv,text/csv" required>';
     echo '<button class="btn" type="submit">Upload</button>';
     echo '</form></div>';
-    echo '<div class="card"><div class="h2">Missing data strategy</div><ul class="list"><li>Mapped numeric fields: mean imputation</li><li>Mapped categorical fields: mode imputation</li><li>Unmapped CSV columns: preserved in <code>metadata.custom_fields</code></li><li>Scoring requires mapped premium, tenure, and policy type; otherwise LTV stays blank and risk remains Unknown.</li></ul></div>';
+    echo '<div class="card"><div class="h2">Missing data strategy</div><ul class="list"><li>Mapped numeric fields: mean imputation (rounded)</li><li>Mapped categorical fields: mode imputation, consistent casing</li><li>Missing expiration date: effective date + 12 months (6 for auto), flagged as filled-in</li><li>Unmapped CSV columns: preserved in <code>metadata.custom_fields</code></li><li>Scoring requires mapped premium, tenure, and policy type (or line of business); otherwise LTV stays blank and risk remains Unknown.</li><li>Re-importing updates matching Record IDs in place.</li></ul></div>';
     echo '</div>';
 
     if (is_array($stage) && isset($stage['headers'], $stage['path'])) {
         render_import_mapping($pdo, $stage);
     }
 
-    $imports = $pdo->query('SELECT filename, rows_total, rows_imported, created_at, errors_json FROM imports ORDER BY created_at DESC LIMIT 12')->fetchAll();
+    render_import_health($pdo);
+
+    $imports = $pdo->query('SELECT filename, rows_total, rows_imported, rows_updated, created_at, errors_json FROM imports ORDER BY created_at DESC, id DESC LIMIT 12')->fetchAll();
     echo '<div class="card"><div class="h2">Import history</div>';
-    echo '<table class="table"><thead><tr><th>When</th><th>Filename</th><th class="right">Rows</th><th class="right">Imported</th><th>Error summary</th></tr></thead><tbody>';
+    echo '<div class="scrollX"><table class="table"><thead><tr><th>When</th><th>Filename</th><th class="right">Rows</th><th class="right">New</th><th class="right">Updated</th><th>Issues</th></tr></thead><tbody>';
     foreach ($imports as $r) {
         $errors = safe_json((string)($r['errors_json'] ?? '[]'));
         $n = is_array($errors) ? count($errors) : 0;
-        echo '<tr><td>' . h((string)$r['created_at']) . '</td><td>' . h((string)$r['filename']) . '</td><td class="right">' . h((string)$r['rows_total']) . '</td><td class="right">' . h((string)$r['rows_imported']) . '</td><td class="muted">' . h($n ? ($n . ' issue(s)') : '—') . '</td></tr>';
+        $first = ($n && is_array($errors[0] ?? null)) ? ('row ' . (int)($errors[0]['row'] ?? 0) . ': ' . (string)($errors[0]['msg'] ?? '')) : '';
+        echo '<tr><td>' . h((string)$r['created_at']) . '</td><td>' . h((string)$r['filename']) . '</td><td class="right">' . h((string)$r['rows_total']) . '</td><td class="right">' . h((string)((int)$r['rows_imported'] - (int)($r['rows_updated'] ?? 0))) . '</td><td class="right">' . h((string)(int)($r['rows_updated'] ?? 0)) . '</td><td class="muted"' . ($first !== '' ? ' title="' . h($first) . '"' : '') . '>' . h($n ? ($n . ' issue(s) · ' . mb_strimwidth($first, 0, 60, '…')) : '—') . '</td></tr>';
     }
     if (!$imports) {
-        echo '<tr><td colspan="5" class="muted">No imports yet.</td></tr>';
+        echo '<tr><td colspan="6" class="muted">No imports yet.</td></tr>';
     }
-    echo '</tbody></table></div>';
+    echo '</tbody></table></div></div>';
 }
 
-function profile_cell_input(array $row, string $field, string $value, string $variant = ''): string
-{
-    $classes = 'profileCellInput';
-    if ($variant === 'num') {
-        $classes .= ' right';
-    } elseif ($variant !== '') {
-        $classes .= ' ' . $variant;
-    }
-    $id = (int)($row['id'] ?? 0);
-    $label = trim((string)($row['policy_number'] ?? 'row')) . ' ' . $field;
-    return '<td' . ($variant === 'num' ? ' class="right"' : '') . '><input class="' . h($classes) . '" data-policy-cell data-policy-id="' . h((string)$id) . '" data-field="' . h($field) . '" value="' . h($value) . '" aria-label="' . h($label) . '"></td>';
-}
-
-function render_tab_profiles(PDO $pdo): void
-{
-    $q = trim((string)($_GET['q'] ?? ''));
-    $tier = trim((string)($_GET['tier'] ?? ''));
-    $region = trim((string)($_GET['region'] ?? ''));
-    $page = max(1, (int)($_GET['page'] ?? 1));
-    $limit = 25;
-    $offset = ($page - 1) * $limit;
-
-    $where = [];
-    $args = [];
-    if ($q !== '') {
-        $where[] = '(policy_number LIKE ? OR name LIKE ?)';
-        $args[] = '%' . $q . '%';
-        $args[] = '%' . $q . '%';
-    }
-    if ($tier !== '') {
-        $where[] = 'risk_tier = ?';
-        $args[] = $tier;
-    }
-    if ($region !== '') {
-        $where[] = 'region = ?';
-        $args[] = $region;
-    }
-    $whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
-    $st = $pdo->prepare('SELECT COUNT(*) FROM policyholders ' . $whereSql);
-    $st->execute($args);
-    $total = (int)$st->fetchColumn();
-
-    $st = $pdo->prepare('SELECT id, policy_number, name, age, policy_type, region, premium_amount, tenure_months, sum_assured, ltv_estimate, risk_tier, confidence_score, is_imputed, metadata FROM policyholders ' . $whereSql . ' ORDER BY id DESC LIMIT ' . (int)$limit . ' OFFSET ' . (int)$offset);
-    $st->execute($args);
-    $rows = $st->fetchAll();
-    $customDefs = $pdo->query('SELECT field_key, label FROM custom_field_defs WHERE enabled = 1 ORDER BY field_key ASC LIMIT 4')->fetchAll();
-
-    echo '<div class="card"><div class="h2">Policyholders</div>';
-    echo '<form method="get" class="form"><input type="hidden" name="tab" value="profiles">';
-    echo '<div class="grid2"><div><label class="label">Search</label><input class="input" name="q" value="' . h($q) . '" placeholder="Policy number or name"></div>';
-    echo '<div><label class="label">Risk tier</label><input class="input" name="tier" value="' . h($tier) . '" placeholder="High"></div></div>';
-    echo '<div class="grid2"><div><label class="label">Region</label><input class="input" name="region" value="' . h($region) . '" placeholder="West"></div>';
-    echo '<div class="actionsRow" style="align-items:flex-end"><button class="btnSecondary" type="submit">Filter</button><a class="link" href="' . h(self_url(['tab' => 'profiles'])) . '">Reset</a></div></div>';
-    echo '</form>';
-
-    echo '<div class="muted" id="profileInlineStatus">Showing ' . h((string)count($rows)) . ' of ' . h((string)$total) . '. Edit cells directly; LTV, risk tier, confidence, and segments refresh after save.</div>';
-    echo '<input type="hidden" id="profileInlineCsrf" value="' . h(csrf_token()) . '">';
-    echo '<div class="scrollX"><table class="table"><thead><tr><th>Record / Policy ID</th><th>Display name</th><th>Age</th><th>Type</th><th>Region</th><th class="right">Premium</th><th class="right">Tenure</th><th class="right">Assured</th><th class="right">LTV</th><th>Tier</th><th class="right">Conf</th><th>Imputed</th>';
-    foreach ($customDefs as $def) {
-        echo '<th>' . h((string)$def['label']) . '</th>';
-    }
-    echo '</tr></thead><tbody>';
-    foreach ($rows as $r) {
-        $low = (int)$r['confidence_score'] < 60;
-        $meta = safe_json((string)($r['metadata'] ?? '{}'));
-        $custom = is_array($meta['custom_fields'] ?? null) ? (array)$meta['custom_fields'] : [];
-        $policyId = h((string)(int)$r['id']);
-        echo '<tr class="' . ($low ? 'rowLow' : '') . '">';
-        echo profile_cell_input($r, 'policy_number', (string)$r['policy_number'], 'policy');
-        echo profile_cell_input($r, 'name', (string)$r['name'], 'name');
-        echo profile_cell_input($r, 'age', (string)($r['age'] ?? ''), 'num');
-        echo profile_cell_input($r, 'policy_type', (string)($r['policy_type'] ?? ''));
-        echo profile_cell_input($r, 'region', (string)($r['region'] ?? ''));
-        echo profile_cell_input($r, 'premium_amount', (string)($r['premium_amount'] ?? ''), 'num');
-        echo profile_cell_input($r, 'tenure_months', (string)($r['tenure_months'] ?? ''), 'num');
-        echo profile_cell_input($r, 'sum_assured', (string)($r['sum_assured'] ?? ''), 'num');
-        echo '<td class="right" data-derived-field="ltv_estimate" data-policy-id="' . $policyId . '">' . h(money_or_blank($r['ltv_estimate'] ?? null)) . '</td>';
-        echo '<td data-derived-field="risk_tier" data-policy-id="' . $policyId . '">' . h((string)($r['risk_tier'] ?? 'Unknown')) . '</td>';
-        echo '<td class="right" data-derived-field="confidence_score" data-policy-id="' . $policyId . '">' . h((string)($r['confidence_score'] ?? 0)) . '</td>';
-        echo '<td>' . ((int)$r['is_imputed'] === 1 ? '<span class="badge">Yes</span>' : '<span class="badge mutedBadge">No</span>') . '</td>';
-        foreach ($customDefs as $def) {
-            $v = $custom[(string)$def['field_key']] ?? '';
-            echo profile_cell_input($r, 'custom.' . (string)$def['field_key'], is_bool($v) ? ($v ? 'true' : 'false') : (string)$v);
-        }
-        echo '</tr>';
-    }
-    if (!$rows) {
-        echo '<tr><td colspan="' . h((string)(12 + count($customDefs))) . '" class="muted">No policyholders found.</td></tr>';
-    }
-    echo '</tbody></table></div>';
-
-    $pages = (int)ceil(max(1, $total) / $limit);
-    if ($pages > 1) {
-        echo '<div class="pager">';
-        for ($i = 1; $i <= $pages; $i++) {
-            $href = self_url(['tab' => 'profiles', 'q' => $q, 'tier' => $tier, 'region' => $region, 'page' => (string)$i]);
-            echo '<a class="' . ($i === $page ? 'pagerOn' : 'pagerOff') . '" href="' . h($href) . '">' . h((string)$i) . '</a>';
-        }
-        echo '</div>';
-    }
-    echo '</div>';
-
-    echo '<div class="card"><div class="h2">Repair (bulk fill)</div><div class="muted">Bulk-fill missing fields.</div>';
-    echo '<form method="post" class="form"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="repair_apply">';
-    echo '<div class="grid2"><div><label class="label">Set region where missing</label><input class="input" name="set_region" maxlength="80" placeholder="Unknown"></div>';
-    echo '<div><label class="label">Set policy_type where missing</label><input class="input" name="set_policy_type" maxlength="80" placeholder="term"></div></div>';
-    echo '<button class="btnSecondary" type="submit">Apply repair</button></form></div>';
-}
 function render_tab_rules(PDO $pdo): void
 {
     $editId = (int)($_GET['edit'] ?? 0);
@@ -878,28 +684,39 @@ function render_tab_rules(PDO $pdo): void
         $editing = $st->fetch();
     }
 
-    $rules = $pdo->query('SELECT id, name, priority, enabled FROM rules ORDER BY priority ASC, id ASC')->fetchAll();
+    $rules = $pdo->query('SELECT id, name, priority, enabled, conditions_json, actions_json FROM rules ORDER BY priority DESC, id DESC')->fetchAll();
+    $hitCounts = [];
+    try {
+        foreach ($pdo->query("SELECT CAST(je.value AS INTEGER) AS rid, COUNT(*) AS c FROM policyholders, json_each(policyholders.metadata, '$.rule_hits') AS je GROUP BY rid")->fetchAll() as $hc) {
+            $hitCounts[(int)$hc['rid']] = (int)$hc['c'];
+        }
+    } catch (Throwable $e) {
+        $hitCounts = [];
+    }
     echo '<div class="actionsRow">';
     echo '<a class="btnSecondary" href="' . h(self_url(['tab' => 'rules'])) . '">New rule</a>';
     echo '<form method="post" class="inline"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="export_rules"><button class="btnSecondary" type="submit">Export rules JSON</button></form>';
     echo '</div>';
 
-    echo '<div class="grid2">';
-    echo '<div class="card"><div class="h2">Rules</div>';
-    echo '<table class="table"><thead><tr><th>Name</th><th class="right">Priority</th><th>Enabled</th><th>Actions</th></tr></thead><tbody>';
+    echo '<div class="grid2 gridWide">';
+    echo '<div class="card"><div class="h2">Rules, in the order they run</div><div class="muted">Highest priority runs first. The first matching rule that sets a tier wins; tags and score deltas add up; a rule marked <em>stop</em> ends evaluation. Recompute after editing.</div>';
+    echo '<div class="scrollX"><table class="table wrapCells"><thead><tr><th>#</th><th>Rule</th><th class="right">Priority</th><th class="right">Matches</th><th>On</th><th></th></tr></thead><tbody>';
+    $order = 0;
     foreach ($rules as $r) {
-        echo '<tr><td>' . h((string)$r['name']) . '</td><td class="right">' . h((string)$r['priority']) . '</td>';
+        $order++;
+        $acts = safe_json((string)($r['actions_json'] ?? '{}'));
+        echo '<tr><td class="mono muted">' . h((string)$order) . '</td><td><div>' . h((string)$r['name']) . '</div><div class="muted tiny">' . h(mb_strimwidth('if ' . rule_conditions_summary(safe_json((string)($r['conditions_json'] ?? '{}'))) . ' → ' . rule_actions_summary(is_array($acts) ? $acts : []), 0, 110, '…')) . '</div></td><td class="right">' . h((string)$r['priority']) . '</td><td class="right">' . h(number_format($hitCounts[(int)$r['id']] ?? 0)) . '</td>';
         echo '<td>' . ((int)$r['enabled'] === 1 ? '<span class="badge">Yes</span>' : '<span class="badge mutedBadge">No</span>') . '</td>';
         echo '<td>';
         echo '<a class="link" href="' . h(self_url(['tab' => 'rules', 'edit' => (string)$r['id']])) . '">Edit</a> · ';
         echo '<form method="post" class="inline"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="rule_toggle"><input type="hidden" name="id" value="' . h((string)$r['id']) . '"><button class="linkBtn" type="submit">' . h(((int)$r['enabled'] === 1) ? 'Disable' : 'Enable') . '</button></form> · ';
-        echo '<form method="post" class="inline" onsubmit="return confirm(\'Delete this rule?\')"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="rule_delete"><input type="hidden" name="id" value="' . h((string)$r['id']) . '"><button class="linkBtn" type="submit">Delete</button></form>';
+        echo '<form method="post" class="inline" data-confirm="Delete this rule?"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="rule_delete"><input type="hidden" name="id" value="' . h((string)$r['id']) . '"><button class="linkBtn" type="submit">Delete</button></form>';
         echo '</td></tr>';
     }
     if (!$rules) {
-        echo '<tr><td colspan="4" class="muted">No rules yet.</td></tr>';
+        echo '<tr><td colspan="6" class="muted">No rules yet.</td></tr>';
     }
-    echo '</tbody></table></div>';
+    echo '</tbody></table></div></div>';
 
     $def = ['logic' => 'AND', 'conditions' => [['field' => 'age', 'op' => '>=', 'value' => 60]], 'actions' => ['set_risk_tier' => 'High', 'score_delta' => 10]];
     $rid = 0;
@@ -928,6 +745,17 @@ function render_tab_rules(PDO $pdo): void
         'risk_tier' => 'Risk tier',
         'confidence_score' => 'Confidence score',
         'is_imputed' => 'Is imputed',
+        'days_to_expiry' => 'Days to expiry',
+        'status' => 'Policy status',
+        'line_of_business' => 'Line of business',
+        'carrier' => 'Carrier',
+        'producer' => 'Producer',
+        'policies_in_household' => 'Policies in household',
+        'prior_premium' => 'Prior premium',
+        'consent_email' => 'Email consent (1/0)',
+        'consent_sms' => 'SMS consent (1/0)',
+        'consent_phone' => 'Call consent (1/0)',
+        'opted_out' => 'Opted out (1/0)',
     ];
     $customDefs = $pdo->query('SELECT field_key, label FROM custom_field_defs WHERE enabled = 1 ORDER BY field_key ASC LIMIT 50')->fetchAll();
     foreach ($customDefs as $def) {
@@ -956,8 +784,8 @@ function render_tab_rules(PDO $pdo): void
     echo '<div><label class="label">Enabled</label><select class="select" name="enabled"><option value="1"' . ($enabled === 1 ? ' selected' : '') . '>Yes</option><option value="0"' . ($enabled === 0 ? ' selected' : '') . '>No</option></select></div></div>';
     echo '<select id="ruleFieldOptions" hidden>' . $fieldOptionHtml . '</select><select id="ruleOperatorOptions" hidden>' . $operatorOptionHtml . '</select>';
     echo '<div class="ruleModeTabs" role="tablist" aria-label="Rule editor mode"><button class="ruleModeTab" type="button" data-rule-mode="visual" aria-selected="true">Visual builder</button><button class="ruleModeTab" type="button" data-rule-mode="json" aria-selected="false">Plain JSON</button></div>';
-    echo '<div class="ruleModePanel" id="ruleVisualPanel"><div class="grid2"><div><label class="label">Match logic</label><select class="select" id="ruleLogicVisual"><option value="AND">All conditions</option><option value="OR">Any condition</option></select></div><div class="inlineCheck"><input type="checkbox" id="ruleAdvancedJsonNotice" disabled><span>Nested groups stay in Plain JSON</span></div></div><div id="ruleConditionsVisual"></div><div class="actionsRow"><button class="btnSecondary" type="button" id="addRuleCondition">Add condition</button></div><div class="ruleActionGrid"><div><label class="label">Set tier</label><select class="select" id="ruleActionTier"><option value="">No change</option><option>Low</option><option>Medium</option><option>High</option><option>Review</option><option>Unknown</option></select></div><div><label class="label">Score delta</label><input class="input" id="ruleActionScore" type="number" min="-100" max="100" value="0"></div><div><label class="label">Add tag</label><input class="input" id="ruleActionTag" maxlength="80" placeholder="senior_short_tenure"></div></div></div>';
-    echo '<div class="ruleModePanel" id="ruleJsonPanel" hidden><label class="label">Rule JSON</label><textarea class="textarea" name="definition_json" rows="12" spellcheck="false">' . h((string)$json) . '</textarea><div class="muted tiny">Ops: =, !=, &gt;, &lt;, &gt;=, &lt;=, in, contains, regex. Use custom CSV fields as custom.agent_code. Group: {"all": [...]} / {"any": [...]} in conditions.</div></div>';
+    echo '<div class="ruleModePanel" id="ruleVisualPanel"><div class="grid2"><div><label class="label">Match logic</label><select class="select" id="ruleLogicVisual"><option value="AND">All conditions</option><option value="OR">Any condition</option></select></div><div class="inlineCheck"><input type="checkbox" id="ruleAdvancedJsonNotice" disabled><span>Nested groups stay in Plain JSON</span></div></div><div id="ruleConditionsVisual"></div><div class="actionsRow"><button class="btnSecondary" type="button" id="addRuleCondition">Add condition</button></div><div class="ruleActionGrid"><div><label class="label">Set tier</label><select class="select" id="ruleActionTier"><option value="">No change</option><option>Low</option><option>Medium</option><option>High</option><option>Review</option><option>Unknown</option></select></div><div><label class="label">Score delta</label><input class="input" id="ruleActionScore" type="number" min="-100" max="100" value="0"></div><div><label class="label">Add tag</label><input class="input" id="ruleActionTag" maxlength="80" placeholder="senior_short_tenure"></div><label class="inlineCheck"><input type="checkbox" id="ruleActionStop"> Stop after this rule</label></div></div>';
+    echo '<div class="ruleModePanel" id="ruleJsonPanel" hidden><label class="label">Rule JSON</label><textarea class="textarea" name="definition_json" rows="12" spellcheck="false">' . h((string)$json) . '</textarea><div class="muted tiny">Ops: =, !=, &gt;, &lt;, &gt;=, &lt;=, in, contains, regex. Use custom CSV fields as custom.agent_code. Group: {"all": [...]} / {"any": [...]} in conditions. Actions: set_risk_tier, score_delta, add_tag, stop (true ends evaluation).</div></div>';
     echo '<button class="btn" type="submit">Save rule</button>';
 
     echo '<div class="divider"></div><div class="h2">Test a rule</div>';
@@ -970,149 +798,12 @@ function render_tab_rules(PDO $pdo): void
         echo '<option value="0">No policyholders available</option>';
     }
     echo '</select>';
-    echo '<button class="btnSecondary" type="button" onclick="LiteInsurance.ruleTest()">Run test</button>';
+    echo '<div><button class="btnSecondary" type="button" data-rule-test>Run test</button></div>';
     echo '<pre class="codeBlock" id="ruleTestOut">Ready.</pre>';
 
     echo '</form></div>';
     echo '</div>';
 }
-function render_tab_segments(PDO $pdo): void
-{
-    $editId = (int)($_GET['edit'] ?? 0);
-    $editing = null;
-    if ($editId > 0) {
-        $st = $pdo->prepare('SELECT * FROM segments WHERE id = ?');
-        $st->execute([$editId]);
-        $editing = $st->fetch();
-    }
-
-    $segments = $pdo->query('SELECT id, name, rule_ids, last_run_at FROM segments ORDER BY id DESC')->fetchAll();
-    $rules = $pdo->query('SELECT id, name, priority FROM rules ORDER BY priority ASC, id ASC')->fetchAll();
-
-    echo '<div class="grid2">';
-    echo '<div class="card"><div class="h2">Segments</div>';
-    echo '<table class="table"><thead><tr><th>Name</th><th>Last run</th><th>Actions</th></tr></thead><tbody>';
-    foreach ($segments as $s) {
-        echo '<tr><td>' . h((string)$s['name']) . '</td><td class="muted">' . h((string)($s['last_run_at'] ?? '—')) . '</td><td>';
-        echo '<a class="link" href="' . h(self_url(['tab' => 'segments', 'edit' => (string)$s['id']])) . '">Edit</a> · ';
-        echo '<form method="post" class="inline"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="id" value="' . h((string)$s['id']) . '"><button class="linkBtn" type="submit" name="action" value="export_segment_prepare">Export CSV</button></form> · ';
-        echo '<form method="post" class="inline" onsubmit="return confirm(\'Delete this segment?\')"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="id" value="' . h((string)$s['id']) . '"><button class="linkBtn" type="submit" name="action" value="segment_delete">Delete</button></form>';
-        echo '</td></tr>';
-    }
-    if (!$segments) {
-        echo '<tr><td colspan="3" class="muted">No segments yet.</td></tr>';
-    }
-    echo '</tbody></table></div>';
-
-    $sid = 0;
-    $name = '';
-    $criteria = ['rule_ids' => [], 'where' => "risk_tier = 'High'", 'mode' => 'rules_and_where'];
-    if ($editing) {
-        $sid = (int)$editing['id'];
-        $name = (string)$editing['name'];
-        $criteria = safe_json((string)$editing['rule_ids']);
-        if (!is_array($criteria)) {
-            $criteria = ['rule_ids' => [], 'where' => '', 'mode' => 'rules_and_where'];
-        }
-        $criteria['rule_ids'] = is_array($criteria['rule_ids'] ?? null) ? (array)$criteria['rule_ids'] : [];
-        $criteria['where'] = is_string($criteria['where'] ?? null) ? (string)$criteria['where'] : '';
-    }
-
-    echo '<div class="card"><div class="h2">' . h($sid > 0 ? 'Edit segment' : 'New segment') . '</div>';
-    echo '<form method="post" class="form">';
-    echo '<input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '">';
-    if ($sid > 0) {
-        echo '<input type="hidden" name="id" value="' . h((string)$sid) . '">';
-    }
-    echo '<label class="label">Name</label><input class="input" name="name" required maxlength="120" value="' . h($name) . '">';
-    echo '<label class="label">Select rules (segment requires ALL selected rules)</label><div class="checkGrid">';
-    foreach ($rules as $r) {
-        $rid = (int)$r['id'];
-        $checked = in_array($rid, (array)$criteria['rule_ids'], true) ? ' checked' : '';
-        echo '<label class="check"><input type="checkbox" name="rule_ids[]" value="' . h((string)$rid) . '"' . $checked . '> ' . h((string)$r['name']) . '</label>';
-    }
-    if (!$rules) {
-        echo '<div class="muted">No rules available.</div>';
-    }
-    echo '</div>';
-    echo '<label class="label">Optional WHERE-style filter</label><input class="input" name="where" maxlength="400" value="' . h((string)$criteria['where']) . '">';
-    echo '<div class="muted tiny">Allowed fields: risk_tier, region, policy_type, premium_amount, tenure_months, age, ltv_estimate, confidence_score, plus custom.field_key such as custom.renewal_probability.</div>';
-    echo '<div class="actionsRow"><button class="btn" type="submit" name="action" value="segment_save">Save segment</button><button class="btnSecondary" type="submit" name="action" value="segment_estimate">Estimate size</button></div>';
-    echo '</form></div>';
-    echo '</div>';
-}
-
-function render_tab_campaigns(PDO $pdo): void
-{
-    $segments = $pdo->query('SELECT id, name FROM segments ORDER BY id DESC')->fetchAll();
-    $campaigns = $pdo->query('SELECT c.name, c.projected_revenue, c.created_at, s.name AS segment_name FROM campaigns c LEFT JOIN segments s ON s.id = c.segment_id ORDER BY c.created_at DESC LIMIT 20')->fetchAll();
-
-    echo '<div class="grid2">';
-    echo '<div class="card"><div class="h2">Simulator</div>';
-    echo '<form method="post" class="form">';
-    echo '<input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="campaign_save">';
-    echo '<label class="label">Campaign name</label><input class="input" name="name" required maxlength="120" value="Cross-sell test">';
-    echo '<label class="label">Segment</label><select class="select" name="segment_id" required>';
-    foreach ($segments as $s) {
-        echo '<option value="' . h((string)$s['id']) . '">' . h((string)$s['name']) . '</option>';
-    }
-    if (!$segments) {
-        echo '<option value="0">No segments available</option>';
-    }
-    echo '</select>';
-    echo '<div class="grid2"><div><label class="label">Cross-sell rate</label><input class="input" name="cross_sell_rate" type="number" step="0.001" min="0" max="1" value="0.05"></div>';
-    echo '<div><label class="label">Avg offer value</label><input class="input" name="avg_offer_value" type="number" step="0.01" min="0" value="1200"></div></div>';
-    echo '<div class="grid2"><div><label class="label">Cost per contact</label><input class="input" name="campaign_cost_per_contact" type="number" step="0.01" min="0" value="2.50"></div>';
-    echo '<div><label class="label">Conversion lift</label><input class="input" name="conversion_lift" type="number" step="0.01" min="0" value="0"></div></div>';
-    echo '<button class="btn" type="submit">Run simulation</button>';
-    echo '</form></div>';
-
-    echo '<div class="card"><div class="h2">Recent campaigns</div>';
-    echo '<table class="table"><thead><tr><th>When</th><th>Name</th><th>Segment</th><th class="right">Projected revenue</th></tr></thead><tbody>';
-    foreach ($campaigns as $c) {
-        echo '<tr><td>' . h((string)$c['created_at']) . '</td><td>' . h((string)$c['name']) . '</td><td class="muted">' . h((string)($c['segment_name'] ?? '—')) . '</td><td class="right">' . h(CURRENCY_SYMBOL . number_format((float)($c['projected_revenue'] ?? 0), 2)) . '</td></tr>';
-    }
-    if (!$campaigns) {
-        echo '<tr><td colspan="4" class="muted">No campaigns yet.</td></tr>';
-    }
-    echo '</tbody></table></div>';
-    echo '</div>';
-}
-
-function render_tab_settings(PDO $pdo): void
-{
-    $users = (int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
-    $rules = (int)$pdo->query('SELECT COUNT(*) FROM rules')->fetchColumn();
-    $segs = (int)$pdo->query('SELECT COUNT(*) FROM segments')->fetchColumn();
-    $pol = (int)$pdo->query('SELECT COUNT(*) FROM policyholders')->fetchColumn();
-
-    echo '<div class="grid2">';
-    echo '<div class="card"><div class="h2">App config (read-only)</div>';
-    echo '<table class="table"><tbody>';
-    echo '<tr><td>DB path</td><td class="muted"><code>' . h(db_path()) . '</code></td></tr>';
-    echo '<tr><td>Upload dir</td><td class="muted"><code>' . h(upload_dir()) . '</code></td></tr>';
-    echo '<tr><td>Session timeout</td><td class="muted">' . h((string)SESSION_TIMEOUT_SECONDS) . ' seconds</td></tr>';
-    echo '<tr><td>Accent</td><td class="muted"><span class="swatch" style="background:' . h(ACCENT_COLOR) . '"></span> ' . h(ACCENT_COLOR) . '</td></tr>';
-    echo '</tbody></table>';
-    echo '<div class="divider"></div>';
-    echo '<form method="post" class="inline"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><button class="btnSecondary" type="submit" name="action" value="recompute_now">Recompute LTV + risk tiers</button></form>';
-    echo '<div class="muted tiny">Use this after changing rules. Cron is recommended for scheduled runs.</div>';
-    echo '</div>';
-
-    echo '<div class="card"><div class="h2">Counts</div>';
-    echo '<div class="kpiGrid">' . kpi('Users', (string)$users) . kpi('Policyholders', (string)$pol) . kpi('Rules', (string)$rules) . kpi('Segments', (string)$segs) . '</div>';
-    echo '<div class="divider"></div>';
-    echo '<div class="h2">Cron</div><div class="muted">Recommended cPanel cron:</div>';
-    echo '<pre class="codeBlock">php /home/USER/public_html/liteinsurance.php action=cron_jobs cron_token=YOUR_TOKEN</pre>';
-    echo '<div class="muted tiny">If <code>CRON_TOKEN</code> is blank, cron runs only via CLI.</div>';
-    echo '</div>';
-    echo '</div>';
-
-    echo '<div class="card"><div class="h2">Setup doctor</div><div class="muted">Checks the self-hosted PHP workflow: PHP, PDO SQLite, DB path, upload path, upload limits, .env, CRON_TOKEN, and cron readiness.</div>';
-    echo render_setup_doctor_table(setup_doctor_report());
-    echo '</div>';
-}
-
 function setup_doctor_report(?Throwable $bootError = null): array
 {
     $checks = [];
@@ -1126,7 +817,7 @@ function setup_doctor_report(?Throwable $bootError = null): array
         $add('App boot', 'ok', 'The PHP app booted and connected to SQLite.');
     }
 
-    $add('PHP version', PHP_VERSION_ID >= 80000 ? 'ok' : 'fail', PHP_VERSION, 'Use PHP 8.0 or newer.');
+    $add('PHP version', PHP_VERSION_ID >= 80100 ? 'ok' : (PHP_VERSION_ID >= 80000 ? 'warn' : 'fail'), PHP_VERSION, 'Use PHP 8.1 or newer (8.3 recommended). PHP 8.0 is end-of-life.');
     $add('PDO SQLite', extension_loaded('pdo_sqlite') ? 'ok' : 'fail', extension_loaded('pdo_sqlite') ? 'Enabled' : 'Missing', 'Enable the pdo_sqlite extension in your hosting control panel.');
 
     $db = db_path();
@@ -1239,47 +930,22 @@ function run_cron_jobs(PDO $pdo): void
             return;
         }
     }
-    $rules = load_rules($pdo);
-    $updated = 0;
-    $offsetId = 0;
-    $pdo->beginTransaction();
-    $upd = $pdo->prepare('UPDATE policyholders SET ltv_estimate = ?, risk_tier = ?, confidence_score = ?, metadata = ? WHERE id = ?');
-    while (true) {
-        $st = $pdo->prepare('SELECT * FROM policyholders WHERE id > ? ORDER BY id ASC LIMIT 300');
-        $st->execute([$offsetId]);
-        $rows = $st->fetchAll();
-        if (!$rows) {
-            break;
-        }
-        foreach ($rows as $ph) {
-            $rec = policyholder_record_from_row($ph);
-            $meta = safe_json((string)($ph['metadata'] ?? '{}'));
-            if (!is_array($meta)) {
-                $meta = [];
-            }
-            $metadata = $meta;
-            $imputed = is_array($meta['imputed_fields'] ?? null) ? (array)$meta['imputed_fields'] : [];
-            $score = compute_confidence($rec, $imputed);
-            $riskOut = evaluate_rules_for_record($rec, $rules);
-            $ruleHits = (array)($riskOut['rule_hits'] ?? []);
-            $score = min(100, (int)round($score + min(20, count($ruleHits) * 4)));
-            $ltv = compute_ltv($rec);
-            $newMeta = ['imputed_fields' => $imputed, 'rule_hits' => $ruleHits, 'tags' => (array)($riskOut['tags'] ?? [])];
-            if (isset($metadata['custom_fields']) && is_array($metadata['custom_fields'])) {
-                $newMeta['custom_fields'] = $metadata['custom_fields'];
-            }
-            $upd->execute([$ltv, (string)($riskOut['risk_tier'] ?? 'Unknown'), $score, json_encode($newMeta, JSON_UNESCAPED_SLASHES), (int)$ph['id']]);
-            $updated++;
-            $offsetId = (int)$ph['id'];
-        }
-        if (($updated % 300) === 0) {
-            $pdo->commit();
-            $pdo->beginTransaction();
+    $updated = recompute_all_policyholders($pdo);
+    $lists = 0;
+    foreach ($pdo->query('SELECT id, rule_ids FROM segments')->fetchAll() as $seg) {
+        try {
+            [$ruleIds, $where] = segment_criteria($seg);
+            $stats = segment_stats($pdo, $ruleIds, $where);
+            $c = safe_json((string)$seg['rule_ids']);
+            $c = is_array($c) ? $c : [];
+            $c['stats'] = ['count' => $stats['count'], 'email' => $stats['email'], 'sms' => $stats['sms'], 'phone' => $stats['phone'], 'mail' => $stats['mail']];
+            $pdo->prepare('UPDATE segments SET rule_ids = ?, last_run_at = ? WHERE id = ?')->execute([json_encode($c, JSON_UNESCAPED_SLASHES), now_iso(), (int)$seg['id']]);
+            $lists++;
+        } catch (Throwable $e) {
+            li_log('cron.segment_error', ['id' => (int)$seg['id'], 'message' => $e->getMessage()]);
         }
     }
-    $pdo->commit();
-    $pdo->prepare('UPDATE segments SET last_run_at = ? WHERE last_run_at IS NULL OR last_run_at = ?')->execute([now_iso(), '']);
-    echo 'OK. Updated policyholders: ' . $updated;
+    echo 'OK. Updated policyholders: ' . $updated . '. Lists refreshed: ' . $lists;
 }
 
 function audit(PDO $pdo, int $userId, string $action, array $payload): void
@@ -1299,23 +965,12 @@ function render_flash(array $flash): string
     return '<div class="' . h($cls) . '">' . h($msg) . '</div>';
 }
 
-function nav_item(string $label, string $tab, string $current): string
-{
-    $cls = ($tab === $current) ? 'navItem navOn' : 'navItem';
-    return '<a class="' . h($cls) . '" href="' . h(self_url(['tab' => $tab])) . '">' . h($label) . '</a>';
-}
-
-function kpi(string $label, string $value): string
-{
-    return '<div class="kpi"><div class="kpiLabel">' . h($label) . '</div><div class="kpiValue">' . h($value) . '</div></div>';
-}
-
 function money_or_blank($value): string
 {
     if ($value === null || $value === '') {
         return '';
     }
-    return CURRENCY_SYMBOL . number_format((float)$value, 2);
+    return currency_symbol() . number_format((float)$value, 2);
 }
 
 function htmlEscape(string $s): string { return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
@@ -1360,95 +1015,224 @@ function app_css(): string
 {
     $accent = h(ACCENT_COLOR);
     $nonce = h((string)($GLOBALS['CSP_NONCE'] ?? ''));
-    return '<style nonce="' . $nonce . '">'
-        . ':root{--bg:#f4f3ee;--bgAlt:#ebe9e1;--panel:#fbfaf6;--text:#0a0a0a;--muted:#6b6b66;--muted2:#8a877e;--faint:#a8a59c;--border:#cfcdc4;--borderSoft:#e3e1d8;--accent:' . $accent . ';--dark:#0c0d0e;--darkInk:#f4f3ee;--darkMute:#8e8f88;--darkRule:#232527;--mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;}'
-        . '*{box-sizing:border-box;}html,body{height:100%;}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased;}'
-        . 'a{color:inherit;}code{font-family:var(--mono);font-size:.95em;}'
-        . '.appShell{display:grid;grid-template-columns:248px minmax(0,1fr);grid-template-rows:60px 1fr auto;min-height:100vh;}'
-        . '.topBar{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;padding:0 20px;border-bottom:1px solid var(--border);background:rgba(244,243,238,.94);backdrop-filter:blur(10px);position:sticky;top:0;z-index:5;}'
-        . '.brand{display:inline-flex;align-items:center;gap:12px;font-weight:650;letter-spacing:-0.02em;}'
-        . '.brand:before{content:"LI";display:grid;place-items:center;width:34px;height:34px;background:var(--text);color:var(--bg);font:11px/1 var(--mono);letter-spacing:.05em;}'
-        . '.topRight{display:flex;align-items:center;gap:12px;min-width:0;}'
-        . '.userPill{display:flex;align-items:center;gap:8px;min-width:0;padding:7px 10px;border:1px solid var(--border);background:var(--panel);font-size:12px;}'
-        . '.pillRole{padding:2px 7px;border:1px solid var(--border);color:var(--muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:.08em;font-size:10px;}'
-        . '.sideNav{border-right:1px solid var(--border);background:var(--panel);padding:12px;display:flex;flex-direction:column;gap:1px;}'
-        . '.navItem{padding:11px 10px;text-decoration:none;color:var(--muted);border:1px solid transparent;font:12px/1.2 var(--mono);letter-spacing:.08em;text-transform:uppercase;}'
-        . '.navItem:hover{border-color:var(--border);background:var(--bgAlt);color:var(--text);}'
-        . '.navOn{border-color:var(--border);background:var(--bg);color:var(--text);box-shadow:inset 3px 0 0 var(--accent);font-weight:700;}'
-        . '.main{padding:22px 22px 44px;max-width:1180px;width:100%;}'
-        . '.footer{grid-column:1/-1;border-top:1px solid var(--border);padding:14px 20px;color:var(--muted);font-size:12px;display:flex;gap:8px;align-items:center;font-family:var(--mono);}'
-        . '.pageHead{margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:14px;}'
-        . '.h1{margin:0 0 4px;font-size:24px;line-height:30px;letter-spacing:-.03em;}'
-        . '.h2{font-size:14px;font-weight:650;margin:0 0 10px;letter-spacing:-.01em;}'
-        . '.muted{color:var(--muted);font-size:13px;line-height:18px;}'
-        . '.tiny{font-size:12px;}'
-        . '.card{border:1px solid var(--border);padding:15px;background:var(--panel);margin-bottom:12px;}'
-        . '.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}'
-        . '.kpiGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--border);border:1px solid var(--border);margin:12px 0;}'
-        . '.kpi{padding:14px;background:var(--panel);}'
-        . '.kpiLabel{color:var(--muted2);font:11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;}'
-        . '.kpiValue{font-size:20px;font-weight:650;margin-top:4px;letter-spacing:-.03em;}'
-        . '.form{display:flex;flex-direction:column;gap:10px;margin-top:12px;}'
-        . '.label{font:11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted2);margin-bottom:-5px;}'
-        . '.input,.select,.textarea{width:100%;box-sizing:border-box;border:1px solid var(--border);padding:10px 10px;font-size:14px;outline:none;background:var(--bg);color:var(--text);}'
-        . '.input:focus,.select:focus,.textarea:focus{border-color:var(--text);box-shadow:0 0 0 2px var(--accent);}'
-        . '.textarea{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;font-size:12px;}'
-        . '.btn{border:1px solid var(--text);background:var(--text);color:var(--bg);padding:10px 12px;font-weight:650;cursor:pointer;}'
-        . '.btn:hover{background:var(--accent);border-color:var(--accent);color:#fff;}'
-        . '.btnSecondary{border:1px solid var(--text);background:transparent;color:var(--text);padding:10px 12px;font-weight:650;cursor:pointer;}'
-        . '.btnSecondary:hover{background:var(--text);color:var(--bg);}'
-        . '.inline{display:inline;}'
-        . '.actionsRow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0;}'
-        . '.list{margin:10px 0 0;padding-left:18px;color:var(--muted);font-size:13px;}'
-        . '.table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;background:var(--panel);}'
-        . '.table th,.table td{border-bottom:1px solid var(--borderSoft);padding:10px 8px;text-align:left;vertical-align:top;white-space:nowrap;}'
-        . '.table th{color:var(--muted2);font:11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;}'
-        . '.right{text-align:right;}'
-        . '.profileCellInput{width:100%;min-width:88px;min-height:32px;border:1px solid transparent;background:transparent;padding:0 7px;font-size:12px;color:var(--text);}'
-        . '.profileCellInput:hover{border-color:var(--border);background:var(--bg);}'
-        . '.profileCellInput:focus{border-color:var(--accent);background:#fff;box-shadow:0 0 0 1px var(--accent);}'
-        . '.profileCellInput.right{text-align:right;}'
-        . '.profileCellInput.name{min-width:132px;}'
-        . '.profileCellInput.policy{min-width:104px;font-family:var(--mono);}'
-        . '.badge{display:inline-block;padding:2px 8px;border:1px solid var(--border);font:11px/1.4 var(--mono);}'
-        . '.mutedBadge{color:var(--muted);}'
-        . '.scrollX{overflow:auto;border:1px solid var(--border);background:var(--panel);}'
-        . '.rowLow{background:var(--bgAlt);}'
-        . '.gridMap{display:grid;grid-template-columns:1fr 1fr;gap:10px;}'
-        . '.mapRow{display:flex;flex-direction:column;gap:8px;}'
-        . '.divider{height:1px;background:var(--border);margin:12px 0;}'
-        . '.linkBtn{border:none;background:transparent;color:var(--accent);font-weight:600;cursor:pointer;padding:0;}'
-        . '.linkBtn:hover{text-decoration:underline;}'
-        . '.checkGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;border:1px solid var(--border);padding:10px;background:var(--bg);}'
-        . '.check{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:var(--text);}'
-        . '.codeBlock{border:1px solid var(--darkRule);padding:10px;background:var(--dark);color:var(--darkInk);overflow:auto;font-size:12px;}'
-        . '.ruleModeTabs{display:flex;gap:1px;background:var(--border);border:1px solid var(--border);margin:4px 0 10px;}'
-        . '.ruleModeTab{flex:1 1 0;border:0;background:var(--panel);color:var(--muted);padding:11px 10px;cursor:pointer;font:11px/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;}'
-        . '.ruleModeTab[aria-selected="true"]{background:var(--bg);color:var(--text);box-shadow:inset 0 -3px 0 var(--accent);}'
-        . '.ruleModePanel{border:1px solid var(--border);background:var(--bg);padding:12px;margin-bottom:10px;}'
-        . '.ruleModePanel[hidden]{display:none;}'
-        . '.ruleConditionRow{display:grid;grid-template-columns:1fr .62fr 1fr auto;gap:8px;align-items:end;padding:8px 0;border-top:1px solid var(--borderSoft);}'
-        . '.ruleConditionRow:first-child{border-top:0;}'
-        . '.ruleActionGrid{display:grid;grid-template-columns:1fr .7fr 1fr;gap:10px;margin-top:10px;}'
-        . '.inlineCheck{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;}'
-        . '.inlineCheck input{width:auto;}'
-        . '.pager{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;}'
-        . '.pagerOn,.pagerOff{padding:6px 10px;border:1px solid var(--border);text-decoration:none;color:var(--text);font-size:12px;font-family:var(--mono);}'
-        . '.pagerOn{background:var(--text);color:var(--bg);font-weight:700;}'
-        . '.pagerOff{background:var(--panel);}'
-        . '.swatch{display:inline-block;width:12px;height:12px;border:1px solid var(--border);vertical-align:-2px;margin-right:6px;}'
-        . '.link{color:var(--accent);text-decoration:none;font-weight:600;}'
-        . '.link:hover{text-decoration:underline;}'
-        . '.flash{border:1px solid var(--border);border-left:4px solid var(--text);background:var(--panel);padding:10px 12px;margin:10px 0;font-size:13px;}'
-        . '.flashOk{border-left-color:var(--accent);}'
-        . '.flashErr{border-left-color:var(--text);}'
-        . '.authWrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg);}'
-        . '.authCard{width:100%;max-width:430px;border:1px solid var(--border);padding:20px;background:var(--panel);}'
-        . '.authBrand{display:flex;align-items:center;gap:12px;font-weight:700;letter-spacing:-0.02em;margin-bottom:6px;}'
-        . '.authBrand:before{content:"LI";display:grid;place-items:center;width:34px;height:34px;background:var(--text);color:var(--bg);font:11px/1 var(--mono);}'
-        . '.authFooter{margin-top:14px;display:flex;flex-direction:column;gap:8px;}'
-        . '@media (max-width:900px){.appShell{grid-template-columns:1fr;grid-template-rows:60px auto 1fr;}.topBar{padding:0 12px;}.userPill{max-width:48vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.sideNav{flex-direction:row;overflow:auto;white-space:nowrap;border-right:none;border-bottom:1px solid var(--border);} .main{padding:16px 12px 36px;} .grid2{grid-template-columns:1fr;} .kpiGrid{grid-template-columns:repeat(2,minmax(0,1fr));} .gridMap{grid-template-columns:1fr;} .checkGrid{grid-template-columns:1fr;}.ruleConditionRow{grid-template-columns:1fr;}.ruleActionGrid{grid-template-columns:1fr;}}'
-        . '</style>';
+    $css = <<<'CSS'
+:root{--ink:#0B0D12;--ink2:#1F2430;--slate:#4B5262;--muted:#6B7280;--faint:#9AA0AB;--line:#E4E2DA;--line2:#EEECE6;--paper:#F6F5F0;--white:#FFFFFF;--acc:__ACCENT__;--accInk:#1A2FD6;--acc50:#EEF1FF;--acc100:#DCE2FF;--nav:#0A0E1A;--nav2:#111729;--navLine:#232B40;--navInk:#F3F4F7;--navMute:#8E95A8;--green:#157F3B;--green50:#E7F4EC;--amber:#B45309;--amber50:#FDF2E4;--red:#B42318;--red50:#FCEBE9;--r:4px;--mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;--sans:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;--bg:var(--paper);--panel:var(--white);--text:var(--ink);--border:var(--line);--borderSoft:var(--line2);--accent:var(--acc);}
+*{box-sizing:border-box;}html,body{height:100%;}
+body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.45 var(--sans);-webkit-font-smoothing:antialiased;}
+a{color:inherit;}code{font-family:var(--mono);font-size:.92em;background:var(--line2);padding:1px 4px;border-radius:var(--r);}
+.mono{font-family:var(--mono);font-size:12.5px;}.nowrap{white-space:nowrap;}
+.appShell{display:grid;grid-template-columns:232px minmax(0,1fr);grid-template-rows:auto 1fr auto;min-height:100vh;background:linear-gradient(90deg,var(--nav) 232px,var(--paper) 232px);}
+.sideNav{grid-row:1/-1;grid-column:1;background:var(--nav);color:var(--navInk);display:flex;flex-direction:column;gap:2px;padding:16px 12px;position:sticky;top:0;height:100vh;overflow:auto;}
+.brand{display:flex;align-items:center;gap:10px;padding:4px 8px 18px;text-decoration:none;font-weight:600;letter-spacing:-.02em;font-size:15px;color:var(--navInk);}
+.logo{flex:none;display:block;}
+.navGroup{font:10.5px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--navMute);padding:16px 10px 8px;}
+.navItem{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 10px;border-radius:var(--r);text-decoration:none;color:#C9CDD8;font-size:13.5px;font-weight:500;}
+.navItem:hover{background:var(--nav2);color:var(--navInk);}
+.navOn{background:var(--nav2);color:#fff;box-shadow:inset 3px 0 0 var(--acc);}
+.navCount{min-width:22px;padding:1px 7px;border-radius:var(--r);background:var(--acc);color:#fff;font:11px/18px var(--mono);text-align:center;}
+.sideFoot{margin-top:auto;border-top:1px solid var(--navLine);padding:12px 4px 0;display:flex;flex-direction:column;gap:8px;}
+.userPill{display:flex;align-items:center;gap:8px;min-width:0;font-size:12px;color:var(--navMute);}
+.userEmail{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.pillRole{padding:1px 6px;border:1px solid var(--navLine);border-radius:var(--r);font:10px/1.5 var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--navInk);}
+.navLogout{background:transparent;border:1px solid var(--navLine);color:var(--navInk);border-radius:var(--r);padding:7px 10px;font:inherit;font-size:12.5px;cursor:pointer;width:100%;text-align:left;}
+.navLogout:hover{border-color:var(--navMute);}
+.topBar{grid-column:2;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 28px;background:var(--white);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;}
+.topTitle{min-width:0;}.topTitle .muted{margin-top:2px;}
+.topSearch{flex:0 1 340px;}.topSearch .input{background:var(--paper);}
+.main{grid-column:2;padding:22px 28px 44px;max-width:1360px;width:100%;}
+.footer{grid-column:2;border-top:1px solid var(--line);padding:14px 28px;color:var(--muted);font-size:12px;display:flex;gap:14px;align-items:center;}
+.h1{margin:0;font-size:22px;line-height:28px;letter-spacing:-.02em;font-weight:600;}
+.h2{font-size:15px;font-weight:600;margin:0 0 4px;letter-spacing:-.01em;}
+.h3{font-size:13.5px;font-weight:600;margin:0 0 6px;}
+.muted{color:var(--muted);font-size:13px;line-height:18px;}
+.tiny{font-size:12px;}
+.card{border:1px solid var(--line);border-radius:var(--r);padding:18px;background:var(--white);margin-bottom:16px;min-width:0;}
+.cardHead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:10px;}
+.subHead{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:14px 0 2px;font-size:13px;font-weight:600;}
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;}
+.gridWide{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);}
+.kpiGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:0 0 16px;}
+.kpiGrid.kpi5{grid-template-columns:repeat(5,minmax(0,1fr));}
+.card .kpiGrid{margin:12px 0;}
+.kpi{padding:14px 16px;background:var(--white);border:1px solid var(--line);border-radius:var(--r);min-width:0;}
+.kpi-acc{box-shadow:inset 0 3px 0 var(--acc);}.kpi-warn{box-shadow:inset 0 3px 0 var(--amber);}
+.kpiLabel{color:var(--muted);font-size:12px;font-weight:500;}
+.kpiValue{font-size:24px;font-weight:600;margin-top:4px;letter-spacing:-.02em;font-variant-numeric:tabular-nums;}
+.kpiSub{color:var(--muted);font-size:12px;margin-top:2px;}
+.form{display:flex;flex-direction:column;gap:10px;margin-top:12px;}
+.formTight{gap:8px;margin-top:8px;}
+.label{display:block;font-size:12px;font-weight:600;color:var(--slate);margin:0 0 6px;}
+.form>.label{margin-bottom:-4px;}
+.input,.select,.textarea{width:100%;border:1px solid var(--line);border-radius:var(--r);padding:9px 10px;font:inherit;font-size:14px;outline:none;background:var(--white);color:var(--ink);}
+.input:focus,.select:focus,.textarea:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc100);}
+.textarea{font-family:var(--mono);font-size:12.5px;}
+.selectSm,.inputSm{padding:5px 8px;font-size:12.5px;width:auto;}
+.btn,.btnSecondary,.btnGhost{display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:var(--r);padding:9px 14px;font:inherit;font-size:13.5px;font-weight:600;cursor:pointer;text-decoration:none;line-height:1.2;}
+.btn{border:1px solid var(--acc);background:var(--acc);color:#fff;}
+.btn:hover{background:var(--accInk);border-color:var(--accInk);}
+.btnSecondary{border:1px solid var(--line);background:var(--white);color:var(--ink);}
+.btnSecondary:hover{border-color:var(--ink);}
+.btnGhost{border:1px solid transparent;background:transparent;color:var(--slate);}
+.btnGhost:hover{background:var(--line2);}
+.btnSm{padding:5px 10px;font-size:12.5px;}
+.btn:focus-visible,.btnSecondary:focus-visible,.btnGhost:focus-visible,.chip:focus-visible,.navItem:focus-visible,.link:focus-visible,.linkBtn:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
+.inline{display:inline;}
+.actionsRow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0 0;}
+.filterBar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0;}
+.filterBar .input{flex:1 1 240px;width:auto;}.filterBar .select{width:auto;}
+.filterBar .label{margin:0;}
+.exportBar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+.list{margin:10px 0 0;padding-left:18px;color:var(--slate);font-size:13px;}
+.table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;background:var(--white);}
+.table th,.table td{border-bottom:1px solid var(--line2);padding:9px 10px;text-align:left;vertical-align:middle;white-space:nowrap;}
+.table th{color:var(--muted);font-size:12px;font-weight:600;background:var(--paper);border-bottom-color:var(--line);}
+.table tbody tr:hover td{background:#FAFAF7;}
+.table.compact th,.table.compact td{padding:7px 6px;}
+.table.compact{margin-top:6px;}
+.card>.table td,.whyBox .table td,.table.wrapCells td{white-space:normal;}
+.main>.actionsRow{margin:0 0 16px;}
+.form>.btn,.form>.btnSecondary{align-self:flex-start;}
+.rowTotal td{font-weight:600;border-top:1px solid var(--line);}
+.right,.table .right{text-align:right;}
+.neg{color:var(--red);}
+.profileCellInput{width:100%;min-width:84px;min-height:30px;border:1px solid transparent;border-radius:var(--r);background:transparent;padding:0 7px;font:inherit;font-size:12.5px;color:var(--ink);}
+.profileCellInput:hover{border-color:var(--line);background:var(--white);}
+.profileCellInput:focus{border-color:var(--acc);background:#fff;box-shadow:0 0 0 2px var(--acc100);outline:none;}
+.profileCellInput.right{text-align:right;}
+.profileCellInput.name{min-width:140px;}
+.profileCellInput.policy{min-width:104px;font-family:var(--mono);}
+.profileCellInput.date{min-width:104px;font-family:var(--mono);}
+.badge{display:inline-block;padding:1px 7px;border:1px solid var(--line);border-radius:var(--r);font:11px/1.6 var(--mono);background:var(--white);}
+.mutedBadge{color:var(--muted);}
+.tagRow{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+.tier{display:inline-block;padding:1px 8px;border-radius:var(--r);font-size:11.5px;font-weight:600;line-height:1.6;background:var(--line2);color:var(--slate);}
+.tier-high{background:var(--red50);color:var(--red);}.tier-review{background:var(--amber50);color:var(--amber);}.tier-medium{background:var(--acc50);color:var(--accInk);}.tier-low{background:var(--green50);color:var(--green);}
+.pill{display:inline-block;padding:1px 8px;border-radius:var(--r);font-size:11.5px;font-weight:600;line-height:1.6;background:var(--line2);color:var(--slate);white-space:nowrap;}
+.st-contacted{background:var(--acc50);color:var(--accInk);}.st-quoted{background:#F1ECFE;color:#5B34C7;}.st-remarketing{background:var(--amber50);color:var(--amber);}.st-renewed{background:var(--green50);color:var(--green);}.st-lost{background:var(--red50);color:var(--red);}
+.due{color:var(--red);font-weight:600;}
+.note{display:inline-block;padding:2px 8px;border-radius:var(--r);background:var(--acc50);color:var(--accInk);font-size:12px;font-weight:500;}
+.scrollX{overflow:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--white);margin-top:10px;}
+.scrollX .table{margin-top:0;}
+.rowLow td{background:#FCFBF7;}
+.rowOpen td{background:var(--acc50)!important;}
+.gridMap{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;}
+.mapSection{border-top:1px solid var(--line2);padding-top:12px;}
+.mapSection>.label{margin-bottom:8px;color:var(--ink);}
+.mapRow{display:flex;flex-direction:column;gap:4px;}
+.mapLabel{font-size:12px;color:var(--slate);}
+.divider{height:1px;background:var(--line);margin:16px 0;}
+.linkBtn{border:none;background:transparent;color:var(--acc);font:inherit;font-size:13px;font-weight:600;cursor:pointer;padding:0;}
+.linkBtn:hover{text-decoration:underline;}
+.checkGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;border:1px solid var(--line);border-radius:var(--r);padding:10px;background:var(--paper);}
+.check{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--ink);}
+.checkRow{display:flex;flex-wrap:wrap;gap:6px 14px;margin:6px 0 8px;}
+.codeBlock{border-radius:var(--r);padding:12px;background:var(--nav);color:var(--navInk);overflow:auto;font:12px/1.5 var(--mono);}
+.ruleModeTabs{display:flex;gap:4px;padding:4px;background:var(--paper);border:1px solid var(--line);border-radius:var(--r);margin:4px 0 10px;}
+.ruleModeTab{flex:1 1 0;border:0;border-radius:var(--r);background:transparent;color:var(--muted);padding:8px 10px;cursor:pointer;font:inherit;font-size:13px;font-weight:600;}
+.ruleModeTab[aria-selected="true"]{background:var(--white);color:var(--ink);box-shadow:0 1px 2px rgba(11,13,18,.08);}
+.ruleModePanel{border:1px solid var(--line);border-radius:var(--r);background:var(--paper);padding:12px;margin-bottom:10px;}
+.ruleModePanel[hidden]{display:none;}
+.ruleConditionRow{display:grid;grid-template-columns:1fr .62fr 1fr auto;gap:8px;align-items:end;padding:8px 0;border-top:1px solid var(--line2);}
+.ruleConditionRow:first-child{border-top:0;}
+.ruleActionGrid{display:grid;grid-template-columns:1fr .7fr 1fr .6fr;gap:10px;margin-top:10px;align-items:end;}
+.inlineCheck{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;}
+.inlineCheck input,.check input{width:auto;accent-color:var(--acc);}
+.pager{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:12px;}
+.pagerOn,.pagerOff{padding:5px 10px;border:1px solid var(--line);border-radius:var(--r);text-decoration:none;color:var(--ink);font:12px var(--mono);}
+.pagerOn{background:var(--ink);border-color:var(--ink);color:#fff;}
+.pagerOff{background:var(--white);}
+.swatch{display:inline-block;width:12px;height:12px;border-radius:2px;background:var(--acc);vertical-align:-2px;margin-right:6px;}
+.link{color:var(--acc);text-decoration:none;font-weight:600;}
+.link:hover{text-decoration:underline;}
+.flash{border:1px solid var(--line);border-left:4px solid var(--slate);border-radius:var(--r);background:var(--white);padding:10px 12px;margin:0 0 16px;font-size:13.5px;}
+.flashOk{border-left-color:var(--green);background:var(--green50);}
+.flashErr{border-left-color:var(--red);background:var(--red50);}
+.chips{display:flex;gap:6px;flex-wrap:wrap;}
+.chipsWrap{margin:4px 0 4px;}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid var(--line);border-radius:var(--r);background:var(--white);color:var(--slate);font:inherit;font-size:12.5px;font-weight:500;text-decoration:none;cursor:pointer;}
+.chip:hover{border-color:var(--slate);color:var(--ink);}
+.chipOn{background:var(--ink);border-color:var(--ink);color:#fff;}
+.chipOn:hover{color:#fff;}
+.chipCount{font:11px var(--mono);opacity:.75;}
+.empty{border:1px dashed var(--line);border-radius:var(--r);padding:14px;color:var(--muted);font-size:13px;margin-top:8px;}
+.meterCell{width:40%;}
+.meter{display:block;height:6px;background:var(--line2);border-radius:var(--r);overflow:hidden;}
+.meterFill{display:block;height:100%;width:0;background:var(--acc);}
+.meterWarn{background:var(--amber);}
+.statRow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:8px;}
+.stat{border:1px solid var(--line2);border-radius:var(--r);padding:8px 10px;}
+.statValue{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;}
+.statLabel{font-size:11.5px;color:var(--muted);}
+.checklist{border-color:var(--acc100);background:linear-gradient(0deg,var(--white),var(--acc50));}
+.steps{list-style:none;margin:6px 0 0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;}
+.step{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--line);border-radius:var(--r);background:var(--white);font-size:13px;}
+.stepNum{flex:none;width:22px;height:22px;border-radius:var(--r);display:grid;place-items:center;background:var(--line2);font:11px var(--mono);}
+.stepLabel{flex:1;}
+.stepDone{color:var(--muted);}.stepDone .stepNum{background:var(--green);color:#fff;}
+.board{display:grid;grid-template-columns:repeat(6,minmax(180px,1fr));gap:10px;overflow-x:auto;padding-bottom:8px;align-items:start;}
+.boardCol{background:var(--line2);border-radius:var(--r);padding:8px;min-height:120px;display:flex;flex-direction:column;gap:8px;}
+.boardHead{display:flex;align-items:center;gap:8px;padding:2px 2px 4px;}
+.boardCount{font:12px var(--mono);color:var(--slate);}
+.boardHead .muted{margin-left:auto;}
+.boardEmpty,.boardMore{padding:8px;color:var(--muted);font-size:12px;}
+.rcard{background:var(--white);border:1px solid var(--line);border-radius:var(--r);padding:10px;display:flex;flex-direction:column;gap:4px;font-size:12.5px;}
+.rcardDue{box-shadow:inset 3px 0 0 var(--red);}
+.rcardTop{display:flex;justify-content:space-between;align-items:center;gap:6px;}
+.rcardName{font-weight:600;font-size:13px;}
+.rcardMeta{display:flex;justify-content:space-between;gap:6px;color:var(--slate);}
+.rcardForm{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;padding-top:6px;border-top:1px solid var(--line2);}
+.rcardForm .select{flex:1 1 100px;}.rcardForm .input{flex:1 1 80px;min-width:0;}
+.panel{border-color:var(--acc100);box-shadow:0 1px 0 var(--acc100);}
+.panelHead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;}
+.panelHead .actionsRow{margin:0;}
+.panelTitle{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:15px;font-weight:600;}
+.panelName{font-size:20px;font-weight:600;letter-spacing:-.02em;margin-top:4px;}
+.panelGrid{margin-top:14px;}
+.panelGrid>div{border:1px solid var(--line2);border-radius:var(--r);padding:12px;}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:8px 0 0;font-size:13px;}
+.kv dt{color:var(--muted);}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;}
+.consentForm{margin-top:10px;border-top:1px solid var(--line2);padding-top:10px;}
+.whyGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px;}
+.whyBox{border:1px solid var(--line2);border-radius:var(--r);padding:12px;background:var(--paper);min-width:0;}
+.whyTitle{font-weight:600;margin-bottom:8px;}
+.whyList{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:13px;}
+.whySet{list-style-type:disc;}
+.whyList .muted{white-space:normal;}
+.formula{display:flex;flex-wrap:wrap;align-items:flex-start;gap:6px;font-variant-numeric:tabular-nums;}
+.formula span{display:flex;flex-direction:column;font-weight:600;font-size:15px;background:var(--white);border:1px solid var(--line);border-radius:var(--r);padding:6px 8px;}
+.formula em{font-style:normal;font-weight:400;font-size:11px;color:var(--muted);}
+.formula b{padding-top:8px;color:var(--muted);}
+.panelLog{margin-top:16px;}.panelLog .label{margin-bottom:6px;}
+.timeline{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px;font-size:13px;}
+.timeline li{border-left:2px solid var(--line);padding-left:10px;}
+.lb{border:1px solid var(--line);border-radius:var(--r);padding:12px;background:var(--paper);}
+.lbHead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.lbHead .label{margin:0;}
+.lbRow{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,.9fr) minmax(0,1fr) auto;gap:6px;align-items:center;margin-top:8px;}
+.lbVals{display:flex;gap:6px;align-items:center;}
+.lbVals .input{min-width:0;}
+.lbCount{border:1px solid var(--acc100);background:var(--acc50);border-radius:var(--r);padding:10px 12px;font-size:13.5px;font-weight:500;color:var(--accInk);}
+.lbCount.lbErr{border-color:#F3C4BE;background:var(--red50);color:var(--red);}
+.advanced{border:1px solid var(--line);border-radius:var(--r);padding:10px 12px;}
+.advanced summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--slate);}
+.advanced[open] summary{margin-bottom:10px;}
+.advanced .label{margin:10px 0 6px;}
+.funnel{border:1px solid var(--line);border-radius:var(--r);padding:12px;background:var(--paper);display:flex;flex-direction:column;gap:8px;margin-top:4px;}
+.fnRow{display:grid;grid-template-columns:160px minmax(0,1fr) 90px;gap:10px;align-items:center;font-size:13px;}
+.fnBar{height:10px;background:var(--line2);border-radius:var(--r);overflow:hidden;}
+.fnFill{display:block;height:100%;width:0;background:var(--acc);transition:width .2s;}
+.fnValue{text-align:right;font-variant-numeric:tabular-nums;font-weight:600;}
+.fnTotals{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;border-top:1px solid var(--line);padding-top:10px;}
+.authWrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--paper);}
+.authCard{width:100%;max-width:420px;border:1px solid var(--line);border-radius:var(--r);padding:28px;background:var(--white);}
+.authBrand{display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:-.02em;margin-bottom:18px;font-size:15px;}
+.authCard .h1{margin-bottom:4px;}
+.authFooter{margin-top:16px;display:flex;flex-direction:column;gap:8px;}
+@media (max-width:1200px){.kpiGrid.kpi5{grid-template-columns:repeat(3,minmax(0,1fr));}.gridMap{grid-template-columns:repeat(2,minmax(0,1fr));}.whyGrid{grid-template-columns:1fr;}.steps{grid-template-columns:1fr 1fr;}}
+@media (max-width:900px){.appShell{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto 1fr auto;background:var(--paper);}.sideNav{grid-row:auto;grid-column:1;position:static;height:auto;flex-direction:row;align-items:center;overflow-x:auto;padding:8px;gap:4px;}.brand{padding:4px 8px;}.brand span{display:none;}.navGroup{display:none;}.navItem{white-space:nowrap;}.sideFoot{margin:0 0 0 auto;border:0;padding:0;flex-direction:row;}.userPill{display:none;}.topBar,.main,.footer{grid-column:1;}.topBar{position:static;flex-wrap:wrap;padding:12px 16px;}.topSearch{flex:1 1 100%;}.main{padding:16px 12px 36px;}.grid2,.gridWide,.grid3,.panelGrid{grid-template-columns:1fr;}.kpiGrid,.kpiGrid.kpi5{grid-template-columns:1fr 1fr;}.gridMap{grid-template-columns:1fr;}.checkGrid{grid-template-columns:1fr;}.ruleConditionRow{grid-template-columns:1fr;}.ruleActionGrid{grid-template-columns:1fr 1fr;}.lbRow{grid-template-columns:1fr 1fr;}.steps{grid-template-columns:1fr;}.statRow{grid-template-columns:repeat(3,minmax(0,1fr));}.fnRow{grid-template-columns:110px minmax(0,1fr) 70px;}.fnTotals{grid-template-columns:repeat(2,minmax(0,1fr));}}
+CSS;
+    return '<style nonce="' . $nonce . '">' . str_replace('__ACCENT__', $accent, $css) . '</style>';
 }
 
 function app_js(): string
@@ -1477,7 +1261,7 @@ function app_js(): string
         . '};'
         . '(function(){'
         . 'function status(msg,err){const el=document.getElementById("profileInlineStatus");if(el){el.textContent=msg;el.style.color=err?"#a33a2a":"";}}'
-        . 'function money(v){const n=Number(v);return Number.isFinite(n)?"$"+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):"";}'
+        . 'function money(v){const n=Number(v);return Number.isFinite(n)?(document.body.getAttribute("data-currency")||"")+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):"";}'
         . 'function derivedCell(id,field){return document.querySelector("[data-policy-id=\\"" + id + "\\"][data-derived-field=\\"" + field + "\\"]");}'
         . 'function updateDerived(id,data){if(!data||!data.derived){return;}const d=data.derived;const ltv=derivedCell(id,"ltv_estimate");if(ltv){ltv.textContent=money(d.ltv_estimate);}const tier=derivedCell(id,"risk_tier");if(tier){tier.textContent=d.risk_tier||"Unknown";}const conf=derivedCell(id,"confidence_score");if(conf){conf.textContent=d.confidence_score==null?"":String(d.confidence_score);}}'
         . 'async function save(input){const csrf=document.getElementById("profileInlineCsrf")||document.querySelector("input[name=csrf_token]");if(!csrf){return;}const id=input.dataset.policyId||"0";const field=input.dataset.field||"";const sig=id+"|"+field+"|"+(input.value||"");if(input.dataset.inlineSaveKey===sig||input.dataset.inlineSaving==="1"){return;}const fd=new FormData();fd.append("csrf_token",csrf.value||"");fd.append("action","policy_cell_update");fd.append("id",id);fd.append("field",field);fd.append("value",input.value||"");input.dataset.inlineSaving="1";input.disabled=true;status("Saving "+field+"...");try{const res=await fetch(window.location.href,{method:"POST",body:fd,headers:{"X-Requested-With":"fetch","Accept":"application/json"}});const data=await res.json();if(!data.ok){throw new Error(data.error||"Could not save cell.");}input.dataset.inlineSaveKey=sig;updateDerived(id,data);status("Saved "+field+". Computed cells refreshed.");}catch(e){status(e.message||String(e),true);}finally{input.disabled=false;delete input.dataset.inlineSaving;}}'
@@ -1496,13 +1280,81 @@ function app_js(): string
         . 'function setSel(s,v){if(!s){return;}const str=String(v||"");if(str&&!qsa("option",s).some(function(o){return o.value===str;})){const o=document.createElement("option");o.value=str;o.textContent=str;s.appendChild(o);}s.value=str;}'
         . 'function row(c){const w=document.createElement("div");w.className="ruleConditionRow";w.setAttribute("data-rule-condition-row","");w.innerHTML="<div><label class=\\"label\\">Field</label><select class=\\"select\\" data-rule-field>"+opts("ruleFieldOptions")+"</select></div><div><label class=\\"label\\">Operator</label><select class=\\"select\\" data-rule-op>"+opts("ruleOperatorOptions")+"</select></div><div><label class=\\"label\\">Value</label><input class=\\"input\\" data-rule-value value=\\""+esc(iv(c&&c.value))+"\\"></div><button class=\\"btnSecondary\\" type=\\"button\\" data-rule-remove-condition>Remove</button>";setSel(qs("[data-rule-field]",w),c&&c.field?c.field:"age");setSel(qs("[data-rule-op]",w),c&&c.op?c.op:">=");return w;}'
         . 'function defRule(){return{logic:"AND",conditions:[{field:"age",op:">=",value:60}],actions:{set_risk_tier:"High",score_delta:10}};}'
-        . 'function render(){const t=ta();if(!t||!document.getElementById("ruleVisualPanel")){return;}const d=safeJson(t.value)||defRule();const logic=document.getElementById("ruleLogicVisual");if(logic){logic.value=String(d.logic||"AND").toUpperCase()==="OR"?"OR":"AND";}const box=document.getElementById("ruleConditionsVisual");if(box){box.innerHTML="";const cond=Array.isArray(d.conditions)?d.conditions:[];const leaf=cond.filter(function(x){return x&&x.field;});(leaf.length?leaf:defRule().conditions).forEach(function(c){box.appendChild(row(c));});const adv=document.getElementById("ruleAdvancedJsonNotice");if(adv){adv.checked=cond.some(function(x){return x&&!(x.field);});}}const a=d.actions&&typeof d.actions==="object"?d.actions:{};setSel(document.getElementById("ruleActionTier"),a.set_risk_tier||"");const score=document.getElementById("ruleActionScore");if(score){score.value=Number(a.score_delta||0);}const tag=document.getElementById("ruleActionTag");if(tag){tag.value=a.add_tag||"";}}'
-        . 'function collect(){const t=ta();if(!t){return null;}const cond=qsa("[data-rule-condition-row]").map(function(r){const f=qs("[data-rule-field]",r).value;const o=qs("[data-rule-op]",r).value;const v=qs("[data-rule-value]",r).value;return{field:f,op:o,value:pv(o,v)};}).filter(function(x){return x.field&&x.op;});if(!cond.length){throw new Error("Add at least one condition.");}const actions={};const tier=document.getElementById("ruleActionTier");const score=document.getElementById("ruleActionScore");const tag=document.getElementById("ruleActionTag");if(tier&&tier.value){actions.set_risk_tier=tier.value;}if(score&&score.value!==""&&Number(score.value)!==0){actions.score_delta=Number(score.value);}if(tag&&tag.value.trim()!==""){actions.add_tag=tag.value.trim();}if(!Object.keys(actions).length){throw new Error("Add at least one action.");}const logic=document.getElementById("ruleLogicVisual");const d={logic:logic&&logic.value==="OR"?"OR":"AND",conditions:cond,actions:actions};t.value=JSON.stringify(d,null,2);return d;}'
+        . 'function render(){const t=ta();if(!t||!document.getElementById("ruleVisualPanel")){return;}const d=safeJson(t.value)||defRule();const logic=document.getElementById("ruleLogicVisual");if(logic){logic.value=String(d.logic||"AND").toUpperCase()==="OR"?"OR":"AND";}const box=document.getElementById("ruleConditionsVisual");if(box){box.innerHTML="";const cond=Array.isArray(d.conditions)?d.conditions:[];const leaf=cond.filter(function(x){return x&&x.field;});(leaf.length?leaf:defRule().conditions).forEach(function(c){box.appendChild(row(c));});const adv=document.getElementById("ruleAdvancedJsonNotice");if(adv){adv.checked=cond.some(function(x){return x&&!(x.field);});}}const a=d.actions&&typeof d.actions==="object"?d.actions:{};setSel(document.getElementById("ruleActionTier"),a.set_risk_tier||"");const score=document.getElementById("ruleActionScore");if(score){score.value=Number(a.score_delta||0);}const tag=document.getElementById("ruleActionTag");if(tag){tag.value=a.add_tag||"";}const stop=document.getElementById("ruleActionStop");if(stop){stop.checked=!!a.stop;}}'
+        . 'function collect(){const t=ta();if(!t){return null;}const cond=qsa("[data-rule-condition-row]").map(function(r){const f=qs("[data-rule-field]",r).value;const o=qs("[data-rule-op]",r).value;const v=qs("[data-rule-value]",r).value;return{field:f,op:o,value:pv(o,v)};}).filter(function(x){return x.field&&x.op;});if(!cond.length){throw new Error("Add at least one condition.");}const actions={};const tier=document.getElementById("ruleActionTier");const score=document.getElementById("ruleActionScore");const tag=document.getElementById("ruleActionTag");if(tier&&tier.value){actions.set_risk_tier=tier.value;}if(score&&score.value!==""&&Number(score.value)!==0){actions.score_delta=Number(score.value);}if(tag&&tag.value.trim()!==""){actions.add_tag=tag.value.trim();}const stop=document.getElementById("ruleActionStop");if(stop&&stop.checked){actions.stop=true;}if(!Object.keys(actions).length){throw new Error("Add at least one action.");}const logic=document.getElementById("ruleLogicVisual");const d={logic:logic&&logic.value==="OR"?"OR":"AND",conditions:cond,actions:actions};t.value=JSON.stringify(d,null,2);return d;}'
         . 'function mode(m){const visual=m!=="json";if(!visual){try{collect();}catch(e){}}qsa("[data-rule-mode]").forEach(function(b){b.setAttribute("aria-selected",b.dataset.ruleMode===(visual?"visual":"json")?"true":"false");});const vp=document.getElementById("ruleVisualPanel");const jp=document.getElementById("ruleJsonPanel");if(vp){vp.hidden=!visual;}if(jp){jp.hidden=visual;}if(visual){render();}}'
         . 'function bind(){if(!document.getElementById("ruleVisualPanel")){return;}render();qsa("[data-rule-mode]").forEach(function(b){b.addEventListener("click",function(){mode(b.dataset.ruleMode);});});const add=document.getElementById("addRuleCondition");if(add){add.addEventListener("click",function(){const box=document.getElementById("ruleConditionsVisual");if(box){box.appendChild(row({field:"age",op:">=",value:60}));}});}const box=document.getElementById("ruleConditionsVisual");if(box){box.addEventListener("click",function(e){const b=e.target.closest("[data-rule-remove-condition]");if(!b){return;}if(qsa("[data-rule-condition-row]").length<=1){return;}b.closest("[data-rule-condition-row]").remove();});}const f=ta()?ta().closest("form"):null;if(f){f.addEventListener("submit",function(e){const vp=document.getElementById("ruleVisualPanel");if(vp&&!vp.hidden){try{collect();}catch(err){e.preventDefault();alert(err.message||String(err));}}});}}'
         . 'window.LiteInsurance.ruleTest=async function(){const out=document.getElementById("ruleTestOut");const sel=document.getElementById("ruleTestPolicy");const t=ta();const csrf=document.querySelector("input[name=csrf_token]");if(!out||!sel||!t||!csrf){return;}const vp=document.getElementById("ruleVisualPanel");if(vp&&!vp.hidden){try{collect();}catch(e){out.textContent=e.message||String(e);return;}}out.textContent="Running...";const fd=new FormData();fd.append("csrf_token",csrf.value||"");fd.append("action","rule_test");fd.append("policyholder_id",sel.value||"0");fd.append("definition_json",t.value||"");try{const res=await fetch(window.location.href,{method:"POST",body:fd,headers:{"X-Requested-With":"fetch"}});const txt=await res.text();let j=null;try{j=JSON.parse(txt);}catch(e){}out.textContent=j?JSON.stringify(j,null,2):txt;}catch(e){out.textContent=String(e);}};'
         . 'document.addEventListener("DOMContentLoaded",bind);'
         . '})();'
+        . <<<'JS'
+(function(){
+"use strict";
+function qs(s,r){return (r||document).querySelector(s);}
+function qsa(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));}
+var CUR=(document.body&&document.body.getAttribute("data-currency"))||"";
+function money0(v){var n=Number(v);return Number.isFinite(n)?(n<0?"-":"")+CUR+Math.round(Math.abs(n)).toLocaleString():"—";}
+function num(v,d){var n=Number(v);return Number.isFinite(n)?n.toLocaleString(undefined,{maximumFractionDigits:d||0}):"—";}
+function csrf(){var i=qs("input[name=csrf_token]");return i?i.value:"";}
+function esc(v){return String(v==null?"":v).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");}
+document.addEventListener("submit",function(e){var f=e.target;if(f&&f.getAttribute&&f.getAttribute("data-confirm")&&!window.confirm(f.getAttribute("data-confirm"))){e.preventDefault();e.stopImmediatePropagation();}},true);
+document.addEventListener("change",function(e){var s=e.target.closest&&e.target.closest("[data-autosubmit]");if(s&&s.form){if(s.form.requestSubmit){s.form.requestSubmit();}else{s.form.submit();}}});
+document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("[data-rule-test]");if(b){e.preventDefault();if(window.LiteInsurance&&window.LiteInsurance.ruleTest){window.LiteInsurance.ruleTest();}}});
+function meters(){qsa("[data-w]").forEach(function(el){var w=Math.max(0,Math.min(100,Number(el.getAttribute("data-w"))||0));el.style.width=w+"%";});}
+var OPS={text:[["eq","is"],["ne","is not"],["in","is one of"],["like","contains"],["empty","is empty"],["notempty","is not empty"]],num:[["between","between"],["eq","="],["ne","≠"],["gt",">"],["lt","<"],["gte","≥"],["lte","≤"]],bool:[["yes","is yes"],["no","is no"]]};
+function lb(){
+var root=document.getElementById("listBuilder");if(!root){return;}
+var cat=[];try{cat=JSON.parse(root.getAttribute("data-catalog")||"[]");}catch(e){}
+var byKey={};cat.forEach(function(c){byKey[c.k]=c;});
+var rowsEl=document.getElementById("lbRows"),logic=document.getElementById("lbLogic"),where=document.getElementById("listWhere"),json=document.getElementById("lbJson"),count=document.getElementById("listCount"),form=document.getElementById("listForm");
+var timer=null,seq=0;
+function typeOf(k){return (byKey[k]&&byKey[k].t)||"text";}
+function fieldOptions(sel){var has=false;var html=cat.map(function(c){if(c.k===sel){has=true;}return "<option value=\""+esc(c.k)+"\""+(c.k===sel?" selected":"")+">"+esc(c.l)+"</option>";}).join("");if(sel&&!has){html="<option value=\""+esc(sel)+"\" selected>"+esc(sel)+"</option>"+html;}return html;}
+function opOptions(t,sel){return (OPS[t]||OPS.text).map(function(o){return "<option value=\""+o[0]+"\""+(o[0]===sel?" selected":"")+">"+esc(o[1])+"</option>";}).join("");}
+function syncVals(w){var op=qs("[data-lb=op]",w).value;var v=qs("[data-lb=v]",w),v2=qs("[data-lb=v2]",w);v.hidden=(op==="empty"||op==="notempty"||op==="yes"||op==="no");v2.hidden=op!=="between";v.placeholder=op==="in"?"a, b, c":(op==="between"?"from":"value");v2.placeholder="to";}
+function addRow(r){r=r||{f:cat.length?cat[0].k:"",op:"",v:"",v2:""};var t=typeOf(r.f);var op=r.op||(OPS[t]||OPS.text)[0][0];var w=document.createElement("div");w.className="lbRow";w.innerHTML="<select class=\"select selectSm\" data-lb=\"f\" aria-label=\"Field\">"+fieldOptions(r.f)+"</select><select class=\"select selectSm\" data-lb=\"op\" aria-label=\"Operator\">"+opOptions(t,op)+"</select><div class=\"lbVals\"><input class=\"input inputSm\" data-lb=\"v\" aria-label=\"Value\" value=\""+esc(r.v)+"\"><input class=\"input inputSm\" data-lb=\"v2\" aria-label=\"Upper bound\" value=\""+esc(r.v2)+"\"></div><button class=\"btnGhost btnSm\" type=\"button\" data-lb-remove>Remove</button>";rowsEl.appendChild(w);syncVals(w);}
+function quote(s){return "'"+String(s).replace(/'/g,"''")+"'";}
+function isNum(s){return s!==""&&Number.isFinite(Number(s));}
+function compile(){var parts=[],rows=[],bad=false;qsa(".lbRow",rowsEl).forEach(function(w){var f=qs("[data-lb=f]",w).value,op=qs("[data-lb=op]",w).value,v=qs("[data-lb=v]",w).value.trim(),v2=qs("[data-lb=v2]",w).value.trim(),t=typeOf(f),p="";rows.push({f:f,op:op,v:v,v2:v2});
+if(t==="bool"){p=f+(op==="no"?" = 0":" = 1");}
+else if(op==="empty"){p=f+" IS NULL";}
+else if(op==="notempty"){p=f+" IS NOT NULL";}
+else if(op==="in"){var items=v.split(",").map(function(x){return x.trim();}).filter(Boolean);if(!items.length){bad=true;return;}p=f+" IN ("+items.map(function(x){return t==="num"&&isNum(x)?x:quote(x);}).join(", ")+")";}
+else if(op==="like"){if(v===""){bad=true;return;}p=f+" LIKE "+quote("%"+v+"%");}
+else if(op==="between"){if(!isNum(v)||!isNum(v2)){bad=true;return;}p="("+f+" >= "+v+" AND "+f+" <= "+v2+")";}
+else{var sym={eq:"=",ne:"!=",gt:">",lt:"<",gte:">=",lte:"<="}[op]||"=";if(v===""||(t==="num"&&!isNum(v))){bad=true;return;}p=f+" "+sym+" "+(t==="num"?v:quote(v));}
+parts.push(p);});
+json.value=JSON.stringify({logic:logic.value==="OR"?"OR":"AND",rows:rows});
+return {where:parts.length>1?parts.map(function(x){return x.indexOf(" OR ")>-1?"("+x+")":x;}).join(logic.value==="OR"?" OR ":" AND "):(parts[0]||""),bad:bad};}
+function live(){var my=++seq;var fd=new FormData();fd.append("csrf_token",csrf());fd.append("action","segment_count");fd.append("where",where.value||"");qsa("input[name=\"rule_ids[]\"]:checked",form).forEach(function(b){fd.append("rule_ids[]",b.value);});count.textContent="Counting…";
+fetch(window.location.pathname+window.location.search,{method:"POST",body:fd,headers:{"X-Requested-With":"fetch","Accept":"application/json"}}).then(function(r){return r.json();}).then(function(d){if(my!==seq){return;}if(!d.ok){count.textContent=d.error||"That filter is not valid.";count.classList.add("lbErr");return;}count.classList.remove("lbErr");count.textContent=num(d.count)+" policies · reachable by email "+num(d.email)+" · SMS "+num(d.sms)+" · call "+num(d.phone)+(d.opted_out?" · "+num(d.opted_out)+" opted out":"");}).catch(function(){if(my===seq){count.textContent="Could not count right now.";}});}
+function schedule(bad){clearTimeout(timer);if(bad){count.textContent="Finish each condition to see the count.";count.classList.add("lbErr");return;}timer=setTimeout(live,300);}
+function sync(){var c=compile();where.value=c.where;schedule(c.bad);}
+rowsEl.addEventListener("change",function(e){var w=e.target.closest(".lbRow");if(!w){return;}if(e.target.getAttribute("data-lb")==="f"){qs("[data-lb=op]",w).innerHTML=opOptions(typeOf(e.target.value),"");}syncVals(w);sync();});
+rowsEl.addEventListener("input",function(e){if(e.target.closest(".lbRow")&&e.target.tagName==="INPUT"){sync();}});
+rowsEl.addEventListener("click",function(e){var b=e.target.closest("[data-lb-remove]");if(b){b.closest(".lbRow").remove();sync();}});
+document.getElementById("lbAdd").addEventListener("click",function(){addRow();sync();});
+logic.addEventListener("change",sync);
+where.addEventListener("input",function(){json.value="";schedule(false);});
+form.addEventListener("change",function(e){if(e.target.name==="rule_ids[]"){schedule(false);}});
+qsa("[data-preset]").forEach(function(b){b.addEventListener("click",function(){var p={};try{p=JSON.parse(b.getAttribute("data-preset"));}catch(e){}rowsEl.innerHTML="";logic.value=p.logic==="OR"?"OR":"AND";(p.rows||[]).forEach(addRow);var n=document.getElementById("listName");if(n&&!n.value){n.value=b.getAttribute("data-preset-name")||"";}sync();});});
+var init=null;try{init=JSON.parse(root.getAttribute("data-initial")||"null");}catch(e){}
+if(init&&init.rows&&init.rows.length){logic.value=init.logic==="OR"?"OR":"AND";init.rows.forEach(addRow);var c=compile();if(!where.value){where.value=c.where;}schedule(c.bad);}
+else if(where.value){schedule(false);}
+else{addRow();sync();}
+}
+function camp(){
+var f=document.getElementById("campaignForm");if(!f){return;}
+function val(n){var e=f.querySelector("[name="+n+"]");return e?Number(e.value)||0:0;}
+function upd(){var sel=f.querySelector("[name=segment_id]"),o=sel&&sel.options[sel.selectedIndex],ch=f.querySelector("[name=channel]").value;var size=o?Number(o.getAttribute("data-size"))||0:0,reach=o?Number(o.getAttribute("data-"+ch))||0:0;var rate=val("cross_sell_rate"),avg=val("avg_offer_value"),cost=val("campaign_cost_per_contact"),lift=val("conversion_lift");var conv=reach*rate*(1+lift),gross=conv*avg,c=reach*cost,net=gross-c,roi=c>0?net/c:null,be=avg*(1+lift)>0?cost/(avg*(1+lift)):null;
+function set(k,t){var e=f.querySelector("[data-fn="+k+"]");if(e){e.textContent=t;}}
+function bar(k,v){var e=f.querySelector("[data-fn-bar="+k+"]");if(e){e.style.width=(size>0?Math.max(v>0?1:0,Math.min(100,v*100/size)):0)+"%";}}
+set("size",num(size));set("reach",num(reach));set("conv",num(conv,1));set("gross",money0(gross));set("cost",money0(c));set("net",money0(net));set("roi",roi===null?"—":Math.round(roi*100)+"%");set("be",be===null?"—":(be*100).toFixed(2)+"%");bar("size",size);bar("reach",reach);bar("conv",conv);var n=f.querySelector("[data-fn=net]");if(n){n.classList.toggle("neg",net<0);}}
+f.addEventListener("input",upd);f.addEventListener("change",upd);upd();
+}
+document.addEventListener("DOMContentLoaded",function(){meters();lb();camp();});
+})();
+JS
         . '</script>';
 }
 
@@ -1718,26 +1570,26 @@ function tokenize_filter_expr(string $expr): array
             throw new RuntimeException('Invalid characters in filter.');
         }
         $pos += strlen($m[0]);
-        if (!empty($m['lp'])) {
+        if ((($m['lp'] ?? '') !== '')) {
             $tokens[] = ['type' => 'LPAREN', 'value' => '('];
-        } elseif (!empty($m['rp'])) {
+        } elseif ((($m['rp'] ?? '') !== '')) {
             $tokens[] = ['type' => 'RPAREN', 'value' => ')'];
-        } elseif (!empty($m['comma'])) {
+        } elseif ((($m['comma'] ?? '') !== '')) {
             $tokens[] = ['type' => 'COMMA', 'value' => ','];
-        } elseif (!empty($m['op'])) {
+        } elseif ((($m['op'] ?? '') !== '')) {
             $tokens[] = ['type' => 'OP', 'value' => $m['op']];
-        } elseif (!empty($m['kw'])) {
+        } elseif ((($m['kw'] ?? '') !== '')) {
             $tokens[] = ['type' => 'KW', 'value' => strtoupper($m['kw'])];
-        } elseif (!empty($m['num'])) {
+        } elseif ((($m['num'] ?? '') !== '')) {
             $raw = $m['num'];
             $parsed = str_contains($raw, '.') ? (float)$raw : (int)$raw;
             $tokens[] = ['type' => 'NUMBER', 'value' => $raw, 'parsed' => $parsed];
-        } elseif (!empty($m['str'])) {
+        } elseif ((($m['str'] ?? '') !== '')) {
             $raw = $m['str'];
             $inner = substr($raw, 1, -1);
             $inner = str_replace("''", "'", $inner);
             $tokens[] = ['type' => 'STRING', 'value' => $raw, 'parsed' => $inner];
-        } elseif (!empty($m['id'])) {
+        } elseif ((($m['id'] ?? '') !== '')) {
             $tokens[] = ['type' => 'IDENT', 'value' => strtolower($m['id'])];
         } else {
             throw new RuntimeException('Invalid token.');
@@ -1788,97 +1640,6 @@ function mask_name(string $name): string
     return $mask($first) . ($last !== '' ? (' ' . $mask($last)) : '');
 }
 
-function render_import_mapping(PDO $pdo, array $stage): void
-{
-    $headers = array_values(array_filter(array_map('trim', (array)$stage['headers']), fn($x) => $x !== ''));
-    $filename = (string)($stage['filename'] ?? 'upload.csv');
-    $defaults = [
-        'record_id' => guess_header($headers, ['policy_number', 'policy_id', 'policy', 'policy no', 'policy#', 'customer_id', 'client_id', 'account_id', 'member_id', 'certificate_number', 'id']),
-        'display_name' => guess_header($headers, ['name', 'full name', 'customer', 'customer_name', 'client_name', 'insured_name', 'account_label', 'label']),
-        'dob' => guess_header($headers, ['dob', 'date_of_birth', 'birthdate']),
-        'age' => guess_header($headers, ['age']),
-        'gender' => guess_header($headers, ['gender', 'sex']),
-        'policy_type' => guess_header($headers, ['policy_type', 'product', 'type']),
-        'region' => guess_header($headers, ['region', 'state', 'area']),
-        'premium_amount' => guess_header($headers, ['premium_amount', 'premium', 'monthly_premium']),
-        'tenure_months' => guess_header($headers, ['tenure_months', 'tenure', 'months']),
-        'sum_assured' => guess_header($headers, ['sum_assured', 'coverage', 'sum']),
-    ];
-    $fields = [
-        'record_id' => 'Record ID (required)',
-        'display_name' => 'Display name',
-        'dob' => 'DOB (YYYY-MM-DD)',
-        'age' => 'Age',
-        'gender' => 'Gender',
-        'policy_type' => 'Policy type',
-        'region' => 'Region',
-        'premium_amount' => 'Premium amount',
-        'tenure_months' => 'Tenure (months)',
-        'sum_assured' => 'Sum assured',
-    ];
-
-    echo '<div class="card"><div class="h2">Map columns</div><div class="muted">Staged file: <strong>' . h($filename) . '</strong>. Map the fields you have; unmapped CSV columns are preserved as typed custom fields in <code>metadata.custom_fields</code>.</div>';
-    echo '<form method="post" class="form">';
-    echo '<input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="import_preview">';
-    echo '<div class="gridMap">';
-    foreach ($fields as $key => $label) {
-        echo '<div class="mapRow"><div class="label">' . h($label) . '</div><select class="select" name="map[' . h($key) . ']">';
-        echo '<option value="">' . h($key === 'display_name' ? 'Default from Record ID' : 'Not provided') . '</option>';
-        if ($key === 'record_id') {
-            echo '<option value="__generate__"' . ($defaults[$key] === '' ? ' selected' : '') . '>Generate from row number</option>';
-        }
-        foreach ($headers as $hname) {
-            $sel = ($defaults[$key] === $hname) ? ' selected' : '';
-            echo '<option value="' . h($hname) . '"' . $sel . '>' . h($hname) . '</option>';
-        }
-        echo '</select></div>';
-    }
-    echo '</div>';
-    echo '<div class="grid2"><div><label class="label">Default region</label><input class="input" name="defaults[region]" maxlength="80" value="' . h((string)($stage['defaults']['region'] ?? 'Unknown')) . '"></div>';
-    echo '<div><label class="label">Default policy type</label><input class="input" name="defaults[policy_type]" maxlength="80" value="' . h((string)($stage['defaults']['policy_type'] ?? 'term')) . '"></div></div>';
-    echo '<button class="btn" type="submit">Preview import</button></form></div>';
-
-    if (isset($stage['preview']) && is_array($stage['preview'])) {
-        $stats = (array)($stage['preview']['stats'] ?? []);
-        $rows = (array)($stage['preview']['rows'] ?? []);
-        echo '<div class="card"><div class="h2">Preview</div><div class="muted">First ' . h((string)IMPORT_PREVIEW_ROWS) . ' rows after imputation.</div>';
-        echo '<div class="kpiGrid">' . kpi('Rows detected', (string)($stats['rows_total'] ?? 0)) . kpi('Hard rejects (preview)', (string)($stats['hard_rejects_preview'] ?? 0)) . kpi('Custom fields', (string)($stats['custom_fields'] ?? 0)) . kpi('Mean premium', CURRENCY_SYMBOL . number_format((float)($stats['mean_premium'] ?? 0), 2)) . '</div>';
-        $cols = ['policy_number', 'name', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'ltv_estimate', 'risk_tier', 'confidence_score', 'is_imputed'];
-        $customCols = array_values(array_filter(array_slice(array_map(fn($d) => (string)($d['field_key'] ?? ''), (array)($stage['preview']['analysis']['custom_fields'] ?? [])), 0, 4)));
-        echo '<div class="scrollX"><table class="table"><thead><tr>';
-        foreach ($cols as $c) {
-            echo '<th>' . h($c) . '</th>';
-        }
-        foreach ($customCols as $c) {
-            echo '<th>' . h('custom.' . $c) . '</th>';
-        }
-        echo '</tr></thead><tbody>';
-        foreach ($rows as $r) {
-            $low = (int)($r['confidence_score'] ?? 0) < 60;
-            echo '<tr class="' . ($low ? 'rowLow' : '') . '">';
-            foreach ($cols as $c) {
-                $v = $r[$c] ?? '';
-                if (in_array($c, ['premium_amount', 'sum_assured', 'ltv_estimate'], true)) {
-                    $v = ($v === '' || $v === null) ? '' : CURRENCY_SYMBOL . number_format((float)$v, 2);
-                }
-                echo '<td>' . h((string)$v) . '</td>';
-            }
-            $custom = is_array($r['custom_fields'] ?? null) ? (array)$r['custom_fields'] : [];
-            foreach ($customCols as $c) {
-                $v = $custom[$c] ?? '';
-                echo '<td>' . h(is_bool($v) ? ($v ? 'true' : 'false') : (string)$v) . '</td>';
-            }
-            echo '</tr>';
-        }
-        if (!$rows) {
-            echo '<tr><td colspan="' . h((string)(count($cols) + count($customCols))) . '" class="muted">No rows to preview.</td></tr>';
-        }
-        echo '</tbody></table></div>';
-        echo '<form method="post" class="inline"><input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="import_commit"><button class="btn" type="submit">Confirm & import</button></form>';
-        echo '</div>';
-    }
-}
-
 function guess_header(array $headers, array $needles): string
 {
     $norm = [];
@@ -1906,7 +1667,7 @@ function header_index_map(array $headers): array
 {
     $map = [];
     foreach ($headers as $i => $h) {
-        $k = trim((string)$h);
+        $k = trim(strip_bom((string)$h));
         if ($k !== '') {
             $map[$k] = (int)$i;
         }
@@ -1916,7 +1677,8 @@ function header_index_map(array $headers): array
 
 function core_import_field_keys(): array
 {
-    return ['record_id', 'display_name', 'dob', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured'];
+    return ['record_id', 'display_name', 'dob', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured',
+        'effective_date', 'expiration_date', 'status', 'line_of_business', 'carrier', 'producer', 'household_id', 'email', 'phone', 'consent_email', 'consent_sms', 'consent_phone'];
 }
 
 function storage_field_for_import(string $field): string
@@ -1943,7 +1705,9 @@ function custom_field_key(string $header, array &$used = []): string
     if ($base === '') {
         $base = 'custom_field';
     }
-    $reserved = ['id', 'custom', 'metadata', 'policy_number', 'name', 'record_id', 'display_name', 'dob', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'ltv_estimate', 'risk_tier', 'confidence_score', 'is_imputed'];
+    $reserved = ['id', 'custom', 'metadata', 'policy_number', 'name', 'record_id', 'display_name', 'dob', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'ltv_estimate', 'risk_tier', 'confidence_score', 'is_imputed',
+        'effective_date', 'expiration_date', 'status', 'line_of_business', 'carrier', 'producer', 'household_id', 'email', 'phone', 'consent_email', 'consent_sms', 'consent_phone',
+        'opt_out_at', 'opted_out', 'last_contacted_at', 'renewal_status', 'renewal_owner', 'prior_premium', 'updated_at', 'days_to_expiry', 'policies_in_household'];
     if (in_array($base, $reserved, true)) {
         $base = 'csv_' . $base;
     }
@@ -2099,7 +1863,7 @@ function parse_number(string $s): ?float
     if ($s === '') {
         return null;
     }
-    $s = str_replace([',', CURRENCY_SYMBOL], ['', ''], $s);
+    $s = str_replace([',', currency_symbol(), '$', '€', '£', ' '], '', $s);
     if (!is_numeric($s)) {
         return null;
     }
@@ -2203,20 +1967,6 @@ function compute_confidence(array $r, array $imputedFields): int
     return max(0, min(100, $base));
 }
 
-function compute_ltv(array $r): ?float
-{
-    if (($r['premium_amount'] ?? null) === null || ($r['tenure_months'] ?? null) === null || trim((string)($r['policy_type'] ?? '')) === '') {
-        return null;
-    }
-    $premium = (float)($r['premium_amount'] ?? 0);
-    $tenure = (int)($r['tenure_months'] ?? 0);
-    $remaining = max(0, EXPECTED_POLICY_TERM_MONTHS_DEFAULT - $tenure);
-    $ptype = strtolower(trim((string)($r['policy_type'] ?? '')));
-    $mult = (float)(CROSS_SELL_MULTIPLIER_BY_POLICY_TYPE[$ptype] ?? DEFAULT_CROSS_SELL_MULTIPLIER);
-    $ret = (float)RETENTION_ADJUSTMENT_DEFAULT;
-    return round($premium * $remaining * $mult * $ret, 2);
-}
-
 function analyze_csv(string $path, array $headers, array $mapping): array
 {
     $numFields = ['premium_amount', 'tenure_months', 'sum_assured', 'age'];
@@ -2292,68 +2042,6 @@ function analyze_csv(string $path, array $headers, array $mapping): array
     return ['rows_total' => $rowsTotal, 'means' => $means, 'modes' => $modes, 'mean_premium' => $means['premium_amount'] ?? 0, 'mapped_fields' => $mappedFields, 'custom_fields' => $customFields];
 }
 
-function normalize_and_impute(array $rec, array $defaults, array $analysis, array &$imputedFields, int $rowNumber = 0, string $filename = ''): array
-{
-    $out = [];
-    $out['policy_number'] = trim((string)($rec['policy_number'] ?? ''));
-    if ($out['policy_number'] === '') {
-        $seed = substr(sha1($filename !== '' ? $filename : 'import'), 0, 6);
-        $out['policy_number'] = 'AUTO-' . strtoupper($seed) . '-' . str_pad((string)max(1, $rowNumber), 6, '0', STR_PAD_LEFT);
-        $imputedFields[] = 'record_id';
-    }
-    $out['name'] = trim((string)($rec['name'] ?? ''));
-    if ($out['name'] === '') {
-        $out['name'] = $out['policy_number'];
-        $imputedFields[] = 'display_name';
-    }
-    $out['dob'] = trim((string)($rec['dob'] ?? ''));
-    $out['gender'] = normalize_gender(trim((string)($rec['gender'] ?? '')));
-    $out['age'] = parse_int((string)($rec['age'] ?? ''));
-    if ($out['age'] === null && $out['dob'] !== '') {
-        $age = age_from_dob($out['dob']);
-        if ($age !== null) {
-            $out['age'] = $age;
-            $imputedFields[] = 'age';
-        }
-    }
-    $out['premium_amount'] = parse_number((string)($rec['premium_amount'] ?? ''));
-    $out['tenure_months'] = parse_int((string)($rec['tenure_months'] ?? ''));
-    $out['sum_assured'] = parse_number((string)($rec['sum_assured'] ?? ''));
-    $out['policy_type'] = trim((string)($rec['policy_type'] ?? ''));
-    $out['region'] = trim((string)($rec['region'] ?? ''));
-
-    if ($out['premium_amount'] === null && field_was_mapped($analysis, 'premium_amount')) {
-        $out['premium_amount'] = (float)($analysis['means']['premium_amount'] ?? 0);
-        $imputedFields[] = 'premium_amount';
-    }
-    if ($out['tenure_months'] === null && field_was_mapped($analysis, 'tenure_months')) {
-        $out['tenure_months'] = (int)round((float)($analysis['means']['tenure_months'] ?? 0));
-        $imputedFields[] = 'tenure_months';
-    }
-    if ($out['sum_assured'] === null && field_was_mapped($analysis, 'sum_assured') && (float)($analysis['means']['sum_assured'] ?? 0) > 0) {
-        $out['sum_assured'] = (float)($analysis['means']['sum_assured'] ?? 0);
-        $imputedFields[] = 'sum_assured';
-    }
-    if ($out['policy_type'] === '' && field_was_mapped($analysis, 'policy_type')) {
-        $mode = (string)($analysis['modes']['policy_type'] ?? '');
-        $out['policy_type'] = $mode !== '' ? $mode : (string)($defaults['policy_type'] ?? 'term');
-        $imputedFields[] = 'policy_type';
-    }
-    if ($out['region'] === '' && field_was_mapped($analysis, 'region')) {
-        $mode = (string)($analysis['modes']['region'] ?? '');
-        $out['region'] = $mode !== '' ? $mode : (string)($defaults['region'] ?? 'Unknown');
-        $imputedFields[] = 'region';
-    }
-    if ($out['gender'] === '' && field_was_mapped($analysis, 'gender')) {
-        $mode = (string)($analysis['modes']['gender'] ?? '');
-        if ($mode !== '') {
-            $out['gender'] = normalize_gender($mode);
-            $imputedFields[] = 'gender';
-        }
-    }
-    return $out;
-}
-
 function preview_csv(string $path, array $headers, array $mapping, array $defaults, array $analysis, PDO $pdo): array
 {
     $rules = load_rules($pdo);
@@ -2367,6 +2055,7 @@ function preview_csv(string $path, array $headers, array $mapping, array $defaul
     $hard = 0;
     $rowNumber = 0;
     $customDefs = is_array($analysis['custom_fields'] ?? null) ? (array)$analysis['custom_fields'] : [];
+    $householdCounts = csv_household_counts($path, $mapping);
     while (($row = fgetcsv($fh)) !== false) {
         $rowNumber++;
         $rec = map_row($headers, $row, $mapping);
@@ -2380,6 +2069,9 @@ function preview_csv(string $path, array $headers, array $mapping, array $defaul
             continue;
         }
         $soft += validate_policyholder_soft_count($validated);
+        if ((string)($validated['household_id'] ?? '') !== '') {
+            $validated['policies_in_household'] = max((int)($householdCounts[(string)$validated['household_id']] ?? 1), household_count((string)$validated['household_id']));
+        }
         $score = compute_confidence($validated, $imputed);
         $riskOut = evaluate_rules_for_record($validated, $rules);
         $ruleHits = (array)($riskOut['rule_hits'] ?? []);
@@ -2400,6 +2092,14 @@ function preview_csv(string $path, array $headers, array $mapping, array $defaul
             'confidence_score' => $score,
             'is_imputed' => count($imputed) > 0 ? 1 : 0,
             'custom_fields' => $customFields,
+            'expiration_date' => (string)($validated['expiration_date'] ?? ''),
+            'status' => (string)($validated['status'] ?? ''),
+            'household_id' => (string)($validated['household_id'] ?? ''),
+            'contact' => implode(' · ', array_filter([
+                ((int)($validated['consent_email'] ?? 0) === 1 && (string)$validated['email'] !== '') ? 'email' : '',
+                ((int)($validated['consent_sms'] ?? 0) === 1 && (string)$validated['phone'] !== '') ? 'sms' : '',
+                ((int)($validated['consent_phone'] ?? 0) === 1 && (string)$validated['phone'] !== '') ? 'call' : '',
+            ])) ?: (((string)$validated['email'] !== '' || (string)$validated['phone'] !== '') ? 'no consent' : '—'),
         ];
         if (count($rows) >= IMPORT_PREVIEW_ROWS) {
             break;
@@ -2414,71 +2114,6 @@ function policy_number_exists(PDO $pdo, string $policyNumber): bool
     $st = $pdo->prepare('SELECT 1 FROM policyholders WHERE policy_number = ? LIMIT 1');
     $st->execute([$policyNumber]);
     return (bool)$st->fetchColumn();
-}
-
-function policyholder_record_from_row(array $ph): array
-{
-    $meta = safe_json((string)($ph['metadata'] ?? '{}'));
-    if (!is_array($meta)) {
-        $meta = [];
-    }
-    $customFields = is_array($meta['custom_fields'] ?? null) ? (array)$meta['custom_fields'] : [];
-    return [
-        'policy_number' => (string)($ph['policy_number'] ?? ''),
-        'name' => (string)($ph['name'] ?? ''),
-        'dob' => (string)($ph['dob'] ?? ''),
-        'age' => ($ph['age'] !== null) ? (int)$ph['age'] : null,
-        'gender' => (string)($ph['gender'] ?? ''),
-        'policy_type' => (string)($ph['policy_type'] ?? ''),
-        'region' => (string)($ph['region'] ?? ''),
-        'premium_amount' => ($ph['premium_amount'] !== null) ? (float)$ph['premium_amount'] : null,
-        'tenure_months' => ($ph['tenure_months'] !== null) ? (int)$ph['tenure_months'] : null,
-        'sum_assured' => ($ph['sum_assured'] !== null) ? (float)$ph['sum_assured'] : null,
-        'ltv_estimate' => ($ph['ltv_estimate'] !== null) ? (float)$ph['ltv_estimate'] : null,
-        'risk_tier' => (string)($ph['risk_tier'] ?? ''),
-        'confidence_score' => (int)($ph['confidence_score'] ?? 0),
-        'custom' => $customFields,
-    ];
-}
-
-function load_rules(PDO $pdo): array
-{
-    $rows = $pdo->query('SELECT id, conditions_json, actions_json, priority FROM rules WHERE enabled = 1 ORDER BY priority ASC, id ASC')->fetchAll();
-    $out = [];
-    foreach ($rows as $r) {
-        $out[] = ['id' => (int)$r['id'], 'priority' => (int)$r['priority'], 'conditions' => safe_json((string)$r['conditions_json']), 'actions' => safe_json((string)$r['actions_json'])];
-    }
-    return $out;
-}
-
-function evaluate_rules_for_record(array $record, array $rules): array
-{
-    $riskTier = 'Unknown';
-    $tags = [];
-    $hits = [];
-    $scoreDelta = 0;
-    foreach ($rules as $rule) {
-        $conds = $rule['conditions'] ?? null;
-        $actions = $rule['actions'] ?? null;
-        if (!is_array($conds) || !is_array($actions)) {
-            continue;
-        }
-        if (!eval_conditions($record, $conds)) {
-            continue;
-        }
-        $hits[] = (int)($rule['id'] ?? 0);
-        if (isset($actions['set_risk_tier']) && is_string($actions['set_risk_tier'])) {
-            $riskTier = (string)$actions['set_risk_tier'];
-        }
-        if (isset($actions['score_delta'])) {
-            $scoreDelta += (int)$actions['score_delta'];
-        }
-        if (isset($actions['add_tag']) && is_string($actions['add_tag']) && $actions['add_tag'] !== '') {
-            $tags[] = (string)$actions['add_tag'];
-        }
-    }
-    $tags = array_values(array_unique($tags));
-    return ['risk_tier' => $riskTier, 'score_delta' => $scoreDelta, 'tags' => $tags, 'rule_hits' => $hits];
 }
 
 function eval_conditions(array $record, array $conds): bool
@@ -2534,6 +2169,9 @@ function eval_condition_leaf(array $record, array $c): bool
     }
     $left = value_for_rule_field($record, $field);
     $leftStr = is_string($left) ? trim($left) : $left;
+    if (in_array($op, ['>', '<', '>=', '<='], true) && ($leftStr === null || $leftStr === '')) {
+        return false;
+    }
     if ($op === '=' || $op === '==') {
         return compare_scalar($leftStr, $value) === 0;
     }
@@ -2578,17 +2216,6 @@ function eval_condition_leaf(array $record, array $c): bool
         return @preg_match($pattern, $leftStr) === 1;
     }
     return false;
-}
-
-function value_for_rule_field(array $record, string $field)
-{
-    $field = trim($field);
-    if (str_starts_with($field, 'custom.')) {
-        $key = substr($field, 7);
-        $custom = is_array($record['custom'] ?? null) ? (array)$record['custom'] : [];
-        return $custom[$key] ?? null;
-    }
-    return $record[$field] ?? null;
 }
 
 function compare_scalar($a, $b): int
@@ -2656,7 +2283,11 @@ function sample_csv(): string
     if (!$fh) {
         return '';
     }
-    fputcsv($fh, ['policy_number', 'name', 'dob', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured']);
+    fputcsv($fh, ['policy_number', 'name', 'dob', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'effective_date', 'expiration_date', 'status', 'line_of_business', 'carrier', 'producer', 'household_id', 'email', 'phone', 'email_opt_in', 'sms_opt_in', 'phone_opt_in']);
+    $lobByType = ['term' => 'Term Life', 'life' => 'Whole Life', 'health' => 'Health', 'auto' => 'Personal Auto'];
+    $carriersByType = ['term' => ['Harbor Life', 'Northwind Mutual'], 'life' => ['Harbor Life', 'Northwind Mutual'], 'health' => ['Bluefield Health', 'Bluefield Health'], 'auto' => ['Summit Casualty', 'Northwind Mutual']];
+    $producers = ['A. Rahman', 'J. Reed', 'M. Silva'];
+    $today = (int)strtotime(gmdate('Y-m-d') . ' 00:00:00 UTC');
     for ($i = 1; $i <= SAMPLE_POLICY_COUNT; $i++) {
         $type = (string)$pick($types);
         $region = (string)$pick($regions);
@@ -2665,9 +2296,34 @@ function sample_csv(): string
         $premium = max(38.0, (float)$basePremium[$type] + (($age - 42) * 0.9) + ($tenure * 0.45) + floor($rand() * 42) - 18);
         $sumAssured = (int)$baseAssured[$type] + (int)floor($rand() * 36000);
         $dob = sprintf('%04d-%02d-%02d', 2026 - $age, ($i % 12) + 1, ($i % 27) + 1);
-        fputcsv($fh, [
+        $fullName = (string)$pick($firstNames) . ' ' . (string)$pick($lastNames);
+        $u = static function (string $k) use ($i): float {
+            return (crc32('li-sample-' . $k . '-' . $i) % 1000003) / 1000003;
+        };
+        $termMonths = $type === 'auto' ? 6 : 12;
+        $expTs = $today + (int)(floor($u('exp') * ($termMonths === 6 ? 183 : 365)) - 20) * 86400;
+        $expiration = gmdate('Y-m-d', $expTs);
+        $effective = add_months_iso($expiration, -$termMonths);
+        $parts = explode(' ', $fullName);
+        $hasEmail = $u('em') < 0.88;
+        $hasPhone = $u('ph') < 0.80;
+        $extra = [
+            $effective,
+            $u('noexp') < 0.05 ? '' : $expiration,
+            $u('st') < 0.03 ? 'Cancelled' : 'Active',
+            $lobByType[$type] ?? ucfirst($type),
+            $carriersByType[$type][(int)floor($u('car') * 2)] ?? 'Northwind Mutual',
+            $producers[(int)floor($u('pr') * 3)],
+            'H-' . (1000 + (int)floor($u('hh') * 150)),
+            $hasEmail ? strtolower($parts[0] . '.' . ($parts[1] ?? 'client') . $i) . '@example.com' : '',
+            $hasPhone ? sprintf('(%03d) 555-01%02d', 201 + (int)floor($u('ac') * 700), (int)floor($u('ln') * 100)) : '',
+            $hasEmail ? ($u('ce') < 0.65 ? 'Yes' : 'No') : '',
+            $hasPhone ? ($u('cs') < 0.35 ? 'Yes' : 'No') : '',
+            $hasPhone ? ($u('cp') < 0.55 ? 'Yes' : 'No') : '',
+        ];
+        fputcsv($fh, array_merge([
             'P-' . str_pad((string)(3000 + $i), 4, '0', STR_PAD_LEFT),
-            (string)$pick($firstNames) . ' ' . (string)$pick($lastNames),
+            $fullName,
             $chance(0.08) ? '' : $dob,
             $chance(0.10) ? '' : (string)$pick($genders),
             $chance(0.08) ? '' : $type,
@@ -2675,7 +2331,7 @@ function sample_csv(): string
             $chance(0.09) ? '' : number_format($premium, 2, '.', ''),
             $chance(0.08) ? '' : (string)$tenure,
             $chance(0.06) ? '' : (string)$sumAssured,
-        ]);
+        ], $extra));
     }
     rewind($fh);
     $csv = stream_get_contents($fh);
@@ -2739,6 +2395,32 @@ function sample_rules_seed(): array
                 'actions' => ['set_risk_tier' => 'Medium', 'score_delta' => 5, 'add_tag' => 'large_exposure'],
             ],
         ],
+        [
+            'name' => 'Inactive policy = skip scoring',
+            'priority' => 200,
+            'enabled' => 1,
+            'definition' => [
+                'logic' => 'AND',
+                'conditions' => [
+                    ['field' => 'status', 'op' => 'in', 'value' => ['cancelled', 'expired', 'lapsed', 'non-renewed']],
+                ],
+                'actions' => ['add_tag' => 'inactive', 'stop' => true],
+            ],
+        ],
+        [
+            'name' => 'Renewing within 45 days + high premium',
+            'priority' => 40,
+            'enabled' => 1,
+            'definition' => [
+                'logic' => 'AND',
+                'conditions' => [
+                    ['field' => 'days_to_expiry', 'op' => '>=', 'value' => 0],
+                    ['field' => 'days_to_expiry', 'op' => '<=', 'value' => 45],
+                    ['field' => 'premium_amount', 'op' => '>=', 'value' => 130],
+                ],
+                'actions' => ['score_delta' => 5, 'add_tag' => 'priority_renewal'],
+            ],
+        ],
     ];
 }
 
@@ -2776,11 +2458,26 @@ function sample_segments_seed(PDO $pdo): bool
             'rule_ids' => array_filter([(int)($rulesByName['High premium + long tenure = Low'] ?? 0)]),
             'where' => 'ltv_estimate > 9000 AND tenure_months >= 30',
         ],
+        [
+            'name' => 'Renewing in 90 days',
+            'rule_ids' => [],
+            'where' => "(days_to_expiry >= 0 AND days_to_expiry <= 90) AND renewal_status IN ('not_started', 'contacted')",
+            'builder' => ['logic' => 'AND', 'rows' => [['f' => 'days_to_expiry', 'op' => 'between', 'v' => '0', 'v2' => '90'], ['f' => 'renewal_status', 'op' => 'in', 'v' => 'not_started, contacted']]],
+        ],
+        [
+            'name' => 'Single-line households, email OK',
+            'rule_ids' => [],
+            'where' => 'policies_in_household = 1 AND consent_email = 1 AND opted_out = 0',
+            'builder' => ['logic' => 'AND', 'rows' => [['f' => 'policies_in_household', 'op' => 'eq', 'v' => '1'], ['f' => 'consent_email', 'op' => 'yes', 'v' => ''], ['f' => 'opted_out', 'op' => 'no', 'v' => '']]],
+        ],
     ];
 
     $st = $pdo->prepare('INSERT INTO segments (name, rule_ids, last_run_at) VALUES (?, ?, NULL)');
     foreach ($segments as $seg) {
         $payload = ['rule_ids' => array_values((array)$seg['rule_ids']), 'where' => (string)$seg['where'], 'mode' => 'rules_and_where'];
+        if (isset($seg['builder'])) {
+            $payload['builder'] = $seg['builder'];
+        }
         $st->execute([(string)$seg['name'], json_encode($payload, JSON_UNESCAPED_SLASHES)]);
     }
     return true;
@@ -2840,144 +2537,10 @@ function handle_import_upload(PDO $pdo, array $user): void
         flash('error', 'CSV appears empty or invalid.');
         redirect_to(['tab' => 'import']);
     }
+    $headers = array_map(fn($x) => trim(strip_bom((string)$x)), $headers);
     $_SESSION['import_stage'] = ['path' => $dest, 'filename' => $origName, 'headers' => $headers, 'defaults' => ['region' => 'Unknown', 'policy_type' => 'term']];
     audit($pdo, (int)$user['id'], 'import.upload', ['filename' => $origName, 'bytes' => $size]);
     flash('success', 'File uploaded. Map columns to continue.');
-    redirect_to(['tab' => 'import']);
-}
-
-function handle_import_preview(PDO $pdo, array $user): void
-{
-    $stage = $_SESSION['import_stage'] ?? null;
-    if (!is_array($stage) || !isset($stage['path'], $stage['headers'])) {
-        flash('error', 'No staged import found.');
-        redirect_to(['tab' => 'import']);
-    }
-    $mapping = (array)($_POST['map'] ?? []);
-    $defaults = (array)($_POST['defaults'] ?? []);
-    $stage['mapping'] = $mapping;
-    $stage['defaults'] = ['region' => trim((string)($defaults['region'] ?? 'Unknown')), 'policy_type' => trim((string)($defaults['policy_type'] ?? 'term'))];
-    $analysis = analyze_csv((string)$stage['path'], (array)$stage['headers'], $mapping);
-    $preview = preview_csv((string)$stage['path'], (array)$stage['headers'], $mapping, $stage['defaults'], $analysis, $pdo);
-    $stage['preview'] = $preview;
-    $_SESSION['import_stage'] = $stage;
-    audit($pdo, (int)$user['id'], 'import.preview', ['filename' => (string)($stage['filename'] ?? '')]);
-    flash('success', 'Preview generated.');
-    redirect_to(['tab' => 'import']);
-}
-
-function handle_import_commit(PDO $pdo, array $user): void
-{
-    $stage = $_SESSION['import_stage'] ?? null;
-    if (!is_array($stage) || !isset($stage['path'], $stage['headers'], $stage['mapping'], $stage['defaults'], $stage['preview']['analysis'])) {
-        flash('error', 'No import preview found.');
-        redirect_to(['tab' => 'import']);
-    }
-    $path = (string)$stage['path'];
-    if (!is_file($path)) {
-        flash('error', 'Staged CSV file is missing.');
-        redirect_to(['tab' => 'import']);
-    }
-    $filename = (string)($stage['filename'] ?? 'upload.csv');
-    $analysis = (array)$stage['preview']['analysis'];
-    $customDefs = is_array($analysis['custom_fields'] ?? null) ? (array)$analysis['custom_fields'] : [];
-    upsert_custom_field_defs($pdo, $customDefs);
-
-    $pdo->beginTransaction();
-    $insImp = $pdo->prepare('INSERT INTO imports (filename, rows_total, rows_imported, errors_json, created_at) VALUES (?, ?, 0, ?, ?)');
-    $insImp->execute([$filename, (int)($analysis['rows_total'] ?? 0), json_encode([], JSON_UNESCAPED_SLASHES), now_iso()]);
-    $importId = (int)$pdo->lastInsertId();
-    $pdo->commit();
-
-    $rules = load_rules($pdo);
-    $fh = fopen($path, 'rb');
-    if (!$fh) {
-        flash('error', 'Could not read staged file.');
-        redirect_to(['tab' => 'import']);
-    }
-    $headers = fgetcsv($fh);
-    if (!$headers || !is_array($headers)) {
-        fclose($fh);
-        flash('error', 'Invalid CSV header.');
-        redirect_to(['tab' => 'import']);
-    }
-
-    $rowsTotal = 0;
-    $rowsImported = 0;
-    $errors = [];
-    $seen = [];
-
-    $pdo->beginTransaction();
-    $ins = $pdo->prepare('INSERT INTO policyholders (policy_number, name, dob, age, gender, policy_type, region, premium_amount, tenure_months, sum_assured, ltv_estimate, risk_tier, is_imputed, confidence_score, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-    while (($row = fgetcsv($fh)) !== false) {
-        $rowsTotal++;
-        $rec = map_row($headers, $row, (array)$stage['mapping']);
-        $imputed = [];
-        $validated = normalize_and_impute($rec, (array)$stage['defaults'], $analysis, $imputed, $rowsTotal, $filename);
-        $customFields = extract_custom_fields($headers, $row, $customDefs);
-        $validated['custom'] = $customFields;
-        $hard = validate_policyholder_hard($validated);
-        if ($hard !== null) {
-            if (count($errors) < 50) {
-                $errors[] = ['row' => $rowsTotal + 1, 'type' => 'hard', 'msg' => $hard];
-            }
-            continue;
-        }
-        $policyNumber = (string)$validated['policy_number'];
-        if (isset($seen[$policyNumber])) {
-            if (count($errors) < 50) {
-                $errors[] = ['row' => $rowsTotal + 1, 'type' => 'hard', 'msg' => 'Duplicate policy_number in CSV: ' . $policyNumber];
-            }
-            continue;
-        }
-        $seen[$policyNumber] = true;
-        if (policy_number_exists($pdo, $policyNumber)) {
-            if (count($errors) < 50) {
-                $errors[] = ['row' => $rowsTotal + 1, 'type' => 'hard', 'msg' => 'Policy already exists: ' . $policyNumber];
-            }
-            continue;
-        }
-        $score = compute_confidence($validated, $imputed);
-        $riskOut = evaluate_rules_for_record($validated, $rules);
-        $ruleHits = (array)($riskOut['rule_hits'] ?? []);
-        $score = min(100, (int)round($score + min(20, count($ruleHits) * 4)));
-        $ltv = compute_ltv($validated);
-        $meta = ['imputed_fields' => array_values($imputed), 'rule_hits' => $ruleHits, 'tags' => (array)($riskOut['tags'] ?? []), 'custom_fields' => $customFields];
-        $ins->execute([
-            $policyNumber,
-            (string)$validated['name'],
-            $validated['dob'] !== '' ? (string)$validated['dob'] : null,
-            $validated['age'] !== null ? (int)$validated['age'] : null,
-            $validated['gender'] !== '' ? (string)$validated['gender'] : null,
-            $validated['policy_type'] !== '' ? (string)$validated['policy_type'] : null,
-            $validated['region'] !== '' ? (string)$validated['region'] : null,
-            $validated['premium_amount'] !== null ? (float)$validated['premium_amount'] : null,
-            $validated['tenure_months'] !== null ? (int)$validated['tenure_months'] : null,
-            $validated['sum_assured'] !== null ? (float)$validated['sum_assured'] : null,
-            $ltv,
-            (string)($riskOut['risk_tier'] ?? 'Unknown'),
-            count($imputed) > 0 ? 1 : 0,
-            $score,
-            json_encode($meta, JSON_UNESCAPED_SLASHES),
-            now_iso(),
-        ]);
-        $rowsImported++;
-        if (($rowsImported % IMPORT_COMMIT_EVERY_ROWS) === 0) {
-            $pdo->commit();
-            $pdo->beginTransaction();
-        }
-    }
-    $pdo->commit();
-    fclose($fh);
-
-    $upd = $pdo->prepare('UPDATE imports SET rows_total = ?, rows_imported = ?, errors_json = ? WHERE id = ?');
-    $upd->execute([$rowsTotal, $rowsImported, json_encode($errors, JSON_UNESCAPED_SLASHES), $importId]);
-    if ($filename === 'liteinsurance_sample.csv' && $rowsImported > 0) {
-        seed_sample_campaigns($pdo);
-    }
-    audit($pdo, (int)$user['id'], 'import.commit', ['filename' => $filename, 'rows_total' => $rowsTotal, 'rows_imported' => $rowsImported, 'import_id' => $importId]);
-    $_SESSION['import_stage'] = null;
-    flash('success', 'Import completed: ' . $rowsImported . ' row(s) imported.');
     redirect_to(['tab' => 'import']);
 }
 
@@ -3127,16 +2690,7 @@ function compile_filter_expr(string $expr): array
         return ['1=1', []];
     }
 
-    $allowedFields = [
-        'risk_tier' => 'text',
-        'region' => 'text',
-        'policy_type' => 'text',
-        'premium_amount' => 'num',
-        'tenure_months' => 'num',
-        'age' => 'num',
-        'ltv_estimate' => 'num',
-        'confidence_score' => 'num',
-    ];
+    $allowedFields = filter_allowed_fields();
 
     $tokens = tokenize_filter_expr($expr);
     $i = 0;
@@ -3186,7 +2740,7 @@ function compile_filter_expr(string $expr): array
                 $not = true;
             }
             $expect('KW', 'NULL');
-            return ['sql' => $fieldLower . ' IS ' . ($not ? 'NOT ' : '') . 'NULL', 'params' => []];
+            return ['sql' => filter_field_sql($fieldLower) . ' IS ' . ($not ? 'NOT ' : '') . 'NULL', 'params' => []];
         }
         if ($kw && $kw['type'] === 'KW' && strtoupper((string)$kw['value']) === 'IN') {
             $expect('KW', 'IN');
@@ -3208,12 +2762,12 @@ function compile_filter_expr(string $expr): array
             if (count($params) === 0 || count($params) > 50) {
                 throw new RuntimeException('Invalid IN list.');
             }
-            return ['sql' => $fieldLower . ' IN (' . implode(',', $vals) . ')', 'params' => $params];
+            return ['sql' => filter_field_sql($fieldLower) . ' IN (' . implode(',', $vals) . ')', 'params' => $params];
         }
         if ($kw && $kw['type'] === 'KW' && strtoupper((string)$kw['value']) === 'LIKE') {
             $expect('KW', 'LIKE');
             $vTok = $parseValue();
-            return ['sql' => $fieldLower . ' LIKE ?', 'params' => [$vTok['parsed']]];
+            return ['sql' => filter_field_sql($fieldLower) . ' LIKE ?', 'params' => [$vTok['parsed']]];
         }
 
         $opTok = $expect('OP');
@@ -3225,7 +2779,7 @@ function compile_filter_expr(string $expr): array
         if ($allowedFields[$fieldLower] === 'num' && !is_numeric($vTok['parsed'])) {
             throw new RuntimeException('Numeric value required.');
         }
-        return ['sql' => $fieldLower . ' ' . $op . ' ?', 'params' => [$vTok['parsed']]];
+        return ['sql' => filter_field_sql($fieldLower) . ' ' . $op . ' ?', 'params' => [$vTok['parsed']]];
     };
 
     $parseFactor = static function () use (&$peek, &$expect, &$parseComparison, &$parseExpr): array {
@@ -3284,16 +2838,7 @@ function compile_filter_expr(string $expr): array
 
 function filter_field_type(string $field): ?string
 {
-    $allowedFields = [
-        'risk_tier' => 'text',
-        'region' => 'text',
-        'policy_type' => 'text',
-        'premium_amount' => 'num',
-        'tenure_months' => 'num',
-        'age' => 'num',
-        'ltv_estimate' => 'num',
-        'confidence_score' => 'num',
-    ];
+    $allowedFields = filter_allowed_fields();
     $field = strtolower(trim($field));
     if (isset($allowedFields[$field])) {
         return $allowedFields[$field];
@@ -3494,6 +3039,9 @@ function eval_filter_ast(array $ast, array $record): bool
     if ($op === 'like') {
         return sql_like_match((string)$left, (string)$value);
     }
+    if (in_array($op, ['>', '<', '>=', '<='], true) && ($left === null || $left === '')) {
+        return false;
+    }
     if ($op === '=' || $op === '==') {
         return compare_scalar($left, $value) === 0;
     }
@@ -3589,38 +3137,6 @@ function estimate_segment_size(PDO $pdo, array $ruleIds, string $where): int
     return $count;
 }
 
-function handle_segment_save(PDO $pdo, array $user): void
-{
-    $id = (int)($_POST['id'] ?? 0);
-    $name = trim((string)($_POST['name'] ?? ''));
-    $ruleIds = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['rule_ids'] ?? [])), fn($x) => $x > 0)));
-    $where = trim((string)($_POST['where'] ?? ''));
-    if ($name === '') {
-        flash('error', 'Segment name is required.');
-        redirect_to(['tab' => 'segments']);
-    }
-    try {
-        validate_filter_expr($where);
-    } catch (Throwable $e) {
-        flash('error', 'Unsafe filter expression.');
-        redirect_to(['tab' => 'segments', 'edit' => (string)$id]);
-    }
-    $payload = ['rule_ids' => $ruleIds, 'where' => $where, 'mode' => 'rules_and_where'];
-    $json = json_encode($payload, JSON_UNESCAPED_SLASHES);
-    if ($id > 0) {
-        $st = $pdo->prepare('UPDATE segments SET name = ?, rule_ids = ? WHERE id = ?');
-        $st->execute([$name, $json, $id]);
-        audit($pdo, (int)$user['id'], 'segments.update', ['id' => $id, 'name' => $name]);
-        flash('success', 'Segment updated.');
-    } else {
-        $st = $pdo->prepare('INSERT INTO segments (name, rule_ids, last_run_at) VALUES (?, ?, NULL)');
-        $st->execute([$name, $json]);
-        audit($pdo, (int)$user['id'], 'segments.create', ['id' => (int)$pdo->lastInsertId(), 'name' => $name]);
-        flash('success', 'Segment created.');
-    }
-    redirect_to(['tab' => 'segments']);
-}
-
 function handle_segment_delete(PDO $pdo, array $user): void
 {
     $id = (int)($_POST['id'] ?? 0);
@@ -3631,162 +3147,6 @@ function handle_segment_delete(PDO $pdo, array $user): void
         flash('success', 'Segment deleted.');
     }
     redirect_to(['tab' => 'segments']);
-}
-
-function handle_segment_estimate(PDO $pdo, array $user): void
-{
-    $ruleIds = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['rule_ids'] ?? [])), fn($x) => $x > 0)));
-    $where = trim((string)($_POST['where'] ?? ''));
-    try {
-        validate_filter_expr($where);
-    } catch (Throwable $e) {
-        flash('error', 'Unsafe filter expression.');
-        redirect_to(['tab' => 'segments']);
-    }
-    $count = estimate_segment_size($pdo, $ruleIds, $where);
-    $pdo->prepare('UPDATE segments SET last_run_at = ? WHERE id = ?')->execute([now_iso(), (int)($_POST['id'] ?? 0)]);
-    audit($pdo, (int)$user['id'], 'segments.estimate', ['rule_ids' => $ruleIds, 'where' => $where, 'count' => $count]);
-    flash('success', 'Estimated segment size: ' . $count);
-    redirect_to(['tab' => 'segments']);
-}
-
-function handle_export_segment_prepare(): void
-{
-    $id = (int)($_POST['id'] ?? 0);
-    if ($id <= 0) {
-        redirect_to(['tab' => 'segments']);
-    }
-    $_SESSION['export_token'] = bin2hex(random_bytes(16));
-    redirect_to(['action' => 'export_segment', 'id' => (string)$id, 't' => (string)$_SESSION['export_token']]);
-}
-
-function export_segment_csv(PDO $pdo): void
-{
-    $t = (string)($_GET['t'] ?? '');
-    if ($t === '' || !hash_equals((string)($_SESSION['export_token'] ?? ''), $t)) {
-        http_response_code(403);
-        echo 'Forbidden';
-        return;
-    }
-    $id = (int)($_GET['id'] ?? 0);
-    $st = $pdo->prepare('SELECT * FROM segments WHERE id = ?');
-    $st->execute([$id]);
-    $seg = $st->fetch();
-    if (!$seg) {
-        http_response_code(404);
-        echo 'Not found';
-        return;
-    }
-    [$ruleIds, $where] = segment_criteria($seg);
-    $usesCustom = filter_expr_uses_custom($where);
-    if ($usesCustom) {
-        validate_filter_expr($where);
-        $filterSql = '1=1';
-        $filterParams = [];
-    } else {
-        try {
-            [$filterSql, $filterParams] = compile_filter_expr($where);
-        } catch (Throwable $e) {
-            $filterSql = '1=1';
-            $filterParams = [];
-        }
-    }
-    $rules = load_rules($pdo);
-    $selected = array_values(array_filter($rules, fn($r) => in_array((int)($r['id'] ?? 0), $ruleIds, true)));
-    $customDefs = $pdo->query('SELECT field_key, label FROM custom_field_defs WHERE enabled = 1 ORDER BY field_key ASC')->fetchAll();
-
-    header('Content-Type: text/csv; charset=utf-8');
-    header('Content-Disposition: attachment; filename="segment_' . (int)$seg['id'] . '_export.csv"');
-    $out = fopen('php://output', 'wb');
-    $headers = ['policy_number', 'name', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'ltv_estimate', 'risk_tier', 'confidence_score'];
-    foreach ($customDefs as $def) {
-        $headers[] = 'custom.' . (string)$def['field_key'];
-    }
-    fputcsv($out, $headers);
-
-    $offsetId = 0;
-    while (true) {
-        $st = $pdo->prepare('SELECT * FROM policyholders WHERE id > ? AND (' . $filterSql . ') ORDER BY id ASC LIMIT 500');
-        $st->execute(array_merge([$offsetId], $filterParams));
-        $rows = $st->fetchAll();
-        if (!$rows) {
-            break;
-        }
-        foreach ($rows as $ph) {
-            $rec = policyholder_record_from_row($ph);
-            if ($usesCustom && !eval_filter_expr_for_record($rec, $where)) {
-                $offsetId = (int)$ph['id'];
-                continue;
-            }
-            $ok = true;
-            foreach ($selected as $rule) {
-                if (!eval_conditions($rec, (array)($rule['conditions'] ?? []))) {
-                    $ok = false;
-                    break;
-                }
-            }
-            if ($ok) {
-                $line = [
-                    $rec['policy_number'], $rec['name'], (string)($rec['age'] ?? ''), $rec['gender'], $rec['policy_type'], $rec['region'],
-                    (string)($rec['premium_amount'] ?? ''), (string)($rec['tenure_months'] ?? ''), (string)($rec['sum_assured'] ?? ''),
-                    (string)($rec['ltv_estimate'] ?? ''), $rec['risk_tier'], (string)$rec['confidence_score'],
-                ];
-                $custom = is_array($rec['custom'] ?? null) ? (array)$rec['custom'] : [];
-                foreach ($customDefs as $def) {
-                    $v = $custom[(string)$def['field_key']] ?? '';
-                    $line[] = is_bool($v) ? ($v ? 'true' : 'false') : (string)$v;
-                }
-                fputcsv($out, $line);
-            }
-            $offsetId = (int)$ph['id'];
-        }
-    }
-    fclose($out);
-}
-
-function handle_campaign_save(PDO $pdo, array $user): void
-{
-    $name = trim((string)($_POST['name'] ?? ''));
-    $segmentId = (int)($_POST['segment_id'] ?? 0);
-    $rate = (float)($_POST['cross_sell_rate'] ?? 0);
-    $avg = (float)($_POST['avg_offer_value'] ?? 0);
-    $cost = (float)($_POST['campaign_cost_per_contact'] ?? 0);
-    $lift = (float)($_POST['conversion_lift'] ?? 0);
-    if ($name === '' || $segmentId <= 0) {
-        flash('error', 'Campaign name and segment are required.');
-        redirect_to(['tab' => 'campaigns']);
-    }
-    $st = $pdo->prepare('SELECT * FROM segments WHERE id = ?');
-    $st->execute([$segmentId]);
-    $seg = $st->fetch();
-    if (!$seg) {
-        flash('error', 'Segment not found.');
-        redirect_to(['tab' => 'campaigns']);
-    }
-    [$ruleIds, $where] = segment_criteria($seg);
-    $segmentSize = estimate_segment_size($pdo, $ruleIds, $where);
-    $contacts = $segmentSize;
-    $expectedConversions = $contacts * $rate;
-    $gross = $contacts * $rate * $avg * (1 + $lift);
-    $estCost = $contacts * $cost;
-    $net = $gross - $estCost;
-    $assumptions = [
-        'segment_size' => $segmentSize,
-        'cross_sell_rate' => $rate,
-        'avg_offer_value' => $avg,
-        'campaign_cost_per_contact' => $cost,
-        'conversion_lift' => $lift,
-        'contacts' => $contacts,
-        'expected_conversions' => $expectedConversions,
-        'gross_revenue' => $gross,
-        'estimated_cost' => $estCost,
-        'net_revenue' => $net,
-    ];
-    $ins = $pdo->prepare('INSERT INTO campaigns (name, segment_id, assumptions, projected_revenue, created_at) VALUES (?, ?, ?, ?, ?)');
-    $ins->execute([$name, $segmentId, json_encode($assumptions, JSON_UNESCAPED_SLASHES), $gross, now_iso()]);
-    audit($pdo, (int)$user['id'], 'campaigns.simulate', ['id' => (int)$pdo->lastInsertId(), 'segment_id' => $segmentId, 'projected_revenue' => $gross]);
-    flash('success', 'Simulation complete. Net revenue: ' . CURRENCY_SYMBOL . number_format($net, 2));
-    redirect_to(['tab' => 'campaigns']);
 }
 
 function handle_policy_cell_update(PDO $pdo, array $user): void
@@ -3814,7 +3174,8 @@ function handle_policy_cell_update(PDO $pdo, array $user): void
         return;
     }
 
-    $coreFields = ['policy_number', 'name', 'age', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured'];
+    $coreFields = ['policy_number', 'name', 'age', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured',
+        'expiration_date', 'effective_date', 'status', 'line_of_business', 'carrier', 'producer', 'household_id', 'email', 'phone', 'renewal_owner'];
     if (str_starts_with($field, 'custom.')) {
         $key = substr($field, 7);
         if (!preg_match('/^[a-z_][a-z0-9_]*$/', $key)) {
@@ -3866,8 +3227,31 @@ function handle_policy_cell_update(PDO $pdo, array $user): void
                 return;
             }
         }
-        $upd = $pdo->prepare('UPDATE policyholders SET ' . $field . ' = ? WHERE id = ?');
-        $upd->execute([$parsed, $id]);
+        if (in_array($field, ['expiration_date', 'effective_date'], true)) {
+            $parsed = $value === '' ? null : parse_date_any($value);
+            if ($value !== '' && $parsed === null) {
+                http_response_code(400);
+                echo json_encode(['ok' => false, 'error' => 'Date expected (YYYY-MM-DD)']);
+                return;
+            }
+        } elseif ($field === 'email') {
+            $parsed = $value === '' ? null : normalize_email($value);
+            if ($value !== '' && $parsed === '') {
+                http_response_code(400);
+                echo json_encode(['ok' => false, 'error' => 'Valid email expected']);
+                return;
+            }
+        } elseif ($field === 'phone') {
+            $parsed = $value === '' ? null : normalize_phone($value);
+        } elseif ($field === 'status') {
+            $parsed = $value === '' ? null : normalize_policy_status($value);
+        } elseif ($field === 'policy_type') {
+            $parsed = $value === '' ? null : normalize_policy_type($value);
+        } elseif (in_array($field, ['region', 'line_of_business', 'carrier', 'producer', 'household_id', 'renewal_owner'], true)) {
+            $parsed = $value === '' ? null : $value;
+        }
+        $upd = $pdo->prepare('UPDATE policyholders SET ' . $field . ' = ?, updated_at = ? WHERE id = ?');
+        $upd->execute([$parsed, now_iso(), $id]);
     } else {
         http_response_code(400);
         echo json_encode(['ok' => false, 'error' => 'Field is read-only']);
@@ -3900,6 +3284,7 @@ function recompute_policyholder_row(PDO $pdo, int $id): array
     $ltv = compute_ltv($rec);
     $meta['rule_hits'] = $ruleHits;
     $meta['tags'] = (array)($riskOut['tags'] ?? []);
+    $meta['tier_rule_id'] = (int)($riskOut['tier_rule_id'] ?? 0);
     $upd = $pdo->prepare('UPDATE policyholders SET ltv_estimate = ?, risk_tier = ?, confidence_score = ?, metadata = ? WHERE id = ?');
     $upd->execute([$ltv, (string)($riskOut['risk_tier'] ?? 'Unknown'), $score, json_encode($meta, JSON_UNESCAPED_SLASHES), $id]);
     return ['ltv_estimate' => $ltv, 'risk_tier' => (string)($riskOut['risk_tier'] ?? 'Unknown'), 'confidence_score' => $score];
@@ -3927,11 +3312,2548 @@ function handle_repair_apply(PDO $pdo, array $user): void
 
 function handle_recompute_now(PDO $pdo, array $user): void
 {
+    $updated = recompute_all_policyholders($pdo);
+    audit($pdo, (int)$user['id'], 'cron.recompute', ['updated' => $updated]);
+    flash('success', 'Recompute completed. Updated policyholders: ' . $updated);
+    redirect_to(['tab' => 'settings']);
+}
+
+
+/* ==========================================================================
+   v1.1 — renewals, consent, upsert imports, explainable scoring
+   Everything below is additive: one file, SQLite, no build step, no egress.
+   ========================================================================== */
+
+function request_action(): string
+{
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && is_string($_POST['action'] ?? null) && (string)$_POST['action'] !== '') {
+        return (string)$_POST['action'];
+    }
+    return is_string($_GET['action'] ?? null) ? (string)$_GET['action'] : '';
+}
+
+function normalize_tab(string $tab): string
+{
+    $tab = strtolower(trim($tab));
+    $aliases = ['today' => 'dashboard', 'book' => 'profiles', 'lists' => 'segments', 'health' => 'import', 'scoring' => 'rules'];
+    $tab = $aliases[$tab] ?? $tab;
+    return $tab !== '' ? $tab : 'dashboard';
+}
+
+function csrf_field(): string
+{
+    return '<input type="hidden" name="csrf_token" value="' . h(csrf_token()) . '">';
+}
+
+function table_columns(PDO $pdo, string $table): array
+{
+    $out = [];
+    foreach ($pdo->query('PRAGMA table_info(' . $table . ')')->fetchAll() as $c) {
+        $out[(string)$c['name']] = true;
+    }
+    return $out;
+}
+
+function migrate_v11(PDO $pdo): void
+{
+    $version = (int)$pdo->query('PRAGMA user_version')->fetchColumn();
+    if ($version >= 11) {
+        return;
+    }
+    $cols = table_columns($pdo, 'policyholders');
+    $add = [
+        'effective_date' => 'TEXT',
+        'expiration_date' => 'TEXT',
+        'status' => 'TEXT',
+        'line_of_business' => 'TEXT',
+        'carrier' => 'TEXT',
+        'producer' => 'TEXT',
+        'household_id' => 'TEXT',
+        'email' => 'TEXT',
+        'phone' => 'TEXT',
+        'consent_phone' => 'INTEGER NOT NULL DEFAULT 0',
+        'consent_sms' => 'INTEGER NOT NULL DEFAULT 0',
+        'consent_email' => 'INTEGER NOT NULL DEFAULT 0',
+        'opt_out_at' => 'TEXT',
+        'last_contacted_at' => 'TEXT',
+        'renewal_status' => 'TEXT',
+        'renewal_owner' => 'TEXT',
+        'prior_premium' => 'REAL',
+        'updated_at' => 'TEXT',
+    ];
+    foreach ($add as $col => $ddl) {
+        if (!isset($cols[$col])) {
+            $pdo->exec('ALTER TABLE policyholders ADD COLUMN ' . $col . ' ' . $ddl);
+        }
+    }
+    $imp = table_columns($pdo, 'imports');
+    if (!isset($imp['rows_updated'])) {
+        $pdo->exec('ALTER TABLE imports ADD COLUMN rows_updated INTEGER NOT NULL DEFAULT 0');
+    }
+    $pdo->exec("CREATE TABLE IF NOT EXISTS settings (\n"
+        . "name TEXT PRIMARY KEY,\n"
+        . "value TEXT NOT NULL,\n"
+        . "updated_at TEXT NOT NULL\n"
+        . ")");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS contact_log (\n"
+        . "id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+        . "policyholder_id INTEGER NOT NULL,\n"
+        . "user_id INTEGER,\n"
+        . "channel TEXT NOT NULL,\n"
+        . "outcome TEXT NOT NULL,\n"
+        . "note TEXT NOT NULL DEFAULT '',\n"
+        . "ts TEXT NOT NULL\n"
+        . ")");
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_policyholders_expiration ON policyholders(expiration_date)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_policyholders_household ON policyholders(household_id)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_policyholders_renewal ON policyholders(renewal_status)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_contact_log_policy ON contact_log(policyholder_id, ts)');
+    $pdo->exec('PRAGMA user_version = 11');
+}
+
+/* ---------- settings ---------- */
+
+function settings_defaults(): array
+{
+    return [
+        'currency_symbol' => cfg('CURRENCY_SYMBOL', LI_CURRENCY_SYMBOL),
+        'terminology' => 'agency',
+        'premium_period' => 'monthly',
+        'ltv_term_months' => (string)EXPECTED_POLICY_TERM_MONTHS_DEFAULT,
+        'ltv_retention' => (string)RETENTION_ADJUSTMENT_DEFAULT,
+        'ltv_cross_sell_default' => (string)DEFAULT_CROSS_SELL_MULTIPLIER,
+        'consent_required_for_exports' => '1',
+        'renewal_cadence' => '120,90,75,45,30,15',
+        'checklist_dismissed' => '0',
+    ];
+}
+
+function load_settings(PDO $pdo): void
+{
+    $vals = settings_defaults();
+    try {
+        foreach ($pdo->query('SELECT name, value FROM settings')->fetchAll() as $r) {
+            $vals[(string)$r['name']] = (string)$r['value'];
+        }
+    } catch (Throwable $e) {
+        // settings table missing: defaults apply
+    }
+    $GLOBALS['LI_SETTINGS'] = $vals;
+}
+
+function setting(string $name, string $default = ''): string
+{
+    $s = $GLOBALS['LI_SETTINGS'] ?? null;
+    if (!is_array($s)) {
+        $s = settings_defaults();
+    }
+    return array_key_exists($name, $s) ? (string)$s[$name] : $default;
+}
+
+function setting_set(PDO $pdo, string $name, string $value): void
+{
+    $st = $pdo->prepare('INSERT INTO settings (name, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at');
+    $st->execute([$name, $value, now_iso()]);
+    if (!is_array($GLOBALS['LI_SETTINGS'] ?? null)) {
+        $GLOBALS['LI_SETTINGS'] = settings_defaults();
+    }
+    $GLOBALS['LI_SETTINGS'][$name] = $value;
+}
+
+function currency_symbol(): string
+{
+    return setting('currency_symbol', LI_CURRENCY_SYMBOL);
+}
+
+function money_whole($value): string
+{
+    if ($value === null || $value === '') {
+        return '—';
+    }
+    return currency_symbol() . number_format((float)$value, 0);
+}
+
+function terminology_packs(): array
+{
+    return [
+        'agency' => ['label' => 'Independent agency (P&C + life)', 'client' => 'Client', 'clients' => 'Clients', 'policy' => 'Policy', 'policy_type' => 'Line', 'sum_assured' => 'Coverage limit', 'producer' => 'Producer'],
+        'life_health' => ['label' => 'Life & health advisers', 'client' => 'Policyholder', 'clients' => 'Policyholders', 'policy' => 'Policy', 'policy_type' => 'Plan type', 'sum_assured' => 'Sum assured', 'producer' => 'Adviser'],
+        'generic' => ['label' => 'Generic book of business', 'client' => 'Customer', 'clients' => 'Customers', 'policy' => 'Record', 'policy_type' => 'Product', 'sum_assured' => 'Coverage', 'producer' => 'Owner'],
+    ];
+}
+
+function lbl(string $key): string
+{
+    $packs = terminology_packs();
+    $pack = $packs[setting('terminology', 'agency')] ?? $packs['agency'];
+    return (string)($pack[$key] ?? $key);
+}
+
+/* ---------- normalisation ---------- */
+
+function strip_bom(string $s): string
+{
+    return str_starts_with($s, "\xEF\xBB\xBF") ? substr($s, 3) : $s;
+}
+
+function parse_date_any(string $s): ?string
+{
+    $s = trim($s);
+    if ($s === '') {
+        return null;
+    }
+    if (preg_match('/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/', $s, $m)) {
+        $y = (int)$m[1];
+        $mo = (int)$m[2];
+        $d = (int)$m[3];
+    } elseif (preg_match('/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})$/', $s, $m)) {
+        $a = (int)$m[1];
+        $b = (int)$m[2];
+        $y = (int)$m[3];
+        if ($y < 100) {
+            $y += 2000;
+        }
+        if ($a > 12 && $b <= 12) {
+            $d = $a;
+            $mo = $b;
+        } else {
+            $mo = $a;
+            $d = $b;
+        }
+    } else {
+        $ts = strtotime($s . ' UTC');
+        if ($ts === false) {
+            return null;
+        }
+        return gmdate('Y-m-d', $ts);
+    }
+    if (!checkdate($mo, $d, $y)) {
+        return null;
+    }
+    return sprintf('%04d-%02d-%02d', $y, $mo, $d);
+}
+
+function days_until(?string $date): ?int
+{
+    $date = trim((string)$date);
+    if ($date === '' || !preg_match('/^\d{4}-\d{2}-\d{2}/', $date)) {
+        return null;
+    }
+    $ts = strtotime(substr($date, 0, 10) . ' 00:00:00 UTC');
+    if ($ts === false) {
+        return null;
+    }
+    $today = (int)strtotime(gmdate('Y-m-d') . ' 00:00:00 UTC');
+    return (int)round(($ts - $today) / 86400);
+}
+
+function add_months_iso(string $date, int $months): string
+{
+    try {
+        return (new DateTimeImmutable($date, new DateTimeZone('UTC')))->modify(($months >= 0 ? '+' : '') . $months . ' months')->format('Y-m-d');
+    } catch (Throwable $e) {
+        return '';
+    }
+}
+
+function normalize_policy_status(string $s): string
+{
+    $k = strtolower(trim(preg_replace('/\s+/', ' ', $s) ?? ''));
+    if ($k === '') {
+        return '';
+    }
+    $map = [
+        'active' => 'active', 'a' => 'active', 'in force' => 'active', 'inforce' => 'active', 'in-force' => 'active', 'current' => 'active', 'renewed' => 'active', 'renewal' => 'active', 'new' => 'active', 'new business' => 'active',
+        'pending' => 'pending', 'quote' => 'pending', 'quoted' => 'pending', 'p' => 'pending',
+        'cancelled' => 'cancelled', 'canceled' => 'cancelled', 'cancel' => 'cancelled', 'c' => 'cancelled', 'cxl' => 'cancelled',
+        'expired' => 'expired', 'e' => 'expired', 'lapsed' => 'lapsed', 'lapse' => 'lapsed',
+        'non-renewed' => 'non-renewed', 'nonrenewed' => 'non-renewed', 'non renewed' => 'non-renewed', 'non-renewal' => 'non-renewed',
+    ];
+    return $map[$k] ?? $k;
+}
+
+function inactive_statuses(): array
+{
+    return ['cancelled', 'expired', 'lapsed', 'non-renewed'];
+}
+
+function sql_in_force(): string
+{
+    return "COALESCE(status,'') NOT IN ('cancelled','expired','lapsed','non-renewed')";
+}
+
+function sql_days_to_expiry(): string
+{
+    return "CAST(julianday(expiration_date) - julianday(date('now')) AS INTEGER)";
+}
+
+function sql_not_opted_out(): string
+{
+    return "(opt_out_at IS NULL OR opt_out_at = '')";
+}
+
+function normalize_label_case(string $s): string
+{
+    $s = trim(preg_replace('/\s+/', ' ', $s) ?? '');
+    if ($s === '') {
+        return '';
+    }
+    if (strlen($s) <= 3 && ctype_alpha($s)) {
+        return strtoupper($s);
+    }
+    if ($s === strtoupper($s) || $s === strtolower($s)) {
+        return ucwords(strtolower($s));
+    }
+    return $s;
+}
+
+function normalize_policy_type(string $s): string
+{
+    return strtolower(trim(preg_replace('/\s+/', ' ', $s) ?? ''));
+}
+
+function policy_type_from_lob(string $lob): string
+{
+    $k = strtolower($lob);
+    if ($k === '') {
+        return '';
+    }
+    foreach (['auto' => 'auto', 'vehicle' => 'auto', 'motor' => 'auto', 'term' => 'term', 'life' => 'life', 'health' => 'health', 'medical' => 'health', 'dental' => 'health', 'home' => 'home', 'dwelling' => 'home', 'property' => 'home', 'condo' => 'home', 'renter' => 'home', 'umbrella' => 'umbrella', 'commercial' => 'commercial', 'business' => 'commercial', 'bop' => 'commercial'] as $needle => $type) {
+        if (str_contains($k, $needle)) {
+            return $type;
+        }
+    }
+    return normalize_policy_type($lob);
+}
+
+function normalize_email(string $s): string
+{
+    $s = strtolower(trim($s));
+    return filter_var($s, FILTER_VALIDATE_EMAIL) ? $s : '';
+}
+
+function normalize_phone(string $s): string
+{
+    $s = trim($s);
+    if ($s === '') {
+        return '';
+    }
+    $plus = str_starts_with($s, '+');
+    $digits = preg_replace('/\D+/', '', $s) ?? '';
+    if (strlen($digits) < 7 || strlen($digits) > 15) {
+        return '';
+    }
+    return ($plus ? '+' : '') . $digits;
+}
+
+function phone_key(string $s): string
+{
+    $d = preg_replace('/\D+/', '', $s) ?? '';
+    return strlen($d) > 10 ? substr($d, -10) : $d;
+}
+
+function parse_bool_loose(string $s): ?int
+{
+    $k = strtolower(trim($s));
+    if ($k === '') {
+        return null;
+    }
+    if (in_array($k, ['1', 'y', 'yes', 'true', 't', 'x', 'opt-in', 'opt in', 'opted in', 'optin', 'subscribed', 'ok', 'allowed', 'consent', 'granted'], true)) {
+        return 1;
+    }
+    if (in_array($k, ['0', 'n', 'no', 'false', 'f', 'opt-out', 'opt out', 'opted out', 'optout', 'unsubscribed', 'denied', 'dnc', 'do not contact'], true)) {
+        return 0;
+    }
+    return null;
+}
+
+function mask_email(string $email): string
+{
+    $email = trim($email);
+    if ($email === '' || !str_contains($email, '@')) {
+        return $email === '' ? '' : '•••';
+    }
+    [$local, $domain] = explode('@', $email, 2);
+    return mb_substr($local, 0, 1) . '•••@' . $domain;
+}
+
+function mask_phone(string $phone): string
+{
+    $d = preg_replace('/\D+/', '', $phone) ?? '';
+    if ($d === '') {
+        return '';
+    }
+    return '••• ' . substr($d, -4);
+}
+
+function pii_revealed(int $id): bool
+{
+    return isset($_SESSION['revealed'][$id]);
+}
+
+function fmt_date(?string $date): string
+{
+    $date = trim((string)$date);
+    if ($date === '') {
+        return '—';
+    }
+    $ts = strtotime(substr($date, 0, 10) . ' UTC');
+    return $ts ? gmdate('M j, Y', $ts) : $date;
+}
+
+function days_label(?int $d): string
+{
+    if ($d === null) {
+        return '—';
+    }
+    if ($d < 0) {
+        return abs($d) . 'd overdue';
+    }
+    if ($d === 0) {
+        return 'today';
+    }
+    return 'in ' . $d . 'd';
+}
+
+function tier_badge(string $tier): string
+{
+    $t = $tier !== '' ? $tier : 'Unknown';
+    $cls = 'tier tier-' . preg_replace('/[^a-z]+/', '', strtolower($t));
+    return '<span class="' . h($cls) . '">' . h($t) . '</span>';
+}
+
+function renewal_statuses(): array
+{
+    return ['not_started' => 'Not started', 'contacted' => 'Contacted', 'quoted' => 'Quoted', 'remarketing' => 'Remarketing', 'renewed' => 'Renewed', 'lost' => 'Lost'];
+}
+
+function renewal_status_pill(?string $status): string
+{
+    $s = (string)$status !== '' ? (string)$status : 'not_started';
+    $labels = renewal_statuses();
+    return '<span class="pill st-' . h($s) . '">' . h($labels[$s] ?? $s) . '</span>';
+}
+
+function renewal_cadence(): array
+{
+    $out = [];
+    foreach (explode(',', setting('renewal_cadence', '120,90,75,45,30,15')) as $p) {
+        $n = (int)trim($p);
+        if ($n > 0 && $n <= 365) {
+            $out[$n] = $n;
+        }
+    }
+    rsort($out);
+    return $out ?: [120, 90, 75, 45, 30, 15];
+}
+
+function next_touch(?int $days, string $expiration): array
+{
+    if ($days === null) {
+        return ['label' => '—', 'due' => false];
+    }
+    if ($days < 0) {
+        return ['label' => 'Expired · log outcome', 'due' => true];
+    }
+    foreach (renewal_cadence() as $m) {
+        if ($days >= $m) {
+            $when = $days - $m;
+            $date = gmdate('M j', (int)strtotime(substr($expiration, 0, 10) . ' UTC') - $m * 86400);
+            return ['label' => 'T-' . $m . ' · ' . ($when === 0 ? 'today' : $date), 'due' => $when <= 3];
+        }
+    }
+    return ['label' => 'Final call now', 'due' => true];
+}
+
+function household_count(string $hid): int
+{
+    static $map = null;
+    if ($hid === '') {
+        return 1;
+    }
+    if ($map === null) {
+        $map = [];
+        $pdo = $GLOBALS['LI_PDO'] ?? null;
+        if ($pdo instanceof PDO) {
+            try {
+                foreach ($pdo->query("SELECT household_id, COUNT(*) AS c FROM policyholders WHERE household_id IS NOT NULL AND household_id <> '' GROUP BY household_id")->fetchAll() as $r) {
+                    $map[(string)$r['household_id']] = (int)$r['c'];
+                }
+            } catch (Throwable $e) {
+                $map = [];
+            }
+        }
+    }
+    return max(1, (int)($map[$hid] ?? 1));
+}
+
+function nullable_text(string $s): ?string
+{
+    $s = trim($s);
+    return $s === '' ? null : $s;
+}
+
+/* ---------- scoring explainability ---------- */
+
+function score_policy_record(array $rec, array $imputed, array $rules): array
+{
+    $score = compute_confidence($rec, $imputed);
+    $riskOut = evaluate_rules_for_record($rec, $rules);
+    $hits = (array)($riskOut['rule_hits'] ?? []);
+    $score = min(100, (int)round($score + min(20, count($hits) * 4)));
+    return [
+        'ltv' => compute_ltv($rec),
+        'risk_tier' => (string)($riskOut['risk_tier'] ?? 'Unknown'),
+        'confidence' => $score,
+        'rule_hits' => $hits,
+        'tags' => (array)($riskOut['tags'] ?? []),
+        'tier_rule_id' => (int)($riskOut['tier_rule_id'] ?? 0),
+    ];
+}
+
+function ltv_assumptions(): array
+{
+    return [
+        'term_months' => max(1, (int)setting('ltv_term_months', (string)EXPECTED_POLICY_TERM_MONTHS_DEFAULT)),
+        'retention' => max(0.0, min(1.0, (float)setting('ltv_retention', (string)RETENTION_ADJUSTMENT_DEFAULT))),
+        'default_multiplier' => max(0.0, (float)setting('ltv_cross_sell_default', (string)DEFAULT_CROSS_SELL_MULTIPLIER)),
+        'premium_period' => setting('premium_period', 'monthly') === 'annual' ? 'annual' : 'monthly',
+    ];
+}
+
+function ltv_breakdown(array $r): ?array
+{
+    if (($r['premium_amount'] ?? null) === null || ($r['tenure_months'] ?? null) === null || trim((string)($r['policy_type'] ?? '')) === '') {
+        return null;
+    }
+    $a = ltv_assumptions();
+    $premium = (float)$r['premium_amount'];
+    $monthly = $a['premium_period'] === 'annual' ? $premium / 12 : $premium;
+    $tenure = (int)$r['tenure_months'];
+    $remaining = max(0, $a['term_months'] - $tenure);
+    $ptype = strtolower(trim((string)$r['policy_type']));
+    $mult = (float)(CROSS_SELL_MULTIPLIER_BY_POLICY_TYPE[$ptype] ?? $a['default_multiplier']);
+    return [
+        'premium' => $premium,
+        'monthly' => $monthly,
+        'premium_period' => $a['premium_period'],
+        'term_months' => $a['term_months'],
+        'tenure' => $tenure,
+        'remaining' => $remaining,
+        'policy_type' => $ptype,
+        'multiplier' => $mult,
+        'multiplier_source' => isset(CROSS_SELL_MULTIPLIER_BY_POLICY_TYPE[$ptype]) ? $ptype : 'default',
+        'retention' => $a['retention'],
+        'ltv' => round($monthly * $remaining * $mult * $a['retention'], 2),
+    ];
+}
+
+function confidence_breakdown(array $r, array $imputed, int $ruleHits): array
+{
+    $lines = [['Starting score', 100]];
+    if ($imputed) {
+        $lines[] = ['Filled in for you: ' . implode(', ', array_map('strval', $imputed)), -min(45, count($imputed) * 10)];
+    }
+    foreach (['age' => 'Age', 'gender' => 'Gender', 'sum_assured' => lbl('sum_assured')] as $k => $label) {
+        $v = $r[$k] ?? null;
+        if ($v === null || (is_string($v) && trim($v) === '')) {
+            $lines[] = [$label . ' missing', -5];
+        }
+    }
+    $base = max(0, min(100, array_sum(array_map(fn($l) => (int)$l[1], $lines))));
+    if ($ruleHits > 0) {
+        $lines[] = ['Matched ' . $ruleHits . ' scoring rule' . ($ruleHits === 1 ? '' : 's') . ' (+4 each, max +20)', min(20, $ruleHits * 4)];
+    }
+    return ['lines' => $lines, 'total' => min(100, $base + min(20, $ruleHits * 4))];
+}
+
+function rule_actions_summary(array $actions): string
+{
+    $parts = [];
+    if (isset($actions['set_risk_tier']) && (string)$actions['set_risk_tier'] !== '') {
+        $parts[] = 'tier → ' . (string)$actions['set_risk_tier'];
+    }
+    if (isset($actions['score_delta']) && (int)$actions['score_delta'] !== 0) {
+        $parts[] = 'score ' . ((int)$actions['score_delta'] > 0 ? '+' : '') . (int)$actions['score_delta'];
+    }
+    if (isset($actions['add_tag']) && (string)$actions['add_tag'] !== '') {
+        $parts[] = 'tag ' . (string)$actions['add_tag'];
+    }
+    if (!empty($actions['stop'])) {
+        $parts[] = 'stop';
+    }
+    return $parts ? implode(' · ', $parts) : '—';
+}
+
+function rule_conditions_summary($conds): string
+{
+    if (!is_array($conds)) {
+        return '';
+    }
+    $logic = strtoupper((string)($conds['logic'] ?? 'AND')) === 'OR' ? ' or ' : ' and ';
+    $items = isset($conds['conditions']) && is_array($conds['conditions']) ? $conds['conditions'] : $conds;
+    $parts = [];
+    foreach ((array)$items as $c) {
+        if (!is_array($c)) {
+            continue;
+        }
+        if (isset($c['all']) || isset($c['any'])) {
+            $parts[] = '(group)';
+            continue;
+        }
+        $v = $c['value'] ?? '';
+        $parts[] = (string)($c['field'] ?? '?') . ' ' . (string)($c['op'] ?? '?') . ' ' . (is_array($v) ? implode('/', array_map('strval', $v)) : (is_bool($v) ? ($v ? 'true' : 'false') : (string)$v));
+    }
+    return implode($logic, $parts);
+}
+
+/* ---------- lists: field catalogue shared by SQL compiler, record evaluator and UI ---------- */
+
+function filter_field_catalog(): array
+{
+    return [
+        'days_to_expiry' => ['num', sql_days_to_expiry(), 'Days to expiry'],
+        'expiration_date' => ['text', 'expiration_date', 'Expiration date (YYYY-MM-DD)'],
+        'renewal_status' => ['text', "COALESCE(renewal_status,'not_started')", 'Renewal stage'],
+        'renewal_owner' => ['text', 'renewal_owner', 'Renewal owner'],
+        'status' => ['text', 'status', 'Policy status'],
+        'line_of_business' => ['text', 'line_of_business', 'Line of business'],
+        'policy_type' => ['text', 'policy_type', 'Policy type'],
+        'carrier' => ['text', 'carrier', 'Carrier'],
+        'producer' => ['text', 'producer', 'Producer'],
+        'region' => ['text', 'region', 'Region'],
+        'risk_tier' => ['text', 'risk_tier', 'Risk tier'],
+        'household_id' => ['text', 'household_id', 'Household'],
+        'policies_in_household' => ['num', "CAST((CASE WHEN household_id IS NULL OR household_id = '' THEN 1 ELSE (SELECT COUNT(*) FROM policyholders hh WHERE hh.household_id = policyholders.household_id) END) AS INTEGER)", 'Policies in household'],
+        'premium_amount' => ['num', 'premium_amount', 'Premium'],
+        'prior_premium' => ['num', 'prior_premium', 'Prior premium'],
+        'sum_assured' => ['num', 'sum_assured', 'Coverage / sum assured'],
+        'tenure_months' => ['num', 'tenure_months', 'Tenure (months)'],
+        'age' => ['num', 'age', 'Age'],
+        'ltv_estimate' => ['num', 'ltv_estimate', 'Lifetime value'],
+        'confidence_score' => ['num', 'confidence_score', 'Data confidence'],
+        'is_imputed' => ['bool', 'is_imputed', 'Has filled-in values'],
+        'email' => ['text', 'email', 'Email'],
+        'phone' => ['text', 'phone', 'Phone'],
+        'consent_email' => ['bool', 'consent_email', 'Email consent'],
+        'consent_sms' => ['bool', 'consent_sms', 'SMS consent'],
+        'consent_phone' => ['bool', 'consent_phone', 'Call consent'],
+        'opted_out' => ['bool', "CAST((CASE WHEN opt_out_at IS NULL OR opt_out_at = '' THEN 0 ELSE 1 END) AS INTEGER)", 'Opted out'],
+    ];
+}
+
+function filter_allowed_fields(): array
+{
+    $out = [];
+    foreach (filter_field_catalog() as $k => $def) {
+        $out[$k] = $def[0] === 'text' ? 'text' : 'num';
+    }
+    return $out;
+}
+
+function filter_field_sql(string $field): string
+{
+    $cat = filter_field_catalog();
+    return isset($cat[$field]) ? (string)$cat[$field][1] : $field;
+}
+
+/* ---------- segment iteration + consent-aware stats ---------- */
+
+function segment_filter_parts(string $where): array
+{
+    $usesCustom = filter_expr_uses_custom($where);
+    if ($usesCustom) {
+        validate_filter_expr($where);
+        return [true, '1=1', []];
+    }
+    [$sql, $params] = compile_filter_expr($where);
+    return [false, $sql, $params];
+}
+
+function segment_iterate(PDO $pdo, array $ruleIds, string $where, callable $fn): void
+{
+    [$usesCustom, $filterSql, $filterParams] = segment_filter_parts($where);
+    $selected = [];
+    if ($ruleIds) {
+        $selected = array_values(array_filter(load_rules_all($pdo), fn($r) => in_array((int)($r['id'] ?? 0), $ruleIds, true)));
+        if (!$selected) {
+            return;
+        }
+    }
+    $offsetId = 0;
+    while (true) {
+        $st = $pdo->prepare('SELECT * FROM policyholders WHERE id > ? AND (' . $filterSql . ') ORDER BY id ASC LIMIT 500');
+        $st->execute(array_merge([$offsetId], $filterParams));
+        $rows = $st->fetchAll();
+        if (!$rows) {
+            break;
+        }
+        foreach ($rows as $ph) {
+            $offsetId = (int)$ph['id'];
+            $rec = policyholder_record_from_row($ph);
+            if ($usesCustom && !eval_filter_expr_for_record($rec, $where)) {
+                continue;
+            }
+            foreach ($selected as $rule) {
+                if (!eval_conditions($rec, (array)($rule['conditions'] ?? []))) {
+                    continue 2;
+                }
+            }
+            $fn($ph, $rec);
+        }
+    }
+}
+
+function row_reachable(array $ph, string $channel): bool
+{
+    $optedOut = trim((string)($ph['opt_out_at'] ?? '')) !== '';
+    if ($channel === 'all') {
+        return true;
+    }
+    if ($optedOut) {
+        return false;
+    }
+    $email = trim((string)($ph['email'] ?? ''));
+    $phone = trim((string)($ph['phone'] ?? ''));
+    if ($channel === 'email') {
+        return (int)($ph['consent_email'] ?? 0) === 1 && $email !== '';
+    }
+    if ($channel === 'sms') {
+        return (int)($ph['consent_sms'] ?? 0) === 1 && $phone !== '';
+    }
+    if ($channel === 'phone') {
+        return (int)($ph['consent_phone'] ?? 0) === 1 && $phone !== '';
+    }
+    return $channel === 'mail';
+}
+
+function segment_stats(PDO $pdo, array $ruleIds, string $where): array
+{
+    $out = ['count' => 0, 'email' => 0, 'sms' => 0, 'phone' => 0, 'mail' => 0, 'opted_out' => 0, 'premium' => 0.0];
+    [$usesCustom, $filterSql, $filterParams] = segment_filter_parts($where);
+    if (!$usesCustom && !$ruleIds) {
+        $nOpt = sql_not_opted_out();
+        $st = $pdo->prepare('SELECT COUNT(*) AS c,'
+            . " SUM(CASE WHEN consent_email = 1 AND email IS NOT NULL AND email <> '' AND $nOpt THEN 1 ELSE 0 END) AS e,"
+            . " SUM(CASE WHEN consent_sms = 1 AND phone IS NOT NULL AND phone <> '' AND $nOpt THEN 1 ELSE 0 END) AS s,"
+            . " SUM(CASE WHEN consent_phone = 1 AND phone IS NOT NULL AND phone <> '' AND $nOpt THEN 1 ELSE 0 END) AS p,"
+            . " SUM(CASE WHEN $nOpt THEN 1 ELSE 0 END) AS m,"
+            . ' COALESCE(SUM(premium_amount), 0) AS prem'
+            . ' FROM policyholders WHERE ' . $filterSql);
+        $st->execute($filterParams);
+        $r = $st->fetch() ?: [];
+        $out['count'] = (int)($r['c'] ?? 0);
+        $out['email'] = (int)($r['e'] ?? 0);
+        $out['sms'] = (int)($r['s'] ?? 0);
+        $out['phone'] = (int)($r['p'] ?? 0);
+        $out['mail'] = (int)($r['m'] ?? 0);
+        $out['premium'] = (float)($r['prem'] ?? 0);
+        $out['opted_out'] = $out['count'] - $out['mail'];
+        return $out;
+    }
+    segment_iterate($pdo, $ruleIds, $where, static function (array $ph) use (&$out): void {
+        $out['count']++;
+        $out['premium'] += (float)($ph['premium_amount'] ?? 0);
+        foreach (['email', 'sms', 'phone', 'mail'] as $ch) {
+            if (row_reachable($ph, $ch)) {
+                $out[$ch]++;
+            }
+        }
+    });
+    $out['opted_out'] = $out['count'] - $out['mail'];
+    return $out;
+}
+
+function load_rules_all(PDO $pdo): array
+{
+    $rows = $pdo->query('SELECT id, name, conditions_json, actions_json, priority FROM rules ORDER BY priority DESC, id DESC')->fetchAll();
+    $out = [];
+    foreach ($rows as $r) {
+        $out[] = ['id' => (int)$r['id'], 'name' => (string)$r['name'], 'priority' => (int)$r['priority'], 'conditions' => safe_json((string)$r['conditions_json']), 'actions' => safe_json((string)$r['actions_json'])];
+    }
+    return $out;
+}
+
+/* ---------- import helpers ---------- */
+
+function import_field_labels(): array
+{
+    return [
+        'record_id' => 'Record ID (required)',
+        'display_name' => 'Display name',
+        'dob' => 'DOB (YYYY-MM-DD)',
+        'age' => 'Age',
+        'gender' => 'Gender',
+        'policy_type' => 'Policy type',
+        'region' => 'Region',
+        'premium_amount' => 'Premium amount',
+        'tenure_months' => 'Tenure (months)',
+        'sum_assured' => 'Sum assured',
+        'effective_date' => 'Effective date',
+        'expiration_date' => 'Expiration / renewal date',
+        'status' => 'Policy status',
+        'line_of_business' => 'Line of business',
+        'carrier' => 'Carrier / company',
+        'producer' => 'Producer / CSR',
+        'household_id' => 'Household or customer ID',
+        'email' => 'Email',
+        'phone' => 'Phone',
+        'consent_email' => 'Email consent (yes/no)',
+        'consent_sms' => 'SMS consent (yes/no)',
+        'consent_phone' => 'Call consent (yes/no)',
+    ];
+}
+
+function import_header_aliases(): array
+{
+    return [
+        'record_id' => ['policy_number', 'policy number', 'policy #', 'policy#', 'policy no', 'policy no.', 'policy_no', 'policynumber', 'policy_id', 'policy id', 'pol #', 'certificate_number', 'policy', 'customer_id', 'client_id', 'account_id', 'member_id', 'id'],
+        'display_name' => ['name', 'full name', 'full_name', 'named insured', 'insured name', 'insured_name', 'insured', 'client name', 'client_name', 'customer name', 'customer_name', 'account name', 'customer', 'account_label', 'label'],
+        'dob' => ['dob', 'date_of_birth', 'date of birth', 'birthdate', 'birth date', 'birthday'],
+        'age' => ['age'],
+        'gender' => ['gender', 'sex'],
+        'policy_type' => ['policy_type', 'policy type', 'product', 'plan type', 'plan', 'type'],
+        'region' => ['region', 'state', 'province', 'territory', 'county', 'area'],
+        'premium_amount' => ['premium_amount', 'premium', 'annual premium', 'written premium', 'total premium', 'term premium', 'monthly premium', 'monthly_premium'],
+        'tenure_months' => ['tenure_months', 'tenure', 'months on book', 'months_with_agency', 'months'],
+        'sum_assured' => ['sum_assured', 'sum assured', 'coverage limit', 'face amount', 'sum insured', 'coverage', 'limit', 'sum'],
+        'effective_date' => ['effective_date', 'effective date', 'eff date', 'eff. date', 'policy effective date', 'term effective date', 'inception date', 'effective'],
+        'expiration_date' => ['expiration_date', 'expiration date', 'exp date', 'exp. date', 'expiry date', 'expiry', 'renewal date', 'policy expiration date', 'term expiration date', 'x-date', 'xdate', 'expiration'],
+        'status' => ['status', 'policy status', 'policy_status'],
+        'line_of_business' => ['line_of_business', 'line of business', 'lob', 'business line', 'coverage line', 'line'],
+        'carrier' => ['carrier', 'company', 'writing company', 'carrier name', 'insurer', 'insurance company', 'market'],
+        'producer' => ['producer', 'agent name', 'agent', 'producer name', 'client csr', 'csr', 'account manager', 'servicer'],
+        'household_id' => ['household_id', 'household', 'customer id', 'client id', 'customer number', 'client number', 'account number', 'account id'],
+        'email' => ['email', 'primary email', 'email address', 'e-mail', 'client email', 'email_address'],
+        'phone' => ['phone', 'primary phone', 'phone number', 'mobile', 'cell', 'cell phone', 'home phone', 'telephone', 'phone_number'],
+        'consent_email' => ['consent_email', 'email_opt_in', 'email opt in', 'email opt-in', 'email consent', 'email ok', 'marketing email'],
+        'consent_sms' => ['consent_sms', 'sms_opt_in', 'sms opt in', 'sms opt-in', 'sms consent', 'text opt in', 'text ok', 'sms ok'],
+        'consent_phone' => ['consent_phone', 'phone_opt_in', 'phone opt in', 'call consent', 'call ok', 'phone ok'],
+    ];
+}
+
+function guess_import_mapping(array $headers): array
+{
+    $norm = [];
+    foreach ($headers as $hd) {
+        $k = strtolower(preg_replace('/\s+/', ' ', trim(strip_bom((string)$hd))) ?? '');
+        if ($k !== '') {
+            $norm[$k] = (string)$hd;
+        }
+    }
+    $aliases = import_header_aliases();
+    $out = array_fill_keys(array_keys($aliases), '');
+    $used = [];
+    foreach ($aliases as $field => $needles) {
+        foreach ($needles as $n) {
+            $k = strtolower($n);
+            if (isset($norm[$k]) && !isset($used[$norm[$k]])) {
+                $out[$field] = $norm[$k];
+                $used[$norm[$k]] = true;
+                break;
+            }
+        }
+    }
+    foreach ($aliases as $field => $needles) {
+        if ($out[$field] !== '') {
+            continue;
+        }
+        foreach ($needles as $n) {
+            $needle = strtolower($n);
+            if (strlen($needle) < 4) {
+                continue;
+            }
+            foreach ($norm as $k => $orig) {
+                if (!isset($used[$orig]) && str_contains($k, $needle)) {
+                    $out[$field] = $orig;
+                    $used[$orig] = true;
+                    break 2;
+                }
+            }
+        }
+    }
+    return $out;
+}
+
+function recognised_ams_columns(array $headers): int
+{
+    $signals = ['policy #', 'named insured', 'line of business', 'writing company', 'client csr', 'agent name', 'expiration date', 'effective date', 'x-date', 'annual premium', 'primary email', 'primary phone', 'customer id'];
+    $n = 0;
+    foreach ($headers as $hd) {
+        if (in_array(strtolower(trim(strip_bom((string)$hd))), $signals, true)) {
+            $n++;
+        }
+    }
+    return $n;
+}
+
+function csv_column_values(string $path, string $header, int $max = 200000): array
+{
+    $out = [];
+    $fh = @fopen($path, 'rb');
+    if (!$fh) {
+        return $out;
+    }
+    $headers = fgetcsv($fh);
+    if (!is_array($headers)) {
+        fclose($fh);
+        return $out;
+    }
+    $idx = header_index_map($headers);
+    if (!isset($idx[$header])) {
+        fclose($fh);
+        return $out;
+    }
+    $pos = (int)$idx[$header];
+    $n = 0;
+    while (($row = fgetcsv($fh)) !== false && $n < $max) {
+        $out[] = trim((string)($row[$pos] ?? ''));
+        $n++;
+    }
+    fclose($fh);
+    return $out;
+}
+
+function csv_household_counts(string $path, array $mapping): array
+{
+    $hdr = (string)($mapping['household_id'] ?? '');
+    if ($hdr === '' || $hdr === '__generate__') {
+        return [];
+    }
+    $counts = [];
+    foreach (csv_column_values($path, $hdr) as $v) {
+        if ($v !== '') {
+            $counts[$v] = ($counts[$v] ?? 0) + 1;
+        }
+    }
+    return $counts;
+}
+
+function import_existing_count(PDO $pdo, string $path, array $mapping): int
+{
+    $hdr = (string)($mapping['record_id'] ?? '');
+    if ($hdr === '' || $hdr === '__generate__') {
+        return 0;
+    }
+    $ids = array_values(array_unique(array_filter(csv_column_values($path, $hdr), fn($v) => $v !== '')));
+    $n = 0;
+    foreach (array_chunk($ids, 400) as $chunk) {
+        $st = $pdo->prepare('SELECT COUNT(*) FROM policyholders WHERE policy_number IN (' . implode(',', array_fill(0, count($chunk), '?')) . ')');
+        $st->execute($chunk);
+        $n += (int)$st->fetchColumn();
+    }
+    return $n;
+}
+
+function policy_storage_columns(): array
+{
+    return ['policy_number', 'name', 'dob', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured',
+        'effective_date', 'expiration_date', 'status', 'line_of_business', 'carrier', 'producer', 'household_id', 'email', 'phone',
+        'consent_email', 'consent_sms', 'consent_phone'];
+}
+
+function policy_column_values(array $v): array
+{
+    $text = static fn(string $k): ?string => nullable_text((string)($v[$k] ?? ''));
+    return [
+        'policy_number' => (string)$v['policy_number'],
+        'name' => (string)$v['name'],
+        'dob' => $text('dob'),
+        'age' => ($v['age'] ?? null) !== null ? (int)$v['age'] : null,
+        'gender' => $text('gender'),
+        'policy_type' => $text('policy_type'),
+        'region' => $text('region'),
+        'premium_amount' => ($v['premium_amount'] ?? null) !== null ? (float)$v['premium_amount'] : null,
+        'tenure_months' => ($v['tenure_months'] ?? null) !== null ? (int)$v['tenure_months'] : null,
+        'sum_assured' => ($v['sum_assured'] ?? null) !== null ? (float)$v['sum_assured'] : null,
+        'effective_date' => $text('effective_date'),
+        'expiration_date' => $text('expiration_date'),
+        'status' => $text('status'),
+        'line_of_business' => $text('line_of_business'),
+        'carrier' => $text('carrier'),
+        'producer' => $text('producer'),
+        'household_id' => $text('household_id'),
+        'email' => $text('email'),
+        'phone' => $text('phone'),
+        'consent_email' => ($v['consent_email'] ?? null) !== null ? (int)$v['consent_email'] : null,
+        'consent_sms' => ($v['consent_sms'] ?? null) !== null ? (int)$v['consent_sms'] : null,
+        'consent_phone' => ($v['consent_phone'] ?? null) !== null ? (int)$v['consent_phone'] : null,
+    ];
+}
+
+function render_import_health(PDO $pdo): void
+{
+    $total = (int)$pdo->query('SELECT COUNT(*) FROM policyholders')->fetchColumn();
+    if ($total === 0) {
+        return;
+    }
+    $checks = [
+        ['Expiration date', "expiration_date IS NOT NULL AND expiration_date <> ''", 'no_expiry', 'Needed for renewals and Today'],
+        ['Email or phone', "(email IS NOT NULL AND email <> '') OR (phone IS NOT NULL AND phone <> '')", 'no_contact', 'Needed for outreach'],
+        ['Any channel consent', 'consent_email = 1 OR consent_sms = 1 OR consent_phone = 1', '', 'Needed for consent-filtered lists'],
+        ['Household / customer ID', "household_id IS NOT NULL AND household_id <> ''", '', 'Finds single-line households'],
+        ['Premium, tenure and type', "premium_amount IS NOT NULL AND tenure_months IS NOT NULL AND policy_type IS NOT NULL AND policy_type <> ''", 'unknown_tier', 'Needed for LTV'],
+        ['No filled-in values', 'is_imputed = 0', 'imputed', 'Values came straight from your file'],
+    ];
+    echo '<div class="card"><div class="cardHead"><div><div class="h2">Data health</div><div class="muted">Coverage across ' . h(number_format($total)) . ' records. Fix in the Book, or map the column on your next import — re-imports update in place.</div></div></div>';
+    echo '<table class="table compact"><thead><tr><th>Field</th><th>Coverage</th><th class="right">Records</th><th>Why it matters</th><th></th></tr></thead><tbody>';
+    foreach ($checks as [$label, $where, $view, $why]) {
+        $n = (int)$pdo->query('SELECT COUNT(*) FROM policyholders WHERE ' . $where)->fetchColumn();
+        $pct = (int)round($n * 100 / $total);
+        echo '<tr><td>' . h($label) . '</td><td class="meterCell"><span class="meter"><span class="meterFill' . ($pct < 75 ? ' meterWarn' : '') . '" data-w="' . h((string)$pct) . '"></span></span></td><td class="right">' . h($pct . '%') . '</td><td class="muted">' . h($why) . '</td><td>' . ($view !== '' && $pct < 100 ? '<a class="link" href="' . h(self_url(['tab' => 'profiles', 'view' => $view])) . '">Show gaps</a>' : '') . '</td></tr>';
+    }
+    echo '</tbody></table></div>';
+}
+
+function logo_svg(bool $onDark = false): string
+{
+    $page = $onDark ? '#FFFFFF' : '#0B0D12';
+    $fold = $onDark ? '#4D66FF' : '#2540FF';
+    $lines = $onDark ? '#0A0E1A' : '#FFFFFF';
+    return '<svg class="logo" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true" focusable="false">'
+        . '<path d="M8 3.5h11.5L26 10v9.8c0 4.6-4.1 7.8-10 9.7-5.9-1.9-10-5.1-10-9.7V5.5a2 2 0 012-2z" fill="' . $page . '"/>'
+        . '<path d="M19.5 3.5V8a2 2 0 002 2H26z" fill="' . $fold . '"/>'
+        . '<rect x="10.5" y="14" width="9" height="2.6" rx="1.3" fill="' . $lines . '"/>'
+        . '<rect x="10.5" y="19" width="6" height="2.6" rx="1.3" fill="' . $lines . '" fill-opacity=".55"/></svg>';
+}
+
+function page_meta(string $tab): array
+{
+    $meta = [
+        'dashboard' => ['Today', 'Renewals due, opportunities and data health for your book.'],
+        'renewals' => ['Renewals', 'Work the next 120 days of expirations: stage, owner and contact.'],
+        'profiles' => ['Book', 'Every policy in one table. Edit cells inline; open a row to see why it scored the way it did.'],
+        'segments' => ['Lists', 'Build call and email lists in plain language. Counts respect consent and opt-outs.'],
+        'campaigns' => ['Campaigns', 'Size outreach before you spend: reachable, conversions, net and break-even.'],
+        'import' => ['Import & health', 'Bring in AMS or spreadsheet exports, re-import to update, and fix data gaps.'],
+        'rules' => ['Scoring rules', 'Readable rules that set risk tiers and tags. Highest priority runs first.'],
+        'settings' => ['Settings', 'Currency, terminology, LTV assumptions, consent policy and audit.'],
+    ];
+    return $meta[$tab] ?? [ucfirst($tab), ''];
+}
+
+function nav_item(string $label, string $tab, string $current, ?int $count = null): string
+{
+    $cls = ($tab === $current) ? 'navItem navOn' : 'navItem';
+    $badge = ($count !== null && $count > 0) ? '<span class="navCount">' . h((string)$count) . '</span>' : '';
+    return '<a class="' . h($cls) . '" href="' . h(self_url(['tab' => $tab])) . '"' . ($tab === $current ? ' aria-current="page"' : '') . '><span>' . h($label) . '</span>' . $badge . '</a>';
+}
+
+function render_app(PDO $pdo, array $user, string $tab): void
+{
+    $flash = consume_flash();
+    $tab = normalize_tab($tab);
+    $GLOBALS['LI_USER'] = $user;
+    [$title, $subtitle] = page_meta($tab);
+    $isAdmin = (string)$user['role'] === 'admin';
+    $dueSoon = (int)$pdo->query('SELECT COUNT(*) FROM policyholders WHERE expiration_date IS NOT NULL AND ' . sql_days_to_expiry() . " BETWEEN 0 AND 30 AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND " . sql_in_force())->fetchColumn();
+
+    echo '<!doctype html><html lang="en"><head>';
+    echo '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">';
+    echo '<title>' . h($title . ' — ' . APP_NAME) . '</title>';
+    echo '<link rel="icon" href="data:image/svg+xml,' . rawurlencode(logo_svg(false)) . '">';
+    echo inter_font_css() . app_css();
+    echo '</head><body data-currency="' . h(currency_symbol()) . '">';
+    echo '<div class="appShell">';
+
+    echo '<aside class="sideNav" aria-label="Main">';
+    echo '<a class="brand" href="' . h(self_url(['tab' => 'dashboard', 'id' => null, 'q' => null, 'view' => null, 'edit' => null])) . '">' . logo_svg(true) . '<span>' . h(APP_NAME) . '</span></a>';
+    echo '<div class="navGroup">Work</div>';
+    echo nav_item('Today', 'dashboard', $tab);
+    echo nav_item('Renewals', 'renewals', $tab, $dueSoon);
+    echo nav_item('Book', 'profiles', $tab);
+    if ($isAdmin) {
+        echo nav_item('Lists', 'segments', $tab);
+        echo nav_item('Campaigns', 'campaigns', $tab);
+        echo '<div class="navGroup">Setup</div>';
+        echo nav_item('Import & health', 'import', $tab);
+        echo nav_item('Scoring rules', 'rules', $tab);
+        echo nav_item('Settings', 'settings', $tab);
+    }
+    echo '<div class="sideFoot"><div class="userPill" title="' . h((string)$user['email']) . '"><span class="userEmail">' . h((string)$user['email']) . '</span><span class="pillRole">' . h((string)$user['role']) . '</span></div>';
+    echo '<form method="post" action="' . h(self_url(['action' => null])) . '">' . csrf_field() . '<input type="hidden" name="action" value="logout"><button class="navLogout" type="submit">Sign out</button></form></div>';
+    echo '</aside>';
+
+    echo '<header class="topBar"><div class="topTitle"><h1 class="h1">' . h($title) . '</h1><div class="muted">' . h($subtitle) . '</div></div>';
+    echo '<form class="topSearch" method="get" role="search"><input type="hidden" name="tab" value="profiles"><input class="input" type="search" name="q" placeholder="Search policy #, ' . h(strtolower(lbl('client'))) . ', household" aria-label="Search the book" value="' . h($tab === 'profiles' ? (string)($_GET['q'] ?? '') : '') . '"></form>';
+    echo '</header>';
+
+    echo '<main class="main">';
+    if ($flash) {
+        echo render_flash($flash);
+    }
+
+    if (!$isAdmin && in_array($tab, ['import', 'rules', 'segments', 'campaigns', 'settings'], true)) {
+        echo '<div class="card"><div class="h2">Admin required</div><div class="muted">This tab is available to admins only.</div></div>';
+    } else {
+        if ($tab === 'dashboard') {
+            render_tab_dashboard($pdo);
+        } elseif ($tab === 'renewals') {
+            render_tab_renewals($pdo);
+        } elseif ($tab === 'import') {
+            render_tab_import($pdo);
+        } elseif ($tab === 'profiles') {
+            render_tab_profiles($pdo);
+        } elseif ($tab === 'rules') {
+            render_tab_rules($pdo);
+        } elseif ($tab === 'segments') {
+            render_tab_segments($pdo);
+        } elseif ($tab === 'campaigns') {
+            render_tab_campaigns($pdo);
+        } elseif ($tab === 'settings') {
+            render_tab_settings($pdo);
+        } else {
+            echo '<div class="card"><div class="muted">Unknown tab.</div></div>';
+        }
+    }
+    echo '</main>';
+    echo '<footer class="footer"><span>' . h(APP_NAME) . ' · one PHP file + SQLite</span><a class="link" href="SETUP.md" target="_blank" rel="noopener">Docs</a><a class="link" href="SECURITY.md" target="_blank" rel="noopener">Security</a></footer>';
+    echo '</div>';
+    echo app_js();
+    echo '</body></html>';
+}
+
+function kpi(string $label, string $value, string $sub = '', string $tone = ''): string
+{
+    return '<div class="kpi' . ($tone !== '' ? ' kpi-' . h($tone) : '') . '"><div class="kpiLabel">' . h($label) . '</div><div class="kpiValue">' . h($value) . '</div>' . ($sub !== '' ? '<div class="kpiSub">' . h($sub) . '</div>' : '') . '</div>';
+}
+
+function chip_link(string $label, array $params, bool $on, ?int $count = null): string
+{
+    return '<a class="chip' . ($on ? ' chipOn' : '') . '" href="' . h(self_url($params)) . '"' . ($on ? ' aria-current="true"' : '') . '>' . h($label) . ($count !== null ? '<span class="chipCount">' . h((string)$count) . '</span>' : '') . '</a>';
+}
+
+function current_is_admin(): bool
+{
+    $u = $GLOBALS['LI_USER'] ?? null;
+    return is_array($u) && (string)($u['role'] ?? '') === 'admin';
+}
+
+function render_tab_dashboard(PDO $pdo): void
+{
+    $days = sql_days_to_expiry();
+    $inForce = sql_in_force();
+    $total = (int)$pdo->query('SELECT COUNT(*) FROM policyholders')->fetchColumn();
+    $win = (int)($_GET['win'] ?? 30);
+    if (!in_array($win, [30, 60, 90, 120], true)) {
+        $win = 30;
+    }
+
+    render_first_run_checklist($pdo, $total);
+    if ($total === 0) {
+        return;
+    }
+
+    $agg = $pdo->query("SELECT COUNT(*) AS n, COALESCE(SUM(premium_amount),0) AS prem, AVG(ltv_estimate) AS ltv FROM policyholders WHERE $inForce")->fetch() ?: [];
+    $due30 = $pdo->query("SELECT COUNT(*) AS n, COALESCE(SUM(premium_amount),0) AS prem FROM policyholders WHERE expiration_date IS NOT NULL AND $days BETWEEN 0 AND 30 AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND $inForce")->fetch() ?: [];
+    $atRisk = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE expiration_date IS NOT NULL AND $days BETWEEN 0 AND 90 AND risk_tier IN ('High','Review') AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND $inForce")->fetchColumn();
+    $nOpt = sql_not_opted_out();
+    $reach = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE $inForce AND $nOpt AND ((consent_email = 1 AND email IS NOT NULL AND email <> '') OR ((consent_sms = 1 OR consent_phone = 1) AND phone IS NOT NULL AND phone <> ''))")->fetchColumn();
+    $nForce = max(1, (int)($agg['n'] ?? 0));
+    $periodWord = setting('premium_period', 'monthly') === 'annual' ? 'annual' : 'monthly';
+
+    echo '<div class="kpiGrid kpi5">';
+    echo kpi('Policies in force', number_format((int)($agg['n'] ?? 0)), money_whole($agg['prem'] ?? 0) . ' ' . $periodWord . ' premium');
+    echo kpi('Renewals ≤ 30 days', number_format((int)($due30['n'] ?? 0)), money_whole($due30['prem'] ?? 0) . ' premium at stake', (int)($due30['n'] ?? 0) > 0 ? 'acc' : '');
+    echo kpi('At-risk renewals ≤ 90d', number_format($atRisk), 'High or Review tier', $atRisk > 0 ? 'warn' : '');
+    echo kpi('Contactable', (string)round($reach * 100 / $nForce) . '%', number_format($reach) . ' with consent, not opted out');
+    echo kpi('Avg lifetime value', money_whole($agg['ltv'] ?? null), 'per in-force policy');
+    echo '</div>';
+
+    // Worklist
+    $st = $pdo->prepare("SELECT id, policy_number, name, policy_type, line_of_business, expiration_date, premium_amount, risk_tier, renewal_status, renewal_owner, $days AS d FROM policyholders WHERE expiration_date IS NOT NULL AND $days BETWEEN 0 AND ? AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND $inForce ORDER BY expiration_date ASC, id ASC LIMIT 12");
+    $st->execute([$win]);
+    $work = $st->fetchAll();
+    $cnt = $pdo->prepare("SELECT COUNT(*) FROM policyholders WHERE expiration_date IS NOT NULL AND $days BETWEEN 0 AND ? AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND $inForce");
+    $cnt->execute([$win]);
+    $workTotal = (int)$cnt->fetchColumn();
+
+    echo '<div class="card"><div class="cardHead"><div><div class="h2">Renewal worklist</div><div class="muted">Open renewals expiring in the next ' . h((string)$win) . ' days, soonest first. Touchpoints follow your cadence (' . h(implode(' / ', renewal_cadence())) . ' days).</div></div>';
+    echo '<div class="chips">';
+    foreach ([30, 60, 90, 120] as $w) {
+        echo chip_link($w . ' days', ['tab' => 'dashboard', 'win' => (string)$w], $w === $win);
+    }
+    echo '</div></div>';
+    echo '<div class="scrollX"><table class="table"><thead><tr><th>' . h(lbl('policy')) . '</th><th>' . h(lbl('client')) . '</th><th>' . h(lbl('policy_type')) . '</th><th>Expires</th><th>Next touch</th><th class="right">Premium</th><th>Tier</th><th>Stage</th><th>Owner</th><th></th></tr></thead><tbody>';
+    foreach ($work as $r) {
+        $d = (int)$r['d'];
+        $touch = next_touch($d, (string)$r['expiration_date']);
+        echo '<tr><td class="mono">' . h((string)$r['policy_number']) . '</td><td>' . h(mask_name((string)$r['name'])) . '</td><td>' . h((string)($r['line_of_business'] ?: $r['policy_type'] ?: '—')) . '</td>';
+        echo '<td><span class="' . ($d <= 15 ? 'due' : '') . '">' . h(fmt_date((string)$r['expiration_date'])) . '</span> <span class="muted tiny">' . h(days_label($d)) . '</span></td>';
+        echo '<td class="' . ($touch['due'] ? 'due' : 'muted') . '">' . h($touch['label']) . '</td>';
+        echo '<td class="right">' . h(money_or_blank($r['premium_amount'] ?? null)) . '</td><td>' . tier_badge((string)($r['risk_tier'] ?? '')) . '</td><td>' . renewal_status_pill($r['renewal_status'] ?? null) . '</td><td>' . h((string)($r['renewal_owner'] ?: '—')) . '</td>';
+        echo '<td><a class="link" href="' . h(self_url(['tab' => 'profiles', 'id' => (string)$r['id'], 'win' => null])) . '">Open</a></td></tr>';
+    }
+    if (!$work) {
+        $noDates = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE expiration_date IS NULL OR expiration_date = ''")->fetchColumn();
+        echo '<tr><td colspan="10" class="muted">' . h($noDates === $total ? 'No expiration dates yet. Map an expiration or effective date column on import to fill this worklist.' : 'Nothing open in this window.') . '</td></tr>';
+    }
+    echo '</tbody></table></div>';
+    echo '<div class="actionsRow"><a class="btnSecondary" href="' . h(self_url(['tab' => 'renewals', 'win' => (string)max(90, $win)])) . '">Open renewal board' . ($workTotal > count($work) ? ' (' . h((string)$workTotal) . ' in window)' : '') . '</a></div>';
+    echo '</div>';
+
+    echo '<div class="grid2">';
+    // Opportunities
+    echo '<div class="card"><div class="h2">Opportunities</div>';
+    $hhKnown = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE household_id IS NOT NULL AND household_id <> ''")->fetchColumn();
+    if ($hhKnown > 0) {
+        $single = $pdo->query("SELECT id, policy_number, name, policy_type, ltv_estimate FROM policyholders p WHERE household_id IS NOT NULL AND household_id <> '' AND $inForce AND (SELECT COUNT(*) FROM policyholders h2 WHERE h2.household_id = p.household_id) = 1 ORDER BY ltv_estimate DESC LIMIT 5")->fetchAll();
+        $singleN = (int)$pdo->query("SELECT COUNT(*) FROM policyholders p WHERE household_id IS NOT NULL AND household_id <> '' AND $inForce AND (SELECT COUNT(*) FROM policyholders h2 WHERE h2.household_id = p.household_id) = 1")->fetchColumn();
+        echo '<div class="subHead"><span>Single-line households</span><span class="muted tiny">' . h(number_format($singleN)) . ' · cross-sell or round out</span></div>';
+        echo '<table class="table compact"><tbody>';
+        foreach ($single as $r) {
+            echo '<tr><td class="mono"><a class="link" href="' . h(self_url(['tab' => 'profiles', 'id' => (string)$r['id']])) . '">' . h((string)$r['policy_number']) . '</a></td><td>' . h(mask_name((string)$r['name'])) . '</td><td>' . h((string)($r['policy_type'] ?? '')) . '</td><td class="right">' . h(money_whole($r['ltv_estimate'] ?? null)) . '</td></tr>';
+        }
+        if (!$single) {
+            echo '<tr><td class="muted">Every household already holds more than one policy.</td></tr>';
+        }
+        echo '</tbody></table>';
+    } else {
+        echo '<div class="empty">Map a household or customer ID on import to find single-line households to round out.</div>';
+    }
+    $jump = $pdo->query("SELECT id, policy_number, name, premium_amount, prior_premium, $days AS d FROM policyholders WHERE prior_premium IS NOT NULL AND prior_premium > 0 AND premium_amount >= prior_premium * 1.10 AND expiration_date IS NOT NULL AND $days BETWEEN 0 AND 120 AND $inForce ORDER BY (premium_amount - prior_premium) DESC LIMIT 5")->fetchAll();
+    echo '<div class="subHead"><span>Premium up 10%+ at renewal</span><span class="muted tiny">remarket before they shop</span></div>';
+    echo '<table class="table compact"><tbody>';
+    foreach ($jump as $r) {
+        $pct = (float)$r['prior_premium'] > 0 ? round(((float)$r['premium_amount'] / (float)$r['prior_premium'] - 1) * 100) : 0;
+        echo '<tr><td class="mono"><a class="link" href="' . h(self_url(['tab' => 'profiles', 'id' => (string)$r['id']])) . '">' . h((string)$r['policy_number']) . '</a></td><td>' . h(mask_name((string)$r['name'])) . '</td><td class="right">+' . h((string)$pct) . '%</td><td class="muted">' . h(days_label((int)$r['d'])) . '</td></tr>';
+    }
+    if (!$jump) {
+        echo '<tr><td class="muted">No renewal increases detected. Re-import a newer export to compare premiums.</td></tr>';
+    }
+    echo '</tbody></table>';
+    $top = $pdo->query("SELECT id, policy_number, name, region, ltv_estimate, risk_tier FROM policyholders WHERE $inForce ORDER BY ltv_estimate DESC LIMIT 5")->fetchAll();
+    echo '<div class="subHead"><span>Top LTV</span><span class="muted tiny">protect these at renewal</span></div><table class="table compact"><tbody>';
+    foreach ($top as $r) {
+        echo '<tr><td class="mono"><a class="link" href="' . h(self_url(['tab' => 'profiles', 'id' => (string)$r['id']])) . '">' . h((string)$r['policy_number']) . '</a></td><td>' . h(mask_name((string)$r['name'])) . '</td><td>' . h((string)($r['region'] ?? '')) . '</td><td class="right">' . h(money_whole($r['ltv_estimate'] ?? null)) . '</td><td>' . tier_badge((string)($r['risk_tier'] ?? '')) . '</td></tr>';
+    }
+    echo '</tbody></table></div>';
+
+    // Health + consent
+    echo '<div class="card"><div class="h2">Data health</div>';
+    $health = [
+        ['Missing expiration date', "expiration_date IS NULL OR expiration_date = ''", 'no_expiry'],
+        ['No email or phone', "(email IS NULL OR email = '') AND (phone IS NULL OR phone = '')", 'no_contact'],
+        ['Has filled-in values', 'is_imputed = 1', 'imputed'],
+        ['Low data confidence (< 60)', 'confidence_score < 60', 'low_conf'],
+        ['Risk tier unknown', "risk_tier IS NULL OR risk_tier = 'Unknown'", 'unknown_tier'],
+    ];
+    echo '<table class="table compact"><tbody>';
+    foreach ($health as [$label, $where, $view]) {
+        $n = (int)$pdo->query('SELECT COUNT(*) FROM policyholders WHERE ' . $where)->fetchColumn();
+        $pct = $total > 0 ? (int)round($n * 100 / $total) : 0;
+        echo '<tr><td>' . h($label) . '</td><td class="meterCell"><span class="meter"><span class="meterFill' . ($pct >= 25 ? ' meterWarn' : '') . '" data-w="' . h((string)$pct) . '"></span></span></td><td class="right">' . h(number_format($n)) . '</td><td class="right">' . ($n > 0 ? '<a class="link" href="' . h(self_url(['tab' => 'profiles', 'view' => $view])) . '">Fix</a>' : '<span class="muted">✓</span>') . '</td></tr>';
+    }
+    echo '</tbody></table>';
+    $c = $pdo->query("SELECT SUM(consent_email = 1) AS e, SUM(consent_sms = 1) AS s, SUM(consent_phone = 1) AS p, SUM(CASE WHEN opt_out_at IS NOT NULL AND opt_out_at <> '' THEN 1 ELSE 0 END) AS o, SUM(CASE WHEN consent_email = 0 AND consent_sms = 0 AND consent_phone = 0 THEN 1 ELSE 0 END) AS none FROM policyholders")->fetch() ?: [];
+    echo '<div class="subHead"><span>Consent on file</span><span class="muted tiny">exports and campaign reach respect these</span></div>';
+    echo '<div class="statRow">';
+    foreach ([['Email', $c['e'] ?? 0], ['SMS', $c['s'] ?? 0], ['Calls', $c['p'] ?? 0], ['Opted out', $c['o'] ?? 0], ['None recorded', $c['none'] ?? 0]] as [$l, $v]) {
+        echo '<div class="stat"><div class="statValue">' . h(number_format((int)$v)) . '</div><div class="statLabel">' . h($l) . '</div></div>';
+    }
+    echo '</div>';
+    $dist = $pdo->query("SELECT COALESCE(risk_tier,'Unknown') AS tier, COUNT(*) AS c FROM policyholders GROUP BY tier ORDER BY c DESC")->fetchAll();
+    echo '<div class="subHead"><span>Risk tier distribution</span></div><table class="table compact"><tbody>';
+    foreach ($dist as $r) {
+        $pct = $total > 0 ? (int)round((int)$r['c'] * 100 / $total) : 0;
+        echo '<tr><td>' . tier_badge((string)$r['tier']) . '</td><td class="meterCell"><span class="meter"><span class="meterFill" data-w="' . h((string)$pct) . '"></span></span></td><td class="right">' . h((string)$r['c']) . '</td></tr>';
+    }
+    echo '</tbody></table></div>';
+    echo '</div>';
+}
+
+function render_first_run_checklist(PDO $pdo, int $total): void
+{
+    if (setting('checklist_dismissed', '0') === '1' && $total > 0) {
+        return;
+    }
+    $isAdmin = current_is_admin();
+    $steps = [
+        ['Create the admin account', true, null],
+        ['Load the sample book or import your own CSV', $total > 0, ['tab' => 'import']],
+        ['Map expiration dates and contact fields', (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE expiration_date IS NOT NULL AND expiration_date <> ''")->fetchColumn() > 0, ['tab' => 'import']],
+        ['Review the scoring rules', (int)$pdo->query('SELECT COUNT(*) FROM rules')->fetchColumn() > 0, ['tab' => 'rules']],
+        ['Build your first call or email list', (int)$pdo->query('SELECT COUNT(*) FROM segments')->fetchColumn() > 0, ['tab' => 'segments']],
+        ['Set currency and terminology', (int)$pdo->query("SELECT COUNT(*) FROM settings WHERE name IN ('currency_symbol','terminology')")->fetchColumn() > 0, ['tab' => 'settings']],
+    ];
+    $done = count(array_filter($steps, fn($s) => $s[1]));
+    if ($done === count($steps) && $total > 0) {
+        return;
+    }
+    echo '<div class="card checklist"><div class="cardHead"><div><div class="h2">Get set up · ' . h((string)$done) . ' of ' . h((string)count($steps)) . ' done</div><div class="muted">About ten minutes from upload to a working renewal list.</div></div>';
+    if ($isAdmin && $total > 0) {
+        echo '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="checklist_dismiss"><button class="btnGhost btnSm" type="submit">Hide</button></form>';
+    }
+    echo '</div><ol class="steps">';
+    foreach ($steps as $i => [$label, $ok, $link]) {
+        echo '<li class="step' . ($ok ? ' stepDone' : '') . '"><span class="stepNum">' . ($ok ? '✓' : h((string)($i + 1))) . '</span><span class="stepLabel">' . h($label) . '</span>';
+        if (!$ok && $link && $isAdmin) {
+            echo '<a class="link" href="' . h(self_url($link)) . '">Start</a>';
+        }
+        echo '</li>';
+    }
+    echo '</ol>';
+    if ($total === 0 && $isAdmin) {
+        echo '<div class="actionsRow"><form method="post">' . csrf_field() . '<input type="hidden" name="action" value="load_sample"><button class="btn" type="submit">Load sample book (200 policies)</button></form><a class="btnSecondary" href="' . h(self_url(['tab' => 'import'])) . '">Import my CSV</a></div>';
+    }
+    echo '</div>';
+}
+
+function renewal_filters(): array
+{
+    $win = (int)($_GET['win'] ?? ($_POST['win'] ?? 60));
+    if (!in_array($win, [30, 60, 90, 120], true)) {
+        $win = 60;
+    }
+    $owner = trim((string)($_GET['owner'] ?? ($_POST['owner'] ?? '')));
+    return [$win, $owner];
+}
+
+function renewal_window_query(PDO $pdo, int $win, string $owner, string $select, string $extra = '', int $limit = 600): array
+{
+    $days = sql_days_to_expiry();
+    $where = "expiration_date IS NOT NULL AND expiration_date <> '' AND $days BETWEEN -30 AND ? AND " . sql_in_force();
+    $args = [$win];
+    if ($owner === '__none__') {
+        $where .= " AND (renewal_owner IS NULL OR renewal_owner = '')";
+    } elseif ($owner !== '') {
+        $where .= ' AND renewal_owner = ?';
+        $args[] = $owner;
+    }
+    if ($extra !== '') {
+        $where .= ' AND ' . $extra;
+    }
+    $st = $pdo->prepare('SELECT ' . $select . ", $days AS d FROM policyholders WHERE " . $where . ' ORDER BY expiration_date ASC, id ASC LIMIT ' . (int)$limit);
+    $st->execute($args);
+    return $st->fetchAll();
+}
+
+function render_tab_renewals(PDO $pdo): void
+{
+    [$win, $owner] = renewal_filters();
+    $rows = renewal_window_query($pdo, $win, $owner, 'id, policy_number, name, policy_type, line_of_business, carrier, expiration_date, premium_amount, prior_premium, risk_tier, renewal_status, renewal_owner, last_contacted_at, consent_phone, consent_email, consent_sms, opt_out_at, phone, email');
+    $statuses = renewal_statuses();
+    $byStatus = array_fill_keys(array_keys($statuses), []);
+    $premByStatus = array_fill_keys(array_keys($statuses), 0.0);
+    foreach ($rows as $r) {
+        $s = (string)($r['renewal_status'] ?? '') !== '' ? (string)$r['renewal_status'] : 'not_started';
+        if (!isset($byStatus[$s])) {
+            $s = 'not_started';
+        }
+        $byStatus[$s][] = $r;
+        $premByStatus[$s] += (float)($r['premium_amount'] ?? 0);
+    }
+    $owners = $pdo->query("SELECT DISTINCT renewal_owner FROM policyholders WHERE renewal_owner IS NOT NULL AND renewal_owner <> '' ORDER BY renewal_owner LIMIT 50")->fetchAll(PDO::FETCH_COLUMN);
+    $producers = $pdo->query("SELECT DISTINCT producer FROM policyholders WHERE producer IS NOT NULL AND producer <> '' ORDER BY producer LIMIT 50")->fetchAll(PDO::FETCH_COLUMN);
+    $users = $pdo->query('SELECT email FROM users ORDER BY email LIMIT 50')->fetchAll(PDO::FETCH_COLUMN);
+    $ownerOptions = array_values(array_unique(array_merge(array_map('strval', $owners), array_map('strval', $producers), array_map('strval', $users))));
+
+    echo '<div class="card"><div class="cardHead"><div><div class="h2">Renewal board</div><div class="muted">' . h((string)count($rows)) . ' policies expiring in the next ' . h((string)$win) . ' days (plus 30 days overdue). Change a stage and it saves.</div></div>';
+    echo '<div class="chips">';
+    foreach ([30, 60, 90, 120] as $w) {
+        echo chip_link($w . 'd', ['tab' => 'renewals', 'win' => (string)$w], $w === $win);
+    }
+    echo '</div></div>';
+    echo '<form method="get" class="filterBar"><input type="hidden" name="tab" value="renewals"><input type="hidden" name="win" value="' . h((string)$win) . '">';
+    echo '<label class="label" for="ownerFilter">Owner</label><select class="select selectSm" id="ownerFilter" name="owner" data-autosubmit><option value="">Everyone</option><option value="__none__"' . ($owner === '__none__' ? ' selected' : '') . '>Unassigned</option>';
+    foreach ($owners as $o) {
+        echo '<option value="' . h((string)$o) . '"' . ($owner === (string)$o ? ' selected' : '') . '>' . h((string)$o) . '</option>';
+    }
+    echo '</select><noscript><button class="btnSecondary btnSm" type="submit">Apply</button></noscript></form>';
+    echo '<div class="exportBar">';
+    echo '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="renewal_export_calls"><input type="hidden" name="win" value="' . h((string)$win) . '"><input type="hidden" name="owner" value="' . h($owner) . '"><button class="btnSecondary btnSm" type="submit">Call list CSV</button></form>';
+    echo '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="renewal_export_ics"><input type="hidden" name="win" value="' . h((string)$win) . '"><input type="hidden" name="owner" value="' . h($owner) . '"><button class="btnSecondary btnSm" type="submit">Calendar (.ics)</button></form>';
+    echo '<span class="muted tiny">Call list includes only call-consented, not-opted-out ' . h(strtolower(lbl('clients'))) . ' with open renewals.</span></div>';
+    echo '</div>';
+
+    echo '<datalist id="ownerList">';
+    foreach ($ownerOptions as $o) {
+        echo '<option value="' . h($o) . '"></option>';
+    }
+    echo '</datalist>';
+
+    echo '<div class="board">';
+    foreach ($statuses as $key => $label) {
+        $items = $byStatus[$key];
+        echo '<section class="boardCol" aria-label="' . h($label) . '"><div class="boardHead">' . renewal_status_pill($key) . '<span class="boardCount">' . h((string)count($items)) . '</span><span class="muted tiny">' . h(money_whole($premByStatus[$key])) . '</span></div>';
+        foreach (array_slice($items, 0, 12) as $r) {
+            $d = (int)$r['d'];
+            $touch = next_touch($d, (string)$r['expiration_date']);
+            $reach = [];
+            if (trim((string)($r['opt_out_at'] ?? '')) !== '') {
+                $reach[] = 'opted out';
+            } else {
+                if ((int)$r['consent_phone'] === 1 && (string)$r['phone'] !== '') {
+                    $reach[] = 'call';
+                }
+                if ((int)$r['consent_sms'] === 1 && (string)$r['phone'] !== '') {
+                    $reach[] = 'sms';
+                }
+                if ((int)$r['consent_email'] === 1 && (string)$r['email'] !== '') {
+                    $reach[] = 'email';
+                }
+            }
+            echo '<article class="rcard' . ($d <= 15 && !in_array($key, ['renewed', 'lost'], true) ? ' rcardDue' : '') . '">';
+            echo '<div class="rcardTop"><a class="mono link" href="' . h(self_url(['tab' => 'profiles', 'id' => (string)$r['id'], 'win' => null, 'owner' => null])) . '">' . h((string)$r['policy_number']) . '</a>' . tier_badge((string)($r['risk_tier'] ?? '')) . '</div>';
+            echo '<div class="rcardName">' . h(mask_name((string)$r['name'])) . '</div>';
+            echo '<div class="rcardMeta"><span>' . h((string)($r['line_of_business'] ?: $r['policy_type'] ?: '—')) . '</span><span>' . h(money_or_blank($r['premium_amount'] ?? null)) . '</span></div>';
+            $expTs = strtotime(substr((string)$r['expiration_date'], 0, 10) . ' UTC');
+            echo '<div class="rcardMeta"><span class="' . ($d <= 15 ? 'due' : '') . '">' . h(($expTs ? gmdate('M j', $expTs) : '—') . ' · ' . days_label($d)) . '</span></div>';
+            if (!in_array($key, ['renewed', 'lost'], true)) {
+                echo '<div class="rcardMeta"><span class="' . ($touch['due'] ? 'due' : 'muted') . '">' . h($d < 0 ? 'Log outcome' : $touch['label']) . '</span><span class="muted tiny">' . h($reach ? implode(' · ', $reach) : 'no consent') . '</span></div>';
+            }
+            echo '<form method="post" class="rcardForm">' . csrf_field() . '<input type="hidden" name="action" value="renewal_update"><input type="hidden" name="id" value="' . h((string)$r['id']) . '">';
+            echo '<select class="select selectSm" name="renewal_status" aria-label="Stage for ' . h((string)$r['policy_number']) . '" data-autosubmit>';
+            foreach ($statuses as $sk => $sl) {
+                echo '<option value="' . h($sk) . '"' . ($sk === $key ? ' selected' : '') . '>' . h($sl) . '</option>';
+            }
+            echo '</select><input class="input inputSm" name="renewal_owner" list="ownerList" placeholder="Owner" aria-label="Owner for ' . h((string)$r['policy_number']) . '" value="' . h((string)($r['renewal_owner'] ?? '')) . '" maxlength="120"><button class="btnSecondary btnSm" type="submit">Save</button></form>';
+            echo '</article>';
+        }
+        if (count($items) > 12) {
+            echo '<div class="boardMore">+' . h((string)(count($items) - 12)) . ' more · <a class="link" href="' . h(self_url(['tab' => 'profiles', 'view' => 'renewing', 'win' => null, 'owner' => null])) . '">see all in Book</a> or narrow the window</div>';
+        }
+        if (!$items) {
+            echo '<div class="boardEmpty">Nothing here.</div>';
+        }
+        echo '</section>';
+    }
+    echo '</div>';
+}
+
+function handle_renewal_update(PDO $pdo, array $user): void
+{
+    $id = (int)($_POST['id'] ?? 0);
+    $status = (string)($_POST['renewal_status'] ?? '');
+    $owner = trim((string)($_POST['renewal_owner'] ?? ''));
+    if ($id <= 0 || !array_key_exists($status, renewal_statuses())) {
+        flash('error', 'Pick a valid renewal stage.');
+        redirect_to([]);
+    }
+    $st = $pdo->prepare('UPDATE policyholders SET renewal_status = ?, renewal_owner = ?, updated_at = ? WHERE id = ?');
+    $st->execute([$status === 'not_started' ? null : $status, $owner !== '' ? mb_substr($owner, 0, 120) : null, now_iso(), $id]);
+    audit($pdo, (int)$user['id'], 'renewals.update', ['id' => $id, 'status' => $status, 'owner' => $owner]);
+    flash('success', 'Renewal updated.');
+    redirect_to([]);
+}
+
+function handle_renewal_export_calls(PDO $pdo, array $user): void
+{
+    [$win, $owner] = renewal_filters();
+    $rows = renewal_window_query($pdo, $win, $owner, '*', "COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND consent_phone = 1 AND phone IS NOT NULL AND phone <> '' AND " . sql_not_opted_out(), 5000);
+    audit($pdo, (int)$user['id'], 'renewals.export_calls', ['window' => $win, 'owner' => $owner, 'rows' => count($rows)]);
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="renewal_call_list_' . gmdate('Ymd') . '.csv"');
+    $out = fopen('php://output', 'wb');
+    fputcsv($out, ['policy_number', 'name', 'phone', 'line', 'carrier', 'expiration_date', 'days_to_expiry', 'next_touch', 'premium_amount', 'prior_premium', 'risk_tier', 'renewal_status', 'renewal_owner', 'last_contacted_at']);
+    foreach ($rows as $r) {
+        $touch = next_touch((int)$r['d'], (string)$r['expiration_date']);
+        fputcsv($out, [(string)$r['policy_number'], (string)$r['name'], (string)$r['phone'], (string)($r['line_of_business'] ?: $r['policy_type']), (string)($r['carrier'] ?? ''), (string)$r['expiration_date'], (string)$r['d'], $touch['label'], (string)($r['premium_amount'] ?? ''), (string)($r['prior_premium'] ?? ''), (string)($r['risk_tier'] ?? ''), (string)($r['renewal_status'] ?: 'not_started'), (string)($r['renewal_owner'] ?? ''), (string)($r['last_contacted_at'] ?? '')]);
+    }
+    fclose($out);
+}
+
+function ics_escape(string $s): string
+{
+    return str_replace(["\\", ';', ',', "\r\n", "\n"], ['\\\\', '\\;', '\\,', '\\n', '\\n'], $s);
+}
+
+function handle_renewal_export_ics(PDO $pdo, array $user): void
+{
+    [$win, $owner] = renewal_filters();
+    $rows = renewal_window_query($pdo, $win, $owner, 'id, policy_number, name, policy_type, line_of_business, carrier, expiration_date, premium_amount, risk_tier, renewal_status, renewal_owner', "COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost')", 5000);
+    audit($pdo, (int)$user['id'], 'renewals.export_ics', ['window' => $win, 'owner' => $owner, 'rows' => count($rows)]);
+    $host = preg_replace('/[^a-z0-9.-]/i', '', (string)($_SERVER['HTTP_HOST'] ?? 'liteinsurance.local')) ?: 'liteinsurance.local';
+    $lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//LiteInsurance//Renewals//EN', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:Renewals'];
+    $stamp = gmdate('Ymd\THis\Z');
+    foreach ($rows as $r) {
+        $date = str_replace('-', '', substr((string)$r['expiration_date'], 0, 10));
+        $next = gmdate('Ymd', (int)strtotime(substr((string)$r['expiration_date'], 0, 10) . ' UTC') + 86400);
+        $line = (string)($r['line_of_business'] ?: $r['policy_type'] ?: '');
+        $summary = 'Renewal: ' . (string)$r['policy_number'] . ($line !== '' ? ' (' . $line . ')' : '');
+        $desc = mask_name((string)$r['name']) . ' · ' . money_or_blank($r['premium_amount'] ?? null) . ' · tier ' . (string)($r['risk_tier'] ?? 'Unknown') . ' · stage ' . (renewal_statuses()[(string)($r['renewal_status'] ?: 'not_started')] ?? '') . ((string)($r['renewal_owner'] ?? '') !== '' ? ' · owner ' . (string)$r['renewal_owner'] : '');
+        array_push($lines, 'BEGIN:VEVENT', 'UID:renewal-' . (int)$r['id'] . '-' . $date . '@' . $host, 'DTSTAMP:' . $stamp, 'DTSTART;VALUE=DATE:' . $date, 'DTEND;VALUE=DATE:' . $next, 'SUMMARY:' . ics_escape($summary), 'DESCRIPTION:' . ics_escape($desc), 'END:VEVENT');
+    }
+    $lines[] = 'END:VCALENDAR';
+    header('Content-Type: text/calendar; charset=utf-8');
+    header('Content-Disposition: attachment; filename="renewals_' . gmdate('Ymd') . '.ics"');
+    echo implode("\r\n", $lines) . "\r\n";
+}
+
+function profile_cell_input(array $row, string $field, string $value, string $variant = ''): string
+{
+    $classes = 'profileCellInput';
+    if ($variant === 'num') {
+        $classes .= ' right';
+    } elseif ($variant !== '') {
+        $classes .= ' ' . $variant;
+    }
+    $id = (int)($row['id'] ?? 0);
+    $label = trim((string)($row['policy_number'] ?? 'row')) . ' ' . $field;
+    if (!current_is_admin()) {
+        return '<td' . ($variant === 'num' ? ' class="right"' : '') . '>' . h($value) . '</td>';
+    }
+    return '<td' . ($variant === 'num' ? ' class="right"' : '') . '><input class="' . h($classes) . '" data-policy-cell data-policy-id="' . h((string)$id) . '" data-field="' . h($field) . '" value="' . h($value) . '" aria-label="' . h($label) . '"></td>';
+}
+
+function book_views(): array
+{
+    $days = sql_days_to_expiry();
+    return [
+        '' => ['All', ''],
+        'renewing' => ['Renewing ≤ 90d', "expiration_date IS NOT NULL AND $days BETWEEN 0 AND 90"],
+        'at_risk' => ['High / Review', "risk_tier IN ('High','Review')"],
+        'low_conf' => ['Low confidence', 'confidence_score < 60'],
+        'no_contact' => ['No contact', "(email IS NULL OR email = '') AND (phone IS NULL OR phone = '')"],
+        'no_expiry' => ['No expiry date', "(expiration_date IS NULL OR expiration_date = '')"],
+        'imputed' => ['Filled-in values', 'is_imputed = 1'],
+        'unknown_tier' => ['Tier unknown', "(risk_tier IS NULL OR risk_tier = 'Unknown')"],
+        'opted_out' => ['Opted out', "(opt_out_at IS NOT NULL AND opt_out_at <> '')"],
+    ];
+}
+
+function render_tab_profiles(PDO $pdo): void
+{
+    $q = trim((string)($_GET['q'] ?? ''));
+    $tier = trim((string)($_GET['tier'] ?? ''));
+    $region = trim((string)($_GET['region'] ?? ''));
+    $view = (string)($_GET['view'] ?? '');
+    $views = book_views();
+    if (!isset($views[$view])) {
+        $view = '';
+    }
+    $page = max(1, (int)($_GET['page'] ?? 1));
+    $limit = 25;
+    $offset = ($page - 1) * $limit;
+    $isAdmin = current_is_admin();
+
+    $openId = (int)($_GET['id'] ?? 0);
+    if ($openId > 0) {
+        render_policy_panel($pdo, $openId);
+    }
+
+    $where = [];
+    $args = [];
+    if ($q !== '') {
+        $where[] = '(policy_number LIKE ? OR name LIKE ? OR household_id LIKE ? OR email LIKE ?)';
+        array_push($args, '%' . $q . '%', '%' . $q . '%', '%' . $q . '%', '%' . $q . '%');
+    }
+    if ($tier !== '') {
+        $where[] = 'risk_tier = ?';
+        $args[] = $tier;
+    }
+    if ($region !== '') {
+        $where[] = 'region = ?';
+        $args[] = $region;
+    }
+    if ($view !== '' && $views[$view][1] !== '') {
+        $where[] = '(' . $views[$view][1] . ')';
+    }
+    $whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+    $st = $pdo->prepare('SELECT COUNT(*) FROM policyholders ' . $whereSql);
+    $st->execute($args);
+    $total = (int)$st->fetchColumn();
+
+    $order = $view === 'renewing' ? 'expiration_date ASC, id ASC' : 'id DESC';
+    $st = $pdo->prepare('SELECT id, policy_number, name, age, policy_type, region, premium_amount, tenure_months, sum_assured, ltv_estimate, risk_tier, confidence_score, is_imputed, metadata, expiration_date, renewal_status FROM policyholders ' . $whereSql . ' ORDER BY ' . $order . ' LIMIT ' . (int)$limit . ' OFFSET ' . (int)$offset);
+    $st->execute($args);
+    $rows = $st->fetchAll();
+    $customDefs = $pdo->query('SELECT field_key, label FROM custom_field_defs WHERE enabled = 1 ORDER BY field_key ASC LIMIT 4')->fetchAll();
+    $tiers = $pdo->query("SELECT DISTINCT risk_tier FROM policyholders WHERE risk_tier IS NOT NULL AND risk_tier <> '' ORDER BY risk_tier")->fetchAll(PDO::FETCH_COLUMN);
+    $regions = $pdo->query("SELECT DISTINCT region FROM policyholders WHERE region IS NOT NULL AND region <> '' ORDER BY region LIMIT 100")->fetchAll(PDO::FETCH_COLUMN);
+
+    echo '<div class="card"><div class="cardHead"><div><div class="h2">' . h(lbl('clients')) . ' and policies</div><div class="muted">' . h(number_format($total)) . ' match' . ($total === 1 ? 'es' : '') . '. Saved views:</div></div></div>';
+    echo '<div class="chips chipsWrap">';
+    foreach ($views as $key => [$label, $sql]) {
+        echo chip_link($label, ['tab' => 'profiles', 'view' => $key !== '' ? $key : null, 'page' => null, 'id' => null], $key === $view);
+    }
+    echo '</div>';
+    echo '<form method="get" class="filterBar"><input type="hidden" name="tab" value="profiles">' . ($view !== '' ? '<input type="hidden" name="view" value="' . h($view) . '">' : '');
+    echo '<input class="input" name="q" value="' . h($q) . '" placeholder="Policy #, name, household or email" aria-label="Search">';
+    echo '<select class="select" name="tier" aria-label="Risk tier"><option value="">Any tier</option>';
+    foreach ($tiers as $t) {
+        echo '<option' . ($tier === (string)$t ? ' selected' : '') . '>' . h((string)$t) . '</option>';
+    }
+    echo '</select><select class="select" name="region" aria-label="Region"><option value="">Any region</option>';
+    foreach ($regions as $rg) {
+        echo '<option' . ($region === (string)$rg ? ' selected' : '') . '>' . h((string)$rg) . '</option>';
+    }
+    echo '</select><button class="btnSecondary" type="submit">Filter</button><a class="link" href="' . h(self_url(['tab' => 'profiles', 'q' => null, 'tier' => null, 'region' => null, 'view' => null, 'page' => null, 'id' => null])) . '">Reset</a></form>';
+
+    echo '<div class="muted" id="profileInlineStatus">Showing ' . h((string)count($rows)) . ' of ' . h((string)$total) . '. ' . h($isAdmin ? 'Edit cells directly; LTV, risk tier, confidence, and segments refresh after save.' : 'Read-only for your role. Open a row for details and to log contact.') . '</div>';
+    echo '<input type="hidden" id="profileInlineCsrf" value="' . h(csrf_token()) . '">';
+    echo '<div class="scrollX"><table class="table bookTable"><thead><tr><th>Record / Policy ID</th><th>Display name</th><th>Expires</th><th>Age</th><th>Type</th><th>Region</th><th class="right">Premium</th><th class="right">Tenure</th><th class="right">' . h(lbl('sum_assured')) . '</th><th class="right">LTV</th><th>Tier</th><th class="right">Conf</th><th>Imputed</th>';
+    foreach ($customDefs as $def) {
+        echo '<th>' . h((string)$def['label']) . '</th>';
+    }
+    echo '<th></th></tr></thead><tbody>';
+    foreach ($rows as $r) {
+        $low = (int)$r['confidence_score'] < 60;
+        $meta = safe_json((string)($r['metadata'] ?? '{}'));
+        $custom = is_array($meta['custom_fields'] ?? null) ? (array)$meta['custom_fields'] : [];
+        $policyId = h((string)(int)$r['id']);
+        $isOpen = (int)$r['id'] === $openId;
+        echo '<tr class="' . trim(($low ? 'rowLow' : '') . ($isOpen ? ' rowOpen' : '')) . '">';
+        echo profile_cell_input($r, 'policy_number', (string)$r['policy_number'], 'policy');
+        echo profile_cell_input($r, 'name', $isAdmin ? (string)$r['name'] : mask_name((string)$r['name']), 'name');
+        echo profile_cell_input($r, 'expiration_date', (string)($r['expiration_date'] ?? ''), 'date');
+        echo profile_cell_input($r, 'age', (string)($r['age'] ?? ''), 'num');
+        echo profile_cell_input($r, 'policy_type', (string)($r['policy_type'] ?? ''));
+        echo profile_cell_input($r, 'region', (string)($r['region'] ?? ''));
+        echo profile_cell_input($r, 'premium_amount', (string)($r['premium_amount'] ?? ''), 'num');
+        echo profile_cell_input($r, 'tenure_months', (string)($r['tenure_months'] ?? ''), 'num');
+        echo profile_cell_input($r, 'sum_assured', (string)($r['sum_assured'] ?? ''), 'num');
+        echo '<td class="right" data-derived-field="ltv_estimate" data-policy-id="' . $policyId . '">' . h(money_or_blank($r['ltv_estimate'] ?? null)) . '</td>';
+        echo '<td data-derived-field="risk_tier" data-policy-id="' . $policyId . '">' . h((string)($r['risk_tier'] ?? 'Unknown')) . '</td>';
+        echo '<td class="right" data-derived-field="confidence_score" data-policy-id="' . $policyId . '">' . h((string)($r['confidence_score'] ?? 0)) . '</td>';
+        echo '<td>' . ((int)$r['is_imputed'] === 1 ? '<span class="badge">Yes</span>' : '<span class="badge mutedBadge">No</span>') . '</td>';
+        foreach ($customDefs as $def) {
+            $v = $custom[(string)$def['field_key']] ?? '';
+            echo profile_cell_input($r, 'custom.' . (string)$def['field_key'], is_bool($v) ? ($v ? 'true' : 'false') : (string)$v);
+        }
+        echo '<td><a class="link" href="' . h(self_url(['tab' => 'profiles', 'id' => (string)$r['id']])) . '#panel">Open</a></td>';
+        echo '</tr>';
+    }
+    if (!$rows) {
+        echo '<tr><td colspan="' . h((string)(14 + count($customDefs))) . '" class="muted">No policyholders found.</td></tr>';
+    }
+    echo '</tbody></table></div>';
+
+    $pages = (int)ceil(max(1, $total) / $limit);
+    if ($pages > 1) {
+        echo '<nav class="pager" aria-label="Pages">';
+        $from = max(1, $page - 4);
+        $to = min($pages, $from + 9);
+        if ($from > 1) {
+            echo '<a class="pagerOff" href="' . h(self_url(['tab' => 'profiles', 'page' => '1'])) . '">1</a><span class="muted">…</span>';
+        }
+        for ($i = $from; $i <= $to; $i++) {
+            echo '<a class="' . ($i === $page ? 'pagerOn' : 'pagerOff') . '" href="' . h(self_url(['tab' => 'profiles', 'page' => (string)$i])) . '">' . h((string)$i) . '</a>';
+        }
+        if ($to < $pages) {
+            echo '<span class="muted">…</span><a class="pagerOff" href="' . h(self_url(['tab' => 'profiles', 'page' => (string)$pages])) . '">' . h((string)$pages) . '</a>';
+        }
+        echo '</nav>';
+    }
+    echo '</div>';
+
+    if ($isAdmin) {
+        echo '<div class="card"><div class="h2">Repair (bulk fill)</div><div class="muted">Bulk-fill missing fields.</div>';
+        echo '<form method="post" class="form">' . csrf_field() . '<input type="hidden" name="action" value="repair_apply">';
+        echo '<div class="grid2"><div><label class="label">Set region where missing</label><input class="input" name="set_region" maxlength="80" placeholder="Unknown"></div>';
+        echo '<div><label class="label">Set policy_type where missing</label><input class="input" name="set_policy_type" maxlength="80" placeholder="term"></div></div>';
+        echo '<div><button class="btnSecondary" type="submit">Apply repair</button></div></form></div>';
+    }
+}
+
+function render_policy_panel(PDO $pdo, int $id): void
+{
+    $st = $pdo->prepare('SELECT * FROM policyholders WHERE id = ?');
+    $st->execute([$id]);
+    $ph = $st->fetch();
+    if (!$ph) {
+        echo '<div class="card"><div class="muted">That record no longer exists.</div></div>';
+        return;
+    }
+    $rec = policyholder_record_from_row($ph);
+    $meta = safe_json((string)($ph['metadata'] ?? '{}'));
+    $meta = is_array($meta) ? $meta : [];
+    $imputed = is_array($meta['imputed_fields'] ?? null) ? array_map('strval', (array)$meta['imputed_fields']) : [];
+    $hitIds = array_map('intval', is_array($meta['rule_hits'] ?? null) ? (array)$meta['rule_hits'] : []);
+    $tierRule = (int)($meta['tier_rule_id'] ?? 0);
+    $revealed = pii_revealed($id);
+    $d = $rec['days_to_expiry'];
+    $closeUrl = self_url(['tab' => 'profiles', 'id' => null]);
+
+    echo '<section class="card panel" id="panel" aria-label="Policy detail">';
+    echo '<div class="panelHead"><div><div class="panelTitle"><span class="mono">' . h($rec['policy_number']) . '</span>' . tier_badge($rec['risk_tier']) . renewal_status_pill($rec['renewal_status']) . ($rec['status'] !== '' ? '<span class="pill">' . h(ucfirst($rec['status'])) . '</span>' : '') . '</div>';
+    echo '<div class="panelName">' . h($revealed ? $rec['name'] : mask_name($rec['name'])) . '</div></div>';
+    echo '<div class="actionsRow">';
+    if (!$revealed) {
+        echo '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="reveal_pii"><input type="hidden" name="id" value="' . h((string)$id) . '"><button class="btnSecondary btnSm" type="submit">Reveal name &amp; contact</button></form>';
+    }
+    echo '<a class="btnGhost btnSm" href="' . h($closeUrl) . '">Close</a></div></div>';
+    if (!$revealed) {
+        echo '<div class="muted tiny">Personal details are masked. Revealing is recorded in the audit log.</div>';
+    }
+
+    echo '<div class="grid3 panelGrid">';
+    echo '<div><div class="label">' . h(lbl('client')) . '</div><dl class="kv">';
+    echo '<dt>Household</dt><dd>' . ($rec['household_id'] !== '' ? '<a class="link" href="' . h(self_url(['tab' => 'profiles', 'q' => $rec['household_id'], 'id' => null, 'view' => null])) . '">' . h($rec['household_id']) . '</a> · ' . h((string)$rec['policies_in_household']) . ' polic' . ($rec['policies_in_household'] === 1 ? 'y' : 'ies') : '—') . '</dd>';
+    echo '<dt>Email</dt><dd>' . h($rec['email'] !== '' ? ($revealed ? $rec['email'] : mask_email($rec['email'])) : '—') . '</dd>';
+    echo '<dt>Phone</dt><dd>' . h($rec['phone'] !== '' ? ($revealed ? $rec['phone'] : mask_phone($rec['phone'])) : '—') . '</dd>';
+    echo '<dt>Age</dt><dd>' . h($rec['age'] !== null ? (string)$rec['age'] : '—') . '</dd>';
+    echo '<dt>Region</dt><dd>' . h($rec['region'] !== '' ? $rec['region'] : '—') . '</dd></dl>';
+    echo '<form method="post" class="consentForm">' . csrf_field() . '<input type="hidden" name="action" value="consent_update"><input type="hidden" name="id" value="' . h((string)$id) . '">';
+    echo '<div class="label">Consent</div><div class="checkRow">';
+    foreach (['consent_email' => 'Email', 'consent_sms' => 'SMS', 'consent_phone' => 'Calls'] as $k => $l) {
+        echo '<label class="check"><input type="checkbox" name="' . h($k) . '" value="1"' . ((int)$rec[$k] === 1 ? ' checked' : '') . '> ' . h($l) . '</label>';
+    }
+    echo '<label class="check"><input type="checkbox" name="opted_out" value="1"' . ($rec['opted_out'] === 1 ? ' checked' : '') . '> Opted out of all</label></div>';
+    echo '<button class="btnSecondary btnSm" type="submit">Save consent</button></form></div>';
+
+    echo '<div><div class="label">' . h(lbl('policy')) . '</div><dl class="kv">';
+    $lineLabel = implode(' · ', array_filter([$rec['line_of_business'], $rec['policy_type']], fn($x) => $x !== ''));
+    echo '<dt>' . h(lbl('policy_type')) . '</dt><dd>' . h($lineLabel !== '' ? $lineLabel : '—') . '</dd>';
+    echo '<dt>Carrier</dt><dd>' . h($rec['carrier'] !== '' ? $rec['carrier'] : '—') . '</dd>';
+    echo '<dt>' . h(lbl('producer')) . '</dt><dd>' . h($rec['producer'] !== '' ? $rec['producer'] : '—') . '</dd>';
+    echo '<dt>Term</dt><dd>' . h(fmt_date($rec['effective_date'])) . ' → ' . h(fmt_date($rec['expiration_date'])) . ($d !== null ? ' <span class="' . ($d <= 15 ? 'due' : 'muted') . '">' . h(days_label($d)) . '</span>' : '') . '</dd>';
+    $prem = money_or_blank($rec['premium_amount']);
+    if ($rec['prior_premium'] !== null && $rec['premium_amount'] !== null && (float)$rec['prior_premium'] > 0) {
+        $pct = round(((float)$rec['premium_amount'] / (float)$rec['prior_premium'] - 1) * 100);
+        $prem .= ' (was ' . money_or_blank($rec['prior_premium']) . ', ' . ($pct >= 0 ? '+' : '') . $pct . '%)';
+    }
+    echo '<dt>Premium</dt><dd>' . h($prem !== '' ? $prem : '—') . '</dd>';
+    echo '<dt>' . h(lbl('sum_assured')) . '</dt><dd>' . h(money_or_blank($rec['sum_assured']) ?: '—') . '</dd>';
+    echo '<dt>Tenure</dt><dd>' . h($rec['tenure_months'] !== null ? $rec['tenure_months'] . ' months' : '—') . '</dd></dl></div>';
+
+    $touch = next_touch($d, $rec['expiration_date']);
+    echo '<div><div class="label">Renewal</div><dl class="kv"><dt>Next touch</dt><dd class="' . ($touch['due'] ? 'due' : '') . '">' . h($touch['label']) . '</dd><dt>Last contact</dt><dd>' . h($ph['last_contacted_at'] ? fmt_date((string)$ph['last_contacted_at']) : 'never') . '</dd></dl>';
+    echo '<form method="post" class="form formTight">' . csrf_field() . '<input type="hidden" name="action" value="renewal_update"><input type="hidden" name="id" value="' . h((string)$id) . '">';
+    echo '<label class="label" for="rs">Stage</label><select class="select" id="rs" name="renewal_status">';
+    foreach (renewal_statuses() as $k => $l) {
+        echo '<option value="' . h($k) . '"' . ($k === $rec['renewal_status'] ? ' selected' : '') . '>' . h($l) . '</option>';
+    }
+    echo '</select><label class="label" for="ro">Owner</label><input class="input" id="ro" name="renewal_owner" maxlength="120" value="' . h($rec['renewal_owner']) . '" placeholder="Who is working this renewal">';
+    echo '<div><button class="btnSecondary btnSm" type="submit">Save renewal</button></div></form></div>';
+    echo '</div>';
+
+    // Why this score
+    $rulesById = [];
+    foreach (load_rules_all($pdo) as $r) {
+        $rulesById[(int)$r['id']] = $r;
+    }
+    echo '<div class="whyGrid">';
+    echo '<div class="whyBox"><div class="whyTitle">Why ' . h($rec['risk_tier'] !== '' ? $rec['risk_tier'] : 'Unknown') . '</div>';
+    if ($hitIds) {
+        echo '<ol class="whyList">';
+        foreach ($hitIds as $rid) {
+            $r = $rulesById[$rid] ?? null;
+            $name = $r ? (string)$r['name'] : ('Rule #' . $rid . ' (deleted)');
+            echo '<li' . ($rid === $tierRule ? ' class="whySet"' : '') . '><div><strong>' . h($name) . '</strong>' . ($rid === $tierRule ? ' <span class="note">set the tier</span>' : '') . '</div>';
+            if ($r) {
+                echo '<div class="muted tiny">priority ' . h((string)$r['priority']) . ' · if ' . h(rule_conditions_summary($r['conditions'])) . ' → ' . h(rule_actions_summary(is_array($r['actions']) ? $r['actions'] : [])) . '</div>';
+            }
+            echo '</li>';
+        }
+        echo '</ol>';
+    } else {
+        echo '<div class="muted">No enabled rule matched, so the tier stays Unknown. Rules run highest priority first; the first one that sets a tier wins.</div>';
+    }
+    $tags = is_array($meta['tags'] ?? null) ? (array)$meta['tags'] : [];
+    if ($tags) {
+        echo '<div class="tagRow">' . implode('', array_map(fn($t) => '<span class="badge">' . h((string)$t) . '</span>', $tags)) . '</div>';
+    }
+    echo '</div>';
+
+    $b = ltv_breakdown($rec);
+    echo '<div class="whyBox"><div class="whyTitle">Lifetime value ' . h($b ? money_or_blank($b['ltv']) : '—') . '</div>';
+    if ($b) {
+        echo '<div class="formula">';
+        echo '<span>' . h(money_or_blank($b['monthly'])) . '<em>monthly premium' . ($b['premium_period'] === 'annual' ? ' (' . h(money_or_blank($b['premium'])) . ' ÷ 12)' : '') . '</em></span><b>×</b>';
+        echo '<span>' . h((string)$b['remaining']) . '<em>months left (' . h((string)$b['term_months']) . ' − ' . h((string)$b['tenure']) . ' tenure)</em></span><b>×</b>';
+        echo '<span>' . h(number_format($b['multiplier'], 2)) . '<em>cross-sell (' . h($b['multiplier_source']) . ')</em></span><b>×</b>';
+        echo '<span>' . h(number_format($b['retention'], 2)) . '<em>retention</em></span>';
+        echo '</div><div class="muted tiny">Assumptions live in Settings. Change them and recompute to update every policy.</div>';
+    } else {
+        echo '<div class="muted">Needs premium, tenure and policy type. Fill those in and the value appears.</div>';
+    }
+    echo '</div>';
+
+    $cb = confidence_breakdown($rec, $imputed, count($hitIds));
+    echo '<div class="whyBox"><div class="whyTitle">Data confidence ' . h((string)$rec['confidence_score']) . '</div><table class="table compact"><tbody>';
+    foreach ($cb['lines'] as [$label, $pts]) {
+        echo '<tr><td>' . h((string)$label) . '</td><td class="right mono">' . h(($pts > 0 && $label !== 'Starting score' ? '+' : '') . (string)$pts) . '</td></tr>';
+    }
+    echo '<tr class="rowTotal"><td>Score</td><td class="right mono">' . h((string)$cb['total']) . '</td></tr></tbody></table></div>';
+    echo '</div>';
+
+    // Contact log
+    $log = $pdo->prepare('SELECT c.ts, c.channel, c.outcome, c.note, u.email AS user_email FROM contact_log c LEFT JOIN users u ON u.id = c.user_id WHERE c.policyholder_id = ? ORDER BY c.ts DESC, c.id DESC LIMIT 10');
+    $log->execute([$id]);
+    $entries = $log->fetchAll();
+    echo '<div class="grid2 panelLog"><div><div class="label">Contact history</div>';
+    if ($entries) {
+        echo '<ul class="timeline">';
+        foreach ($entries as $e) {
+            echo '<li><div><strong>' . h(ucfirst((string)$e['channel'])) . '</strong> · ' . h(str_replace('_', ' ', (string)$e['outcome'])) . ' <span class="muted tiny">' . h((string)$e['ts']) . ' · ' . h((string)($e['user_email'] ?? 'system')) . '</span></div>' . ((string)$e['note'] !== '' ? '<div class="muted">' . h((string)$e['note']) . '</div>' : '') . '</li>';
+        }
+        echo '</ul>';
+    } else {
+        echo '<div class="muted">No contact logged yet.</div>';
+    }
+    echo '</div><form method="post" class="form formTight">' . csrf_field() . '<input type="hidden" name="action" value="contact_log"><input type="hidden" name="id" value="' . h((string)$id) . '">';
+    echo '<div class="label">Log contact</div><div class="grid2"><select class="select" name="channel" aria-label="Channel"><option value="call">Call</option><option value="email">Email</option><option value="sms">SMS</option><option value="meeting">Meeting</option><option value="mail">Mail</option></select>';
+    echo '<select class="select" name="outcome" aria-label="Outcome"><option value="reached">Reached</option><option value="left_message">Left message</option><option value="no_answer">No answer</option><option value="quoted">Quoted</option><option value="renewed">Renewed</option><option value="not_interested">Not interested</option></select></div>';
+    echo '<input class="input" name="note" maxlength="500" placeholder="Note (optional)" aria-label="Note"><div><button class="btn btnSm" type="submit">Log contact</button></div></form></div>';
+    echo '</section>';
+}
+
+function handle_contact_log(PDO $pdo, array $user): void
+{
+    $id = (int)($_POST['id'] ?? 0);
+    $channel = (string)($_POST['channel'] ?? '');
+    $outcome = (string)($_POST['outcome'] ?? '');
+    $note = mb_substr(trim((string)($_POST['note'] ?? '')), 0, 500);
+    if ($id <= 0 || !in_array($channel, ['call', 'email', 'sms', 'meeting', 'mail'], true) || !in_array($outcome, ['reached', 'left_message', 'no_answer', 'quoted', 'renewed', 'not_interested'], true)) {
+        flash('error', 'Pick a channel and outcome.');
+        redirect_to([]);
+    }
+    $st = $pdo->prepare('SELECT renewal_status FROM policyholders WHERE id = ?');
+    $st->execute([$id]);
+    $cur = $st->fetchColumn();
+    if ($cur === false) {
+        flash('error', 'Record not found.');
+        redirect_to(['id' => null]);
+    }
+    $now = now_iso();
+    $pdo->prepare('INSERT INTO contact_log (policyholder_id, user_id, channel, outcome, note, ts) VALUES (?, ?, ?, ?, ?, ?)')->execute([$id, (int)$user['id'], $channel, $outcome, $note, $now]);
+    $status = (string)($cur ?? '');
+    $next = $status;
+    if ($outcome === 'renewed') {
+        $next = 'renewed';
+    } elseif ($outcome === 'quoted' && in_array($status, ['', 'not_started', 'contacted'], true)) {
+        $next = 'quoted';
+    } elseif (in_array($status, ['', 'not_started'], true) && in_array($outcome, ['reached', 'left_message', 'not_interested'], true)) {
+        $next = 'contacted';
+    }
+    $pdo->prepare('UPDATE policyholders SET last_contacted_at = ?, renewal_status = ?, updated_at = ? WHERE id = ?')->execute([$now, $next !== '' && $next !== 'not_started' ? $next : null, $now, $id]);
+    audit($pdo, (int)$user['id'], 'contact.log', ['id' => $id, 'channel' => $channel, 'outcome' => $outcome]);
+    flash('success', 'Contact logged.');
+    redirect_to([]);
+}
+
+function handle_consent_update(PDO $pdo, array $user): void
+{
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id <= 0) {
+        redirect_to([]);
+    }
+    $vals = [];
+    foreach (['consent_email', 'consent_sms', 'consent_phone'] as $k) {
+        $vals[$k] = (string)($_POST[$k] ?? '') === '1' ? 1 : 0;
+    }
+    $optOut = (string)($_POST['opted_out'] ?? '') === '1';
+    $st = $pdo->prepare('SELECT opt_out_at FROM policyholders WHERE id = ?');
+    $st->execute([$id]);
+    $prev = $st->fetchColumn();
+    if ($prev === false) {
+        redirect_to(['id' => null]);
+    }
+    $optAt = $optOut ? ((string)$prev !== '' ? (string)$prev : now_iso()) : null;
+    if ($optOut) {
+        $vals = ['consent_email' => 0, 'consent_sms' => 0, 'consent_phone' => 0];
+    }
+    $pdo->prepare('UPDATE policyholders SET consent_email = ?, consent_sms = ?, consent_phone = ?, opt_out_at = ?, updated_at = ? WHERE id = ?')->execute([$vals['consent_email'], $vals['consent_sms'], $vals['consent_phone'], $optAt, now_iso(), $id]);
+    audit($pdo, (int)$user['id'], 'consent.update', ['id' => $id] + $vals + ['opted_out' => $optOut]);
+    flash('success', $optOut ? 'Opt-out recorded. This record is excluded from outreach exports.' : 'Consent saved.');
+    redirect_to([]);
+}
+
+function handle_reveal_pii(PDO $pdo, array $user): void
+{
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id > 0) {
+        if (!isset($_SESSION['revealed']) || !is_array($_SESSION['revealed'])) {
+            $_SESSION['revealed'] = [];
+        }
+        $_SESSION['revealed'][$id] = time();
+        audit($pdo, (int)$user['id'], 'pii.reveal', ['id' => $id]);
+    }
+    redirect_to([]);
+}
+
+function list_builder_catalog(PDO $pdo): array
+{
+    $out = [];
+    foreach (filter_field_catalog() as $key => [$type, $sql, $label]) {
+        if (in_array($key, ['email', 'phone'], true)) {
+            continue;
+        }
+        $out[] = ['k' => $key, 't' => $type, 'l' => $label];
+    }
+    foreach ($pdo->query('SELECT field_key, label, field_type FROM custom_field_defs WHERE enabled = 1 ORDER BY field_key ASC LIMIT 40')->fetchAll() as $d) {
+        $t = (string)($d['field_type'] ?? 'text');
+        $out[] = ['k' => 'custom.' . (string)$d['field_key'], 't' => $t === 'number' ? 'num' : ($t === 'bool' ? 'text' : 'text'), 'l' => 'Custom: ' . (string)$d['label']];
+    }
+    return $out;
+}
+
+function list_presets(): array
+{
+    return [
+        'Renewing in 90 days' => ['logic' => 'AND', 'rows' => [['f' => 'days_to_expiry', 'op' => 'between', 'v' => '0', 'v2' => '90'], ['f' => 'renewal_status', 'op' => 'in', 'v' => 'not_started, contacted']]],
+        'High-risk renewals' => ['logic' => 'AND', 'rows' => [['f' => 'days_to_expiry', 'op' => 'between', 'v' => '0', 'v2' => '120'], ['f' => 'risk_tier', 'op' => 'in', 'v' => 'High, Review']]],
+        'Single-line households' => ['logic' => 'AND', 'rows' => [['f' => 'policies_in_household', 'op' => 'eq', 'v' => '1'], ['f' => 'opted_out', 'op' => 'no', 'v' => '']]],
+        'Email-consented, high LTV' => ['logic' => 'AND', 'rows' => [['f' => 'consent_email', 'op' => 'yes', 'v' => ''], ['f' => 'ltv_estimate', 'op' => 'gte', 'v' => '8000']]],
+        'Data repair queue' => ['logic' => 'OR', 'rows' => [['f' => 'confidence_score', 'op' => 'lt', 'v' => '70'], ['f' => 'expiration_date', 'op' => 'empty', 'v' => '']]],
+    ];
+}
+
+function render_tab_segments(PDO $pdo): void
+{
+    $editId = (int)($_GET['edit'] ?? 0);
+    $editing = null;
+    if ($editId > 0) {
+        $st = $pdo->prepare('SELECT * FROM segments WHERE id = ?');
+        $st->execute([$editId]);
+        $editing = $st->fetch();
+    }
+    $segments = $pdo->query('SELECT id, name, rule_ids, last_run_at FROM segments ORDER BY id DESC')->fetchAll();
+    $rules = $pdo->query('SELECT id, name, priority FROM rules ORDER BY priority DESC, id DESC')->fetchAll();
+    $consentRequired = setting('consent_required_for_exports', '1') === '1';
+
+    echo '<div class="grid2 gridWide">';
+    echo '<div class="card"><div class="h2">Lists</div><div class="muted">Sizes are refreshed when you save or estimate. Reach counts only consented, not-opted-out ' . h(strtolower(lbl('clients'))) . '.</div>';
+    echo '<div class="scrollX"><table class="table"><thead><tr><th>Name</th><th class="right">Size</th><th class="right">Email</th><th class="right">SMS</th><th class="right">Call</th><th>Last run</th></tr></thead><tbody>';
+    foreach ($segments as $s) {
+        $c = safe_json((string)($s['rule_ids'] ?? ''));
+        $stats = is_array($c['stats'] ?? null) ? (array)$c['stats'] : null;
+        if ($stats === null) {
+            try {
+                [$segRules, $segWhere] = segment_criteria($s);
+                $stats = segment_stats($pdo, $segRules, $segWhere);
+            } catch (Throwable $e) {
+                $stats = null;
+            }
+        }
+        $cell = static fn(string $k): string => $stats ? number_format((int)($stats[$k] ?? 0)) : '—';
+        echo '<tr' . ((int)$s['id'] === $editId ? ' class="rowOpen"' : '') . '><td><a class="link" href="' . h(self_url(['tab' => 'segments', 'edit' => (string)$s['id']])) . '">' . h((string)$s['name']) . '</a></td><td class="right">' . h($cell('count')) . '</td><td class="right">' . h($cell('email')) . '</td><td class="right">' . h($cell('sms')) . '</td><td class="right">' . h($cell('phone')) . '</td><td class="muted">' . h($s['last_run_at'] ? substr((string)$s['last_run_at'], 0, 10) : '—') . '</td>';
+        echo '</tr>';
+    }
+    if (!$segments) {
+        echo '<tr><td colspan="6" class="muted">No lists yet. Start from a preset on the right.</td></tr>';
+    }
+    echo '</tbody></table></div></div>';
+
+    $sid = 0;
+    $name = '';
+    $criteria = ['rule_ids' => [], 'where' => '', 'builder' => null];
+    if ($editing) {
+        $sid = (int)$editing['id'];
+        $name = (string)$editing['name'];
+        $c = safe_json((string)$editing['rule_ids']);
+        if (is_array($c)) {
+            $criteria['rule_ids'] = is_array($c['rule_ids'] ?? null) ? array_map('intval', (array)$c['rule_ids']) : [];
+            $criteria['where'] = is_string($c['where'] ?? null) ? (string)$c['where'] : '';
+            $criteria['builder'] = is_array($c['builder'] ?? null) ? $c['builder'] : null;
+        }
+    }
+    $builderJson = json_encode($criteria['builder'] ?? ($criteria['where'] === '' ? ['logic' => 'AND', 'rows' => [['f' => 'days_to_expiry', 'op' => 'between', 'v' => '0', 'v2' => '90']]] : null), JSON_UNESCAPED_SLASHES);
+
+    echo '<div class="card"><div class="cardHead"><div class="h2">' . h($sid > 0 ? 'Edit list' : 'New list') . '</div>' . ($sid > 0 ? '<a class="link" href="' . h(self_url(['tab' => 'segments', 'edit' => null])) . '">New list</a>' : '') . '</div>';
+    echo '<div class="chips chipsWrap" aria-label="Presets">';
+    foreach (list_presets() as $label => $preset) {
+        echo '<button class="chip" type="button" data-preset="' . h((string)json_encode($preset, JSON_UNESCAPED_SLASHES)) . '" data-preset-name="' . h($label) . '">' . h($label) . '</button>';
+    }
+    echo '</div>';
+    echo '<form method="post" class="form" id="listForm">' . csrf_field();
+    if ($sid > 0) {
+        echo '<input type="hidden" name="id" value="' . h((string)$sid) . '">';
+    }
+    echo '<label class="label" for="listName">Name</label><input class="input" id="listName" name="name" required maxlength="120" value="' . h($name) . '">';
+    echo '<div class="lb" id="listBuilder" data-catalog="' . h((string)json_encode(list_builder_catalog($pdo), JSON_UNESCAPED_SLASHES)) . '" data-initial="' . h((string)$builderJson) . '">';
+    echo '<div class="lbHead"><span class="label">Include policies where</span><select class="select selectSm" id="lbLogic" aria-label="Match"><option value="AND">all of these are true</option><option value="OR">any of these is true</option></select></div>';
+    echo '<div id="lbRows"></div><div class="actionsRow"><button class="btnSecondary btnSm" type="button" id="lbAdd">Add condition</button></div>';
+    echo '<input type="hidden" name="builder_json" id="lbJson" value="">';
+    echo '</div>';
+    echo '<div class="lbCount" id="listCount" aria-live="polite">' . h($criteria['where'] !== '' || $criteria['builder'] ? 'Counting…' : 'Add a condition to see the count.') . '</div>';
+    echo '<details class="advanced"' . ($criteria['where'] !== '' && !$criteria['builder'] ? ' open' : '') . '><summary>Advanced: expression and scoring rules</summary>';
+    echo '<label class="label" for="listWhere">WHERE-style expression (written by the builder; edit by hand if you need parentheses)</label><textarea class="textarea" id="listWhere" name="where" rows="3" maxlength="800" spellcheck="false">' . h((string)$criteria['where']) . '</textarea>';
+    echo '<div class="muted tiny">Fields: ' . h(implode(', ', array_keys(filter_field_catalog()))) . ', plus custom.field_key such as custom.renewal_probability. Operators: = != &gt; &lt; &gt;= &lt;= IN LIKE IS NULL, combined with AND / OR / NOT.</div>';
+    echo '<div class="label">Also require these scoring rules to match</div><div class="checkGrid">';
+    foreach ($rules as $r) {
+        $rid = (int)$r['id'];
+        echo '<label class="check"><input type="checkbox" name="rule_ids[]" value="' . h((string)$rid) . '"' . (in_array($rid, (array)$criteria['rule_ids'], true) ? ' checked' : '') . '> ' . h((string)$r['name']) . '</label>';
+    }
+    if (!$rules) {
+        echo '<div class="muted">No rules available.</div>';
+    }
+    echo '</div></details>';
+    echo '<div class="actionsRow"><button class="btn" type="submit" name="action" value="segment_save">Save list</button><button class="btnSecondary" type="submit" name="action" value="segment_estimate">Refresh count</button></div>';
+    echo '</form>';
+    if ($sid > 0) {
+        echo '<div class="divider"></div><div class="h3">Export this list</div><div class="muted tiny">' . h($consentRequired ? 'Consent-filtered: only records consented for the channel and not opted out.' : 'Opt-outs are always excluded except for internal exports.') . '</div>';
+        echo '<div class="actionsRow"><form method="post" class="exportBar">' . csrf_field() . '<input type="hidden" name="id" value="' . h((string)$sid) . '"><select class="select selectSm" name="channel" aria-label="Export channel"><option value="email">Email-consented</option><option value="sms">SMS-consented</option><option value="phone">Call-consented</option><option value="mail">Mail (excl. opt-outs)</option>' . ($consentRequired ? '' : '<option value="all">Everyone (internal)</option>') . '</select><button class="btnSecondary btnSm" type="submit" name="action" value="export_segment_prepare">Export CSV</button></form>';
+        echo '<form method="post" data-confirm="Delete this list?">' . csrf_field() . '<input type="hidden" name="id" value="' . h((string)$sid) . '"><button class="btnGhost btnSm" type="submit" name="action" value="segment_delete">Delete list</button></form></div>';
+    }
+    echo '</div>';
+    echo '</div>';
+}
+
+function segment_payload(PDO $pdo, array $ruleIds, string $where, $builder): array
+{
+    $stats = segment_stats($pdo, $ruleIds, $where);
+    $payload = ['rule_ids' => $ruleIds, 'where' => $where, 'mode' => 'rules_and_where', 'stats' => ['count' => $stats['count'], 'email' => $stats['email'], 'sms' => $stats['sms'], 'phone' => $stats['phone'], 'mail' => $stats['mail']]];
+    if (is_array($builder) && isset($builder['rows']) && is_array($builder['rows'])) {
+        $payload['builder'] = ['logic' => (string)($builder['logic'] ?? 'AND') === 'OR' ? 'OR' : 'AND', 'rows' => array_slice(array_values(array_filter($builder['rows'], 'is_array')), 0, 20)];
+    }
+    return [$payload, $stats];
+}
+
+function handle_segment_save(PDO $pdo, array $user): void
+{
+    $id = (int)($_POST['id'] ?? 0);
+    $name = trim((string)($_POST['name'] ?? ''));
+    $ruleIds = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['rule_ids'] ?? [])), fn($x) => $x > 0)));
+    $where = trim((string)($_POST['where'] ?? ''));
+    $builder = safe_json((string)($_POST['builder_json'] ?? ''));
+    if ($name === '') {
+        flash('error', 'List name is required.');
+        redirect_to(['tab' => 'segments']);
+    }
+    try {
+        validate_filter_expr($where);
+        [$payload, $stats] = segment_payload($pdo, $ruleIds, $where, $builder);
+    } catch (Throwable $e) {
+        flash('error', 'That filter is not valid: ' . $e->getMessage());
+        redirect_to(['tab' => 'segments', 'edit' => $id > 0 ? (string)$id : null]);
+    }
+    $json = json_encode($payload, JSON_UNESCAPED_SLASHES);
+    if ($id > 0) {
+        $pdo->prepare('UPDATE segments SET name = ?, rule_ids = ?, last_run_at = ? WHERE id = ?')->execute([$name, $json, now_iso(), $id]);
+        audit($pdo, (int)$user['id'], 'segments.update', ['id' => $id, 'name' => $name, 'count' => $stats['count']]);
+        flash('success', 'List updated · ' . $stats['count'] . ' policies.');
+    } else {
+        $pdo->prepare('INSERT INTO segments (name, rule_ids, last_run_at) VALUES (?, ?, ?)')->execute([$name, $json, now_iso()]);
+        $id = (int)$pdo->lastInsertId();
+        audit($pdo, (int)$user['id'], 'segments.create', ['id' => $id, 'name' => $name, 'count' => $stats['count']]);
+        flash('success', 'List created · ' . $stats['count'] . ' policies.');
+    }
+    redirect_to(['tab' => 'segments', 'edit' => (string)$id]);
+}
+
+function handle_segment_estimate(PDO $pdo, array $user): void
+{
+    $id = (int)($_POST['id'] ?? 0);
+    $ruleIds = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['rule_ids'] ?? [])), fn($x) => $x > 0)));
+    $where = trim((string)($_POST['where'] ?? ''));
+    try {
+        validate_filter_expr($where);
+        $stats = segment_stats($pdo, $ruleIds, $where);
+    } catch (Throwable $e) {
+        flash('error', 'That filter is not valid: ' . $e->getMessage());
+        redirect_to(['tab' => 'segments']);
+    }
+    if ($id > 0) {
+        $st = $pdo->prepare('SELECT rule_ids FROM segments WHERE id = ?');
+        $st->execute([$id]);
+        $c = safe_json((string)$st->fetchColumn());
+        if (is_array($c) && trim((string)($c['where'] ?? '')) === $where) {
+            $c['stats'] = ['count' => $stats['count'], 'email' => $stats['email'], 'sms' => $stats['sms'], 'phone' => $stats['phone'], 'mail' => $stats['mail']];
+            $pdo->prepare('UPDATE segments SET rule_ids = ?, last_run_at = ? WHERE id = ?')->execute([json_encode($c, JSON_UNESCAPED_SLASHES), now_iso(), $id]);
+        }
+    }
+    audit($pdo, (int)$user['id'], 'segments.estimate', ['rule_ids' => $ruleIds, 'where' => $where, 'count' => $stats['count']]);
+    flash('success', 'Estimated segment size: ' . $stats['count'] . ' · reachable by email ' . $stats['email'] . ', SMS ' . $stats['sms'] . ', call ' . $stats['phone'] . '.');
+    redirect_to(['tab' => 'segments']);
+}
+
+function handle_segment_count(PDO $pdo): void
+{
+    header('Content-Type: application/json; charset=utf-8');
+    $ruleIds = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['rule_ids'] ?? [])), fn($x) => $x > 0)));
+    $where = trim((string)($_POST['where'] ?? ''));
+    try {
+        validate_filter_expr($where);
+        $stats = segment_stats($pdo, $ruleIds, $where);
+        echo json_encode(['ok' => true] + $stats, JSON_UNESCAPED_SLASHES);
+    } catch (Throwable $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    }
+}
+
+function handle_export_segment_prepare(): void
+{
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id <= 0) {
+        redirect_to(['tab' => 'segments']);
+    }
+    $channel = (string)($_POST['channel'] ?? 'email');
+    if (!in_array($channel, ['email', 'sms', 'phone', 'mail', 'all'], true)) {
+        $channel = 'email';
+    }
+    if ($channel === 'all' && setting('consent_required_for_exports', '1') === '1') {
+        flash('error', 'Consent-filtered exports are required. Pick a channel, or change the policy in Settings.');
+        redirect_to(['tab' => 'segments']);
+    }
+    $_SESSION['export_token'] = bin2hex(random_bytes(16));
+    $_SESSION['export_channel'] = $channel;
+    redirect_to(['action' => 'export_segment', 'id' => (string)$id, 't' => (string)$_SESSION['export_token']]);
+}
+
+function export_segment_csv(PDO $pdo): void
+{
+    $t = (string)($_GET['t'] ?? '');
+    if ($t === '' || !hash_equals((string)($_SESSION['export_token'] ?? ''), $t)) {
+        http_response_code(403);
+        echo 'Forbidden';
+        return;
+    }
+    $channel = (string)($_SESSION['export_channel'] ?? 'email');
+    unset($_SESSION['export_token']);
+    $id = (int)($_GET['id'] ?? 0);
+    $st = $pdo->prepare('SELECT * FROM segments WHERE id = ?');
+    $st->execute([$id]);
+    $seg = $st->fetch();
+    if (!$seg) {
+        http_response_code(404);
+        echo 'Not found';
+        return;
+    }
+    [$ruleIds, $where] = segment_criteria($seg);
+    $customDefs = $pdo->query('SELECT field_key, label FROM custom_field_defs WHERE enabled = 1 ORDER BY field_key ASC')->fetchAll();
+    $slug = trim(preg_replace('/[^a-z0-9]+/', '_', strtolower((string)$seg['name'])) ?? '', '_');
+
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="segment_' . (int)$seg['id'] . '_' . ($slug !== '' ? $slug . '_' : '') . $channel . '.csv"');
+    $out = fopen('php://output', 'wb');
+    $headers = ['policy_number', 'name', 'email', 'phone', 'age', 'gender', 'policy_type', 'line_of_business', 'carrier', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'expiration_date', 'days_to_expiry', 'renewal_status', 'ltv_estimate', 'risk_tier', 'confidence_score', 'consent_email', 'consent_sms', 'consent_phone', 'opted_out'];
+    foreach ($customDefs as $def) {
+        $headers[] = 'custom.' . (string)$def['field_key'];
+    }
+    fputcsv($out, $headers);
+    $n = 0;
+    try {
+        segment_iterate($pdo, $ruleIds, $where, static function (array $ph, array $rec) use ($out, $channel, $customDefs, &$n): void {
+            if (!row_reachable($ph, $channel)) {
+                return;
+            }
+            $line = [
+                $rec['policy_number'], $rec['name'], in_array($channel, ['email', 'all'], true) ? $rec['email'] : '', in_array($channel, ['sms', 'phone', 'all'], true) ? $rec['phone'] : '',
+                (string)($rec['age'] ?? ''), $rec['gender'], $rec['policy_type'], $rec['line_of_business'], $rec['carrier'], $rec['region'],
+                (string)($rec['premium_amount'] ?? ''), (string)($rec['tenure_months'] ?? ''), (string)($rec['sum_assured'] ?? ''),
+                $rec['expiration_date'], (string)($rec['days_to_expiry'] ?? ''), $rec['renewal_status'],
+                (string)($rec['ltv_estimate'] ?? ''), $rec['risk_tier'], (string)$rec['confidence_score'],
+                (string)$rec['consent_email'], (string)$rec['consent_sms'], (string)$rec['consent_phone'], (string)$rec['opted_out'],
+            ];
+            $custom = is_array($rec['custom'] ?? null) ? (array)$rec['custom'] : [];
+            foreach ($customDefs as $def) {
+                $v = $custom[(string)$def['field_key']] ?? '';
+                $line[] = is_bool($v) ? ($v ? 'true' : 'false') : (string)$v;
+            }
+            fputcsv($out, $line);
+            $n++;
+        });
+    } catch (Throwable $e) {
+        // invalid stored filter: export header only
+    }
+    fclose($out);
+    $uid = (int)($_SESSION['user_id'] ?? 0);
+    audit($pdo, $uid, 'segments.export', ['id' => (int)$seg['id'], 'channel' => $channel, 'rows' => $n]);
+}
+
+function campaign_channels(): array
+{
+    return ['email' => 'Email', 'sms' => 'SMS', 'phone' => 'Phone calls', 'mail' => 'Direct mail'];
+}
+
+function campaign_model(int $size, int $reachable, float $rate, float $avg, float $cost, float $lift): array
+{
+    $conversions = $reachable * $rate * (1 + $lift);
+    $gross = $conversions * $avg;
+    $estCost = $reachable * $cost;
+    $net = $gross - $estCost;
+    $breakEven = ($avg * (1 + $lift)) > 0 ? $cost / ($avg * (1 + $lift)) : null;
+    return [
+        'segment_size' => $size,
+        'reachable' => $reachable,
+        'contacts' => $reachable,
+        'expected_conversions' => $conversions,
+        'gross_revenue' => $gross,
+        'estimated_cost' => $estCost,
+        'net_revenue' => $net,
+        'roi' => $estCost > 0 ? $net / $estCost : null,
+        'break_even_rate' => $breakEven,
+    ];
+}
+
+function render_tab_campaigns(PDO $pdo): void
+{
+    $segments = $pdo->query('SELECT id, name, rule_ids FROM segments ORDER BY id DESC')->fetchAll();
+    $campaigns = $pdo->query('SELECT c.id, c.name, c.assumptions, c.projected_revenue, c.created_at, s.name AS segment_name FROM campaigns c LEFT JOIN segments s ON s.id = c.segment_id ORDER BY c.created_at DESC, c.id DESC LIMIT 20')->fetchAll();
+    $viewId = (int)($_GET['view'] ?? 0);
+
+    echo '<div class="grid2 gridWide">';
+    echo '<div class="card"><div class="h2">Scenario</div><div class="muted">Reach comes from consent on file. Numbers update as you type; save to keep a scenario.</div>';
+    echo '<form method="post" class="form" id="campaignForm">' . csrf_field() . '<input type="hidden" name="action" value="campaign_save">';
+    echo '<label class="label" for="cName">Campaign name</label><input class="input" id="cName" name="name" required maxlength="120" value="Cross-sell test">';
+    echo '<div class="grid2"><div><label class="label" for="cSeg">List</label><select class="select" id="cSeg" name="segment_id" required>';
+    foreach ($segments as $s) {
+        $c = safe_json((string)($s['rule_ids'] ?? ''));
+        $stats = is_array($c['stats'] ?? null) ? (array)$c['stats'] : null;
+        if ($stats === null) {
+            try {
+                [$ruleIds, $where] = segment_criteria($s);
+                $stats = segment_stats($pdo, $ruleIds, $where);
+            } catch (Throwable $e) {
+                $stats = ['count' => 0, 'email' => 0, 'sms' => 0, 'phone' => 0, 'mail' => 0];
+            }
+        }
+        echo '<option value="' . h((string)$s['id']) . '" data-size="' . h((string)(int)($stats['count'] ?? 0)) . '" data-email="' . h((string)(int)($stats['email'] ?? 0)) . '" data-sms="' . h((string)(int)($stats['sms'] ?? 0)) . '" data-phone="' . h((string)(int)($stats['phone'] ?? 0)) . '" data-mail="' . h((string)(int)($stats['mail'] ?? 0)) . '">' . h((string)$s['name']) . ' (' . h(number_format((int)($stats['count'] ?? 0))) . ')</option>';
+    }
+    if (!$segments) {
+        echo '<option value="0">No lists yet — build one under Lists</option>';
+    }
+    echo '</select></div><div><label class="label" for="cCh">Channel</label><select class="select" id="cCh" name="channel">';
+    foreach (campaign_channels() as $k => $l) {
+        echo '<option value="' . h($k) . '">' . h($l) . '</option>';
+    }
+    echo '</select></div></div>';
+    echo '<div class="grid2"><div><label class="label" for="cRate">Conversion rate</label><input class="input" id="cRate" name="cross_sell_rate" type="number" step="0.001" min="0" max="1" value="0.05"></div>';
+    echo '<div><label class="label" for="cAvg">Revenue per conversion</label><input class="input" id="cAvg" name="avg_offer_value" type="number" step="0.01" min="0" value="1200"></div></div>';
+    echo '<div class="grid2"><div><label class="label" for="cCost">Cost per contact</label><input class="input" id="cCost" name="campaign_cost_per_contact" type="number" step="0.01" min="0" value="2.50"></div>';
+    echo '<div><label class="label" for="cLift">Conversion lift</label><input class="input" id="cLift" name="conversion_lift" type="number" step="0.01" min="0" value="0"></div></div>';
+    echo '<div class="funnel" id="funnel" aria-live="polite">';
+    foreach ([['size', 'On the list'], ['reach', 'Reachable on channel'], ['conv', 'Expected conversions']] as [$k, $l]) {
+        echo '<div class="fnRow"><span class="fnLabel">' . h($l) . '</span><span class="fnBar"><span class="fnFill" data-fn-bar="' . h($k) . '"></span></span><span class="fnValue" data-fn="' . h($k) . '">—</span></div>';
+    }
+    echo '<div class="fnTotals"><div><div class="statLabel">Gross</div><div class="statValue" data-fn="gross">—</div></div><div><div class="statLabel">Cost</div><div class="statValue" data-fn="cost">—</div></div><div><div class="statLabel">Net</div><div class="statValue" data-fn="net">—</div></div><div><div class="statLabel">ROI</div><div class="statValue" data-fn="roi">—</div></div><div><div class="statLabel">Break-even rate</div><div class="statValue" data-fn="be">—</div></div></div>';
+    echo '</div>';
+    echo '<div class="actionsRow"><button class="btn" type="submit">Save scenario</button></div>';
+    echo '</form></div>';
+
+    $shown = null;
+    foreach ($campaigns as $c) {
+        if ($viewId === 0 || (int)$c['id'] === $viewId) {
+            $shown = $c;
+            break;
+        }
+    }
+    if ($shown) {
+        $a = safe_json((string)($shown['assumptions'] ?? '{}'));
+        $a = is_array($a) ? $a : [];
+        $size = max(1, (int)($a['segment_size'] ?? 0));
+        $reach = (int)($a['reachable'] ?? $a['contacts'] ?? 0);
+        $conv = (float)($a['expected_conversions'] ?? 0);
+        echo '<div class="card"><div class="h2">' . h((string)$shown['name']) . '</div><div class="muted">' . h((string)($shown['segment_name'] ?? '—')) . ' · saved ' . h((string)$shown['created_at']) . '</div><div class="funnel">';
+        foreach ([['On the list', (int)($a['segment_size'] ?? 0)], ['Reachable', $reach], ['Conversions', $conv]] as [$l, $v]) {
+            $pct = (int)round(min(100, ($v / $size) * 100));
+            echo '<div class="fnRow"><span class="fnLabel">' . h($l) . '</span><span class="fnBar"><span class="fnFill" data-w="' . h((string)max(1, $pct)) . '"></span></span><span class="fnValue">' . h(is_float($v) ? number_format($v, 1) : number_format($v)) . '</span></div>';
+        }
+        $be = $a['break_even_rate'] ?? null;
+        echo '<div class="fnTotals"><div><div class="statLabel">Gross</div><div class="statValue">' . h(money_whole($a['gross_revenue'] ?? 0)) . '</div></div><div><div class="statLabel">Cost</div><div class="statValue">' . h(money_whole($a['estimated_cost'] ?? 0)) . '</div></div><div><div class="statLabel">Net</div><div class="statValue">' . h(money_whole($a['net_revenue'] ?? 0)) . '</div></div><div><div class="statLabel">Break-even rate</div><div class="statValue">' . h($be === null ? '—' : number_format((float)$be * 100, 2) . '%') . '</div></div></div></div>';
+        echo '<div class="muted tiny">Assumed ' . h(number_format((float)($a['cross_sell_rate'] ?? 0) * 100, 1)) . '% conversion, ' . h(money_or_blank($a['avg_offer_value'] ?? 0)) . ' per conversion, ' . h(money_or_blank($a['campaign_cost_per_contact'] ?? 0)) . ' per contact, ' . h(number_format((float)($a['conversion_lift'] ?? 0) * 100)) . '% lift.</div></div>';
+    } else {
+        echo '<div class="card"><div class="h2">Result</div><div class="empty">Save a scenario to keep its funnel here and compare it with others.</div></div>';
+    }
+    echo '</div>';
+    echo '<div class="card"><div class="h2">Saved scenarios</div>';
+    echo '<div class="scrollX"><table class="table"><thead><tr><th>Name</th><th>List · channel</th><th class="right">Reach</th><th class="right">Conv.</th><th class="right">Net</th><th class="right">ROI</th><th></th></tr></thead><tbody>';
+    foreach ($campaigns as $c) {
+        $a = safe_json((string)($c['assumptions'] ?? '{}'));
+        $a = is_array($a) ? $a : [];
+        $net = isset($a['net_revenue']) ? (float)$a['net_revenue'] : (float)($c['projected_revenue'] ?? 0);
+        $roi = isset($a['roi']) && $a['roi'] !== null ? (float)$a['roi'] : ((float)($a['estimated_cost'] ?? 0) > 0 ? $net / (float)$a['estimated_cost'] : null);
+        $ch = (string)($a['channel'] ?? '');
+        echo '<tr><td><a class="link" href="' . h(self_url(['tab' => 'campaigns', 'view' => (string)$c['id']])) . '">' . h((string)$c['name']) . '</a><div class="muted tiny">' . h((string)$c['created_at']) . '</div></td><td class="muted">' . h((string)($c['segment_name'] ?? '—')) . ($ch !== '' ? ' · ' . h(campaign_channels()[$ch] ?? $ch) : '') . '</td>';
+        echo '<td class="right">' . h(number_format((int)($a['reachable'] ?? $a['contacts'] ?? 0))) . '</td><td class="right">' . h(number_format((float)($a['expected_conversions'] ?? 0), 1)) . '</td><td class="right' . ($net < 0 ? ' neg' : '') . '">' . h(money_whole($net)) . '</td><td class="right">' . h($roi === null ? '—' : round($roi * 100) . '%') . '</td>';
+        echo '<td><form method="post" class="inline" data-confirm="Delete this scenario?">' . csrf_field() . '<input type="hidden" name="action" value="campaign_delete"><input type="hidden" name="id" value="' . h((string)$c['id']) . '"><button class="linkBtn" type="submit">Delete</button></form></td></tr>';
+    }
+    if (!$campaigns) {
+        echo '<tr><td colspan="7" class="muted">No scenarios yet.</td></tr>';
+    }
+    echo '</tbody></table></div>';
+
+    echo '</div>';
+}
+
+function handle_campaign_save(PDO $pdo, array $user): void
+{
+    $name = trim((string)($_POST['name'] ?? ''));
+    $segmentId = (int)($_POST['segment_id'] ?? 0);
+    $channel = (string)($_POST['channel'] ?? 'email');
+    if (!array_key_exists($channel, campaign_channels())) {
+        $channel = 'email';
+    }
+    $rate = max(0.0, min(1.0, (float)($_POST['cross_sell_rate'] ?? 0)));
+    $avg = max(0.0, (float)($_POST['avg_offer_value'] ?? 0));
+    $cost = max(0.0, (float)($_POST['campaign_cost_per_contact'] ?? 0));
+    $lift = max(0.0, (float)($_POST['conversion_lift'] ?? 0));
+    if ($name === '' || $segmentId <= 0) {
+        flash('error', 'Campaign name and list are required.');
+        redirect_to(['tab' => 'campaigns']);
+    }
+    $st = $pdo->prepare('SELECT * FROM segments WHERE id = ?');
+    $st->execute([$segmentId]);
+    $seg = $st->fetch();
+    if (!$seg) {
+        flash('error', 'List not found.');
+        redirect_to(['tab' => 'campaigns']);
+    }
+    [$ruleIds, $where] = segment_criteria($seg);
+    try {
+        $stats = segment_stats($pdo, $ruleIds, $where);
+    } catch (Throwable $e) {
+        flash('error', 'That list has an invalid filter. Edit it under Lists.');
+        redirect_to(['tab' => 'campaigns']);
+    }
+    $model = campaign_model((int)$stats['count'], (int)$stats[$channel], $rate, $avg, $cost, $lift);
+    $assumptions = ['channel' => $channel, 'cross_sell_rate' => $rate, 'avg_offer_value' => $avg, 'campaign_cost_per_contact' => $cost, 'conversion_lift' => $lift] + $model;
+    $ins = $pdo->prepare('INSERT INTO campaigns (name, segment_id, assumptions, projected_revenue, created_at) VALUES (?, ?, ?, ?, ?)');
+    $ins->execute([$name, $segmentId, json_encode($assumptions, JSON_UNESCAPED_SLASHES), $model['gross_revenue'], now_iso()]);
+    $newId = (int)$pdo->lastInsertId();
+    audit($pdo, (int)$user['id'], 'campaigns.simulate', ['id' => $newId, 'segment_id' => $segmentId, 'channel' => $channel, 'projected_revenue' => $model['gross_revenue'], 'net_revenue' => $model['net_revenue']]);
+    flash('success', 'Scenario saved. Net revenue: ' . currency_symbol() . number_format($model['net_revenue'], 2) . ' from ' . $model['reachable'] . ' reachable contacts.');
+    redirect_to(['tab' => 'campaigns', 'view' => (string)$newId]);
+}
+
+function handle_campaign_delete(PDO $pdo, array $user): void
+{
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id > 0) {
+        $pdo->prepare('DELETE FROM campaigns WHERE id = ?')->execute([$id]);
+        audit($pdo, (int)$user['id'], 'campaigns.delete', ['id' => $id]);
+        flash('success', 'Scenario deleted.');
+    }
+    redirect_to(['tab' => 'campaigns', 'view' => null]);
+}
+
+function render_tab_settings(PDO $pdo): void
+{
+    $users = (int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
+    $rules = (int)$pdo->query('SELECT COUNT(*) FROM rules')->fetchColumn();
+    $segs = (int)$pdo->query('SELECT COUNT(*) FROM segments')->fetchColumn();
+    $pol = (int)$pdo->query('SELECT COUNT(*) FROM policyholders')->fetchColumn();
+    $a = ltv_assumptions();
+
+    echo '<div class="grid2">';
+    echo '<div class="card"><div class="h2">Workspace</div>';
+    echo '<form method="post" class="form">' . csrf_field() . '<input type="hidden" name="action" value="settings_save"><input type="hidden" name="section" value="workspace">';
+    echo '<div class="grid2"><div><label class="label" for="sCur">Currency symbol</label><input class="input" id="sCur" name="currency_symbol" maxlength="4" value="' . h(currency_symbol()) . '"></div>';
+    echo '<div><label class="label" for="sPer">Premium amounts are</label><select class="select" id="sPer" name="premium_period"><option value="monthly"' . ($a['premium_period'] === 'monthly' ? ' selected' : '') . '>Monthly</option><option value="annual"' . ($a['premium_period'] === 'annual' ? ' selected' : '') . '>Annual</option></select></div></div>';
+    echo '<label class="label" for="sTerm">Terminology</label><select class="select" id="sTerm" name="terminology">';
+    foreach (terminology_packs() as $k => $p) {
+        echo '<option value="' . h($k) . '"' . (setting('terminology', 'agency') === $k ? ' selected' : '') . '>' . h($p['label'] . ' — ' . $p['clients'] . ', ' . $p['policy_type'] . ', ' . $p['sum_assured']) . '</option>';
+    }
+    echo '</select><div><button class="btn" type="submit">Save workspace</button></div></form></div>';
+
+    echo '<div class="card"><div class="h2">Lifetime value assumptions</div><div class="muted">LTV = monthly premium × (relationship months − tenure) × cross-sell multiplier × retention.</div>';
+    echo '<form method="post" class="form">' . csrf_field() . '<input type="hidden" name="action" value="settings_save"><input type="hidden" name="section" value="ltv">';
+    echo '<div class="grid3"><div><label class="label" for="sMonths">Relationship (months)</label><input class="input" id="sMonths" name="ltv_term_months" type="number" min="1" max="600" value="' . h((string)$a['term_months']) . '"></div>';
+    echo '<div><label class="label" for="sRet">Retention</label><input class="input" id="sRet" name="ltv_retention" type="number" step="0.01" min="0" max="1" value="' . h((string)$a['retention']) . '"></div>';
+    echo '<div><label class="label" for="sMult">Default multiplier</label><input class="input" id="sMult" name="ltv_cross_sell_default" type="number" step="0.01" min="0" max="5" value="' . h((string)$a['default_multiplier']) . '"></div></div>';
+    $mults = [];
+    foreach (CROSS_SELL_MULTIPLIER_BY_POLICY_TYPE as $t => $m) {
+        $mults[] = $t . ' ' . number_format((float)$m, 2);
+    }
+    echo '<div class="muted tiny">Per-type multipliers (edit in the file header): ' . h(implode(' · ', $mults)) . '.</div>';
+    echo '<label class="check"><input type="checkbox" name="recompute" value="1" checked> Recompute every policy after saving</label>';
+    echo '<div><button class="btn" type="submit">Save assumptions</button></div></form></div>';
+    echo '</div>';
+
+    echo '<div class="grid2">';
+    echo '<div class="card"><div class="h2">Consent &amp; outreach</div>';
+    echo '<form method="post" class="form">' . csrf_field() . '<input type="hidden" name="action" value="settings_save"><input type="hidden" name="section" value="consent">';
+    echo '<label class="check"><input type="checkbox" name="consent_required_for_exports" value="1"' . (setting('consent_required_for_exports', '1') === '1' ? ' checked' : '') . '> List exports must be filtered by channel consent (opt-outs are always excluded)</label>';
+    echo '<label class="label" for="sCad">Renewal touchpoints (days before expiry)</label><input class="input" id="sCad" name="renewal_cadence" maxlength="60" value="' . h(implode(',', renewal_cadence())) . '">';
+    echo '<div class="muted tiny">Used for “next touch” on Today and Renewals. Default 120, 90, 75, 45, 30, 15. Not legal advice — confirm consent rules for your market (e.g. TCPA in the US) with counsel.</div>';
+    echo '<div><button class="btn" type="submit">Save consent policy</button></div></form>';
+    $opted = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE opt_out_at IS NOT NULL AND opt_out_at <> ''")->fetchColumn();
+    echo '<div class="divider"></div><div class="h3">Suppression list</div><div class="muted">Paste emails, phone numbers or policy numbers — one per line. Matches are opted out of all channels. Currently opted out: ' . h(number_format($opted)) . '.</div>';
+    echo '<form method="post" class="form" data-confirm="Opt out every matching record?">' . csrf_field() . '<input type="hidden" name="action" value="suppression_apply"><textarea class="textarea" name="suppression" rows="5" maxlength="200000" placeholder="jane@example.com&#10;+1 555 010 0142&#10;P-3017" aria-label="Suppression list"></textarea><div><button class="btnSecondary" type="submit">Apply opt-outs</button></div></form>';
+    echo '</div>';
+
+    echo '<div class="card"><div class="h2">Data inventory</div><div class="muted">What personal data this install holds, for privacy requests and audits.</div>';
+    $inv = $pdo->query("SELECT SUM(name IS NOT NULL AND name <> '' AND name <> policy_number) AS names, SUM(dob IS NOT NULL AND dob <> '') AS dobs, SUM(gender IS NOT NULL AND gender <> '') AS genders, SUM(email IS NOT NULL AND email <> '') AS emails, SUM(phone IS NOT NULL AND phone <> '') AS phones FROM policyholders")->fetch() ?: [];
+    $customN = (int)$pdo->query('SELECT COUNT(*) FROM custom_field_defs WHERE enabled = 1')->fetchColumn();
+    $contactN = (int)$pdo->query('SELECT COUNT(*) FROM contact_log')->fetchColumn();
+    $auditN = (int)$pdo->query('SELECT COUNT(*) FROM audit_log')->fetchColumn();
+    $dbSize = is_file(db_path()) ? (int)filesize(db_path()) : 0;
+    $staged = 0;
+    if (is_dir(upload_dir())) {
+        $staged = count(glob(upload_dir() . DIRECTORY_SEPARATOR . '*.csv') ?: []);
+    }
+    echo '<table class="table compact"><tbody>';
+    foreach ([['Names', $inv['names'] ?? 0, 'Identify the ' . strtolower(lbl('client'))], ['Dates of birth', $inv['dobs'] ?? 0, 'Age for scoring'], ['Gender', $inv['genders'] ?? 0, 'Optional scoring input'], ['Email addresses', $inv['emails'] ?? 0, 'Consent-filtered outreach'], ['Phone numbers', $inv['phones'] ?? 0, 'Consent-filtered outreach'], ['Custom CSV fields', $customN, 'Preserved from imports'], ['Contact log entries', $contactN, 'Renewal history'], ['Audit events', $auditN, 'Who did what, when']] as [$l, $n, $why]) {
+        echo '<tr><td>' . h($l) . '</td><td class="right">' . h(number_format((int)$n)) . '</td><td class="muted">' . h($why) . '</td></tr>';
+    }
+    echo '<tr><td>Database file</td><td class="right">' . h(number_format($dbSize / 1024, 0)) . ' KB</td><td class="muted"><code>' . h(basename(db_path())) . '</code></td></tr>';
+    echo '<tr><td>Staged CSV uploads</td><td class="right">' . h((string)$staged) . '</td><td class="muted">Delete old files from <code>' . h(basename(upload_dir())) . '/</code> after importing</td></tr>';
+    echo '</tbody></table></div>';
+    echo '</div>';
+
+    echo '<div class="grid2">';
+    echo '<div class="card"><div class="cardHead"><div class="h2">Audit log</div><form method="post">' . csrf_field() . '<input type="hidden" name="action" value="audit_export"><button class="btnSecondary btnSm" type="submit">Export CSV</button></form></div>';
+    $audit = $pdo->query('SELECT a.ts, a.action, u.email AS user_email FROM audit_log a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.ts DESC, a.id DESC LIMIT 12')->fetchAll();
+    echo '<table class="table compact"><thead><tr><th>Time</th><th>Action</th><th>User</th></tr></thead><tbody>';
+    foreach ($audit as $r) {
+        echo '<tr><td class="muted">' . h((string)$r['ts']) . '</td><td class="mono">' . h((string)$r['action']) . '</td><td>' . h((string)($r['user_email'] ?? 'system')) . '</td></tr>';
+    }
+    if (!$audit) {
+        echo '<tr><td colspan="3" class="muted">No events yet.</td></tr>';
+    }
+    echo '</tbody></table></div>';
+
+    echo '<div class="card"><div class="h2">App config (read-only)</div>';
+    echo '<table class="table compact"><tbody>';
+    echo '<tr><td>DB path</td><td class="muted"><code>' . h(db_path()) . '</code></td></tr>';
+    echo '<tr><td>Upload dir</td><td class="muted"><code>' . h(upload_dir()) . '</code></td></tr>';
+    echo '<tr><td>Session timeout</td><td class="muted">' . h((string)SESSION_TIMEOUT_SECONDS) . ' seconds</td></tr>';
+    echo '<tr><td>Accent</td><td class="muted"><span class="swatch"></span> ' . h(ACCENT_COLOR) . '</td></tr>';
+    echo '<tr><td>PHP</td><td class="muted">' . h(PHP_VERSION) . '</td></tr>';
+    echo '</tbody></table>';
+    echo '<div class="kpiGrid">' . kpi('Users', (string)$users) . kpi('Policyholders', (string)$pol) . kpi('Rules', (string)$rules) . kpi('Segments', (string)$segs) . '</div>';
+    echo '<form method="post" class="inline">' . csrf_field() . '<button class="btnSecondary" type="submit" name="action" value="recompute_now">Recompute LTV + risk tiers</button></form>';
+    echo '<div class="muted tiny">Use this after changing rules. Cron is recommended for scheduled runs (it also keeps “days to expiry” rules current).</div>';
+    echo '<div class="divider"></div><div class="h3">Cron</div><div class="muted">Recommended cPanel cron (daily):</div>';
+    echo '<pre class="codeBlock">php /home/USER/public_html/liteinsurance.php action=cron_jobs cron_token=YOUR_TOKEN</pre>';
+    echo '<div class="muted tiny">If <code>CRON_TOKEN</code> is blank, cron runs only via CLI.</div>';
+    echo '</div>';
+    echo '</div>';
+
+    echo '<div class="card"><div class="h2">Setup doctor</div><div class="muted">Checks the self-hosted PHP workflow: PHP, PDO SQLite, DB path, upload path, upload limits, .env, CRON_TOKEN, and cron readiness.</div>';
+    echo render_setup_doctor_table(setup_doctor_report());
+    echo '</div>';
+}
+
+function handle_settings_save(PDO $pdo, array $user): void
+{
+    $section = (string)($_POST['section'] ?? '');
+    $changed = [];
+    if ($section === 'workspace') {
+        $cur = trim((string)($_POST['currency_symbol'] ?? ''));
+        if (mb_strlen($cur) <= 4) {
+            setting_set($pdo, 'currency_symbol', $cur);
+            $changed[] = 'currency_symbol';
+        }
+        $term = (string)($_POST['terminology'] ?? '');
+        if (isset(terminology_packs()[$term])) {
+            setting_set($pdo, 'terminology', $term);
+            $changed[] = 'terminology';
+        }
+        $per = (string)($_POST['premium_period'] ?? '');
+        if (in_array($per, ['monthly', 'annual'], true)) {
+            setting_set($pdo, 'premium_period', $per);
+            $changed[] = 'premium_period';
+        }
+    } elseif ($section === 'ltv') {
+        $months = (int)($_POST['ltv_term_months'] ?? 0);
+        $ret = (float)($_POST['ltv_retention'] ?? -1);
+        $mult = (float)($_POST['ltv_cross_sell_default'] ?? -1);
+        if ($months < 1 || $months > 600 || $ret < 0 || $ret > 1 || $mult < 0 || $mult > 5) {
+            flash('error', 'Months 1–600, retention 0–1, multiplier 0–5.');
+            redirect_to(['tab' => 'settings']);
+        }
+        setting_set($pdo, 'ltv_term_months', (string)$months);
+        setting_set($pdo, 'ltv_retention', (string)$ret);
+        setting_set($pdo, 'ltv_cross_sell_default', (string)$mult);
+        $changed = ['ltv_term_months', 'ltv_retention', 'ltv_cross_sell_default'];
+    } elseif ($section === 'consent') {
+        setting_set($pdo, 'consent_required_for_exports', (string)($_POST['consent_required_for_exports'] ?? '') === '1' ? '1' : '0');
+        $cad = [];
+        foreach (explode(',', (string)($_POST['renewal_cadence'] ?? '')) as $p) {
+            $n = (int)trim($p);
+            if ($n > 0 && $n <= 365) {
+                $cad[$n] = $n;
+            }
+        }
+        rsort($cad);
+        if ($cad) {
+            setting_set($pdo, 'renewal_cadence', implode(',', array_slice($cad, 0, 8)));
+        }
+        $changed = ['consent_required_for_exports', 'renewal_cadence'];
+    }
+    audit($pdo, (int)$user['id'], 'settings.save', ['section' => $section, 'keys' => $changed]);
+    if ($section === 'ltv' && (string)($_POST['recompute'] ?? '') === '1') {
+        $n = recompute_all_policyholders($pdo);
+        flash('success', 'Assumptions saved. Recomputed ' . $n . ' policies.');
+    } else {
+        flash('success', 'Settings saved.');
+    }
+    redirect_to(['tab' => 'settings']);
+}
+
+function handle_suppression_apply(PDO $pdo, array $user): void
+{
+    $lines = preg_split('/[\r\n,;]+/', (string)($_POST['suppression'] ?? '')) ?: [];
+    $emails = [];
+    $phones = [];
+    $policies = [];
+    foreach ($lines as $line) {
+        $v = trim($line);
+        if ($v === '') {
+            continue;
+        }
+        if (str_contains($v, '@')) {
+            $e = normalize_email($v);
+            if ($e !== '') {
+                $emails[$e] = true;
+            }
+            continue;
+        }
+        $digits = phone_key($v);
+        if (strlen($digits) >= 7 && preg_match('/^[\d\s()+.\-]+$/', $v)) {
+            $phones[$digits] = true;
+        }
+        $policies[$v] = true;
+    }
+    $now = now_iso();
+    $count = 0;
+    $upd = $pdo->prepare("UPDATE policyholders SET opt_out_at = COALESCE(NULLIF(opt_out_at, ''), ?), consent_email = 0, consent_sms = 0, consent_phone = 0, updated_at = ? WHERE id = ?");
+    $pdo->beginTransaction();
+    $offset = 0;
+    while (true) {
+        $st = $pdo->prepare('SELECT id, policy_number, email, phone FROM policyholders WHERE id > ? ORDER BY id ASC LIMIT 1000');
+        $st->execute([$offset]);
+        $rows = $st->fetchAll();
+        if (!$rows) {
+            break;
+        }
+        foreach ($rows as $r) {
+            $offset = (int)$r['id'];
+            $hit = isset($policies[(string)$r['policy_number']])
+                || ((string)$r['email'] !== '' && isset($emails[strtolower((string)$r['email'])]))
+                || ((string)$r['phone'] !== '' && isset($phones[phone_key((string)$r['phone'])]));
+            if ($hit) {
+                $upd->execute([$now, $now, (int)$r['id']]);
+                $count++;
+            }
+        }
+    }
+    $pdo->commit();
+    audit($pdo, (int)$user['id'], 'consent.suppression', ['entries' => count($emails) + count($phones) + count($policies), 'matched' => $count]);
+    flash('success', 'Suppression applied: ' . $count . ' record(s) opted out from ' . (count($emails) + count($phones) + count($policies)) . ' entries.');
+    redirect_to(['tab' => 'settings']);
+}
+
+function handle_audit_export(PDO $pdo, array $user): void
+{
+    audit($pdo, (int)$user['id'], 'audit.export', []);
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="liteinsurance_audit_' . gmdate('Ymd') . '.csv"');
+    $out = fopen('php://output', 'wb');
+    fputcsv($out, ['id', 'ts', 'user', 'action', 'payload']);
+    $offset = 0;
+    while (true) {
+        $st = $pdo->prepare('SELECT a.id, a.ts, a.action, a.payload, u.email AS user_email FROM audit_log a LEFT JOIN users u ON u.id = a.user_id WHERE a.id > ? ORDER BY a.id ASC LIMIT 1000');
+        $st->execute([$offset]);
+        $rows = $st->fetchAll();
+        if (!$rows) {
+            break;
+        }
+        foreach ($rows as $r) {
+            $offset = (int)$r['id'];
+            fputcsv($out, [(string)$r['id'], (string)$r['ts'], (string)($r['user_email'] ?? 'system'), (string)$r['action'], (string)$r['payload']]);
+        }
+    }
+    fclose($out);
+}
+
+function handle_checklist_dismiss(PDO $pdo, array $user): void
+{
+    setting_set($pdo, 'checklist_dismissed', '1');
+    audit($pdo, (int)$user['id'], 'settings.checklist_dismiss', []);
+    redirect_to(['tab' => 'dashboard']);
+}
+
+function recompute_all_policyholders(PDO $pdo): int
+{
     $rules = load_rules($pdo);
     $updated = 0;
     $offsetId = 0;
-    $pdo->beginTransaction();
     $upd = $pdo->prepare('UPDATE policyholders SET ltv_estimate = ?, risk_tier = ?, confidence_score = ?, metadata = ? WHERE id = ?');
+    $pdo->beginTransaction();
     while (true) {
         $st = $pdo->prepare('SELECT * FROM policyholders WHERE id > ? ORDER BY id ASC LIMIT 300');
         $st->execute([$offsetId]);
@@ -3940,44 +5862,529 @@ function handle_recompute_now(PDO $pdo, array $user): void
             break;
         }
         foreach ($rows as $ph) {
-            $rec = policyholder_record_from_row($ph);
-            $meta = safe_json((string)($ph['metadata'] ?? '{}'));
-            if (!is_array($meta)) {
-                $meta = [];
-            }
-            $metadata = $meta;
-            $imputed = is_array($meta['imputed_fields'] ?? null) ? (array)$meta['imputed_fields'] : [];
-            $score = compute_confidence($rec, $imputed);
-            $riskOut = evaluate_rules_for_record($rec, $rules);
-            $ruleHits = (array)($riskOut['rule_hits'] ?? []);
-            $score = min(100, (int)round($score + min(20, count($ruleHits) * 4)));
-            $ltv = compute_ltv($rec);
-            $newMeta = ['imputed_fields' => $imputed, 'rule_hits' => $ruleHits, 'tags' => (array)($riskOut['tags'] ?? [])];
+            $offsetId = (int)$ph['id'];
+            $metadata = safe_json((string)($ph['metadata'] ?? '{}'));
+            $metadata = is_array($metadata) ? $metadata : [];
+            $imputed = is_array($metadata['imputed_fields'] ?? null) ? (array)$metadata['imputed_fields'] : [];
+            $s = score_policy_record(policyholder_record_from_row($ph), $imputed, $rules);
+            $newMeta = ['imputed_fields' => $imputed, 'rule_hits' => $s['rule_hits'], 'tags' => $s['tags'], 'tier_rule_id' => $s['tier_rule_id']];
             if (isset($metadata['custom_fields']) && is_array($metadata['custom_fields'])) {
                 $newMeta['custom_fields'] = $metadata['custom_fields'];
             }
-            $upd->execute([$ltv, (string)($riskOut['risk_tier'] ?? 'Unknown'), $score, json_encode($newMeta, JSON_UNESCAPED_SLASHES), (int)$ph['id']]);
+            $upd->execute([$s['ltv'], $s['risk_tier'], $s['confidence'], json_encode($newMeta, JSON_UNESCAPED_SLASHES), (int)$ph['id']]);
             $updated++;
-            $offsetId = (int)$ph['id'];
+            if (($updated % 300) === 0) {
+                $pdo->commit();
+                $pdo->beginTransaction();
+            }
         }
-        if (($updated % 300) === 0) {
+    }
+    $pdo->commit();
+    return $updated;
+}
+
+function render_import_mapping(PDO $pdo, array $stage): void
+{
+    $headers = array_values(array_filter(array_map(fn($x) => trim(strip_bom((string)$x)), (array)$stage['headers']), fn($x) => $x !== ''));
+    $filename = (string)($stage['filename'] ?? 'upload.csv');
+    $saved = is_array($stage['mapping'] ?? null) ? (array)$stage['mapping'] : null;
+    $defaults = $saved ?? guess_import_mapping($headers);
+    $fields = import_field_labels();
+    $groups = [
+        'Who and what' => ['record_id', 'display_name', 'household_id', 'policy_type', 'line_of_business', 'carrier', 'producer', 'status'],
+        'Money and dates' => ['premium_amount', 'sum_assured', 'tenure_months', 'effective_date', 'expiration_date'],
+        'Contact and consent' => ['email', 'phone', 'consent_email', 'consent_sms', 'consent_phone'],
+        'Profile' => ['dob', 'age', 'gender', 'region'],
+    ];
+    $ams = recognised_ams_columns($headers);
+
+    echo '<div class="card"><div class="cardHead"><div><div class="h2">Map columns</div><div class="muted">Staged file: <strong>' . h($filename) . '</strong> · ' . h((string)count($headers)) . ' columns. Unmapped CSV columns are preserved as typed custom fields in <code>metadata.custom_fields</code>.</div></div>';
+    if ($ams >= 3) {
+        echo '<span class="note">Recognised ' . h((string)$ams) . ' agency-system column names — mapping pre-filled.</span>';
+    }
+    echo '</div>';
+    echo '<form method="post" class="form">' . csrf_field() . '<input type="hidden" name="action" value="import_preview">';
+    foreach ($groups as $title => $keys) {
+        echo '<div class="mapSection"><div class="label">' . h($title) . '</div><div class="gridMap">';
+        foreach ($keys as $key) {
+            $label = (string)($fields[$key] ?? $key);
+            $current = (string)($defaults[$key] ?? '');
+            echo '<div class="mapRow"><label class="mapLabel" for="map_' . h($key) . '">' . h($label) . '</label><select class="select" id="map_' . h($key) . '" name="map[' . h($key) . ']">';
+            echo '<option value="">' . h($key === 'display_name' ? 'Default from Record ID' : 'Not provided') . '</option>';
+            if ($key === 'record_id') {
+                echo '<option value="__generate__"' . ($current === '' || $current === '__generate__' ? ' selected' : '') . '>Generate from row number</option>';
+            }
+            foreach ($headers as $hname) {
+                $sel = ($current === $hname) ? ' selected' : '';
+                echo '<option value="' . h($hname) . '"' . $sel . '>' . h($hname) . '</option>';
+            }
+            echo '</select></div>';
+        }
+        echo '</div></div>';
+    }
+    $period = setting('premium_period', 'monthly');
+    echo '<div class="grid3"><div><label class="label" for="premium_period">Premium amounts are</label><select class="select" id="premium_period" name="premium_period"><option value="monthly"' . ($period === 'monthly' ? ' selected' : '') . '>Monthly</option><option value="annual"' . ($period === 'annual' ? ' selected' : '') . '>Annual (divided by 12 for LTV)</option></select></div>';
+    echo '<div><label class="label">Default region</label><input class="input" name="defaults[region]" maxlength="80" value="' . h((string)($stage['defaults']['region'] ?? 'Unknown')) . '"></div>';
+    echo '<div><label class="label">Default policy type</label><input class="input" name="defaults[policy_type]" maxlength="80" value="' . h((string)($stage['defaults']['policy_type'] ?? 'term')) . '"></div></div>';
+    echo '<div class="muted tiny">Re-importing a later export updates matching Record IDs instead of duplicating them. Renewal stage, owner, contact history and opt-outs are kept.</div>';
+    echo '<div class="actionsRow"><button class="btn" type="submit">Preview import</button></div></form></div>';
+
+    if (isset($stage['preview']) && is_array($stage['preview'])) {
+        $stats = (array)($stage['preview']['stats'] ?? []);
+        $rows = (array)($stage['preview']['rows'] ?? []);
+        $total = (int)($stats['rows_total'] ?? 0);
+        $willUpdate = (int)($stats['will_update'] ?? 0);
+        echo '<div class="card"><div class="cardHead"><div><div class="h2">Preview</div><div class="muted">First ' . h((string)IMPORT_PREVIEW_ROWS) . ' rows after cleaning and imputation. Names are masked.</div></div></div>';
+        echo '<div class="kpiGrid">' . kpi('Rows detected', (string)$total) . kpi('New / updated', max(0, $total - $willUpdate) . ' / ' . $willUpdate) . kpi('Hard rejects (preview)', (string)($stats['hard_rejects_preview'] ?? 0)) . kpi('Mean premium', money_or_blank((float)($stats['mean_premium'] ?? 0))) . '</div>';
+        $cols = ['policy_number' => 'Record', 'name' => 'Name', 'policy_type' => 'Type', 'expiration_date' => 'Expires', 'status' => 'Status', 'household_id' => 'Household', 'contact' => 'Reachable by', 'premium_amount' => 'Premium', 'sum_assured' => 'Coverage', 'ltv_estimate' => 'LTV', 'risk_tier' => 'Tier', 'confidence_score' => 'Conf', 'is_imputed' => 'Imputed'];
+        $customCols = array_values(array_filter(array_slice(array_map(fn($d) => (string)($d['field_key'] ?? ''), (array)($stage['preview']['analysis']['custom_fields'] ?? [])), 0, 3)));
+        echo '<div class="scrollX"><table class="table"><thead><tr>';
+        foreach ($cols as $c => $label) {
+            echo '<th' . (in_array($c, ['premium_amount', 'sum_assured', 'ltv_estimate', 'confidence_score'], true) ? ' class="right"' : '') . '>' . h($label) . '</th>';
+        }
+        foreach ($customCols as $c) {
+            echo '<th>' . h('custom.' . $c) . '</th>';
+        }
+        echo '</tr></thead><tbody>';
+        foreach ($rows as $r) {
+            $low = (int)($r['confidence_score'] ?? 0) < 60;
+            echo '<tr class="' . ($low ? 'rowLow' : '') . '">';
+            foreach ($cols as $c => $label) {
+                $v = $r[$c] ?? '';
+                if (in_array($c, ['premium_amount', 'sum_assured', 'ltv_estimate'], true)) {
+                    echo '<td class="right">' . h(($v === '' || $v === null) ? '' : money_or_blank((float)$v)) . '</td>';
+                } elseif ($c === 'risk_tier') {
+                    echo '<td>' . tier_badge((string)$v) . '</td>';
+                } elseif ($c === 'is_imputed') {
+                    echo '<td>' . ((int)$v === 1 ? '<span class="badge">Yes</span>' : '<span class="badge mutedBadge">No</span>') . '</td>';
+                } else {
+                    echo '<td' . ($c === 'confidence_score' ? ' class="right"' : '') . '>' . h((string)$v) . '</td>';
+                }
+            }
+            $custom = is_array($r['custom_fields'] ?? null) ? (array)$r['custom_fields'] : [];
+            foreach ($customCols as $c) {
+                $v = $custom[$c] ?? '';
+                echo '<td>' . h(is_bool($v) ? ($v ? 'true' : 'false') : (string)$v) . '</td>';
+            }
+            echo '</tr>';
+        }
+        if (!$rows) {
+            echo '<tr><td colspan="' . h((string)(count($cols) + count($customCols))) . '" class="muted">No rows to preview.</td></tr>';
+        }
+        echo '</tbody></table></div>';
+        echo '<form method="post" class="actionsRow">' . csrf_field() . '<input type="hidden" name="action" value="import_commit"><button class="btn" type="submit">Confirm &amp; import ' . h((string)$total) . ' rows</button><span class="muted tiny">' . h((string)$willUpdate) . ' existing record(s) will be updated in place.</span></form>';
+        echo '</div>';
+    }
+}
+
+function handle_import_preview(PDO $pdo, array $user): void
+{
+    $stage = $_SESSION['import_stage'] ?? null;
+    if (!is_array($stage) || !isset($stage['path'], $stage['headers'])) {
+        flash('error', 'No staged import found.');
+        redirect_to(['tab' => 'import']);
+    }
+    $mapping = array_map('strval', (array)($_POST['map'] ?? []));
+    $defaults = (array)($_POST['defaults'] ?? []);
+    $period = (string)($_POST['premium_period'] ?? '');
+    if (in_array($period, ['monthly', 'annual'], true) && $period !== setting('premium_period', 'monthly')) {
+        setting_set($pdo, 'premium_period', $period);
+    }
+    $stage['mapping'] = $mapping;
+    $stage['defaults'] = ['region' => trim((string)($defaults['region'] ?? 'Unknown')), 'policy_type' => trim((string)($defaults['policy_type'] ?? 'term'))];
+    $analysis = analyze_csv((string)$stage['path'], (array)$stage['headers'], $mapping);
+    $preview = preview_csv((string)$stage['path'], (array)$stage['headers'], $mapping, $stage['defaults'], $analysis, $pdo);
+    $preview['stats']['will_update'] = import_existing_count($pdo, (string)$stage['path'], $mapping);
+    $stage['preview'] = $preview;
+    $_SESSION['import_stage'] = $stage;
+    audit($pdo, (int)$user['id'], 'import.preview', ['filename' => (string)($stage['filename'] ?? '')]);
+    flash('success', 'Preview generated.');
+    redirect_to(['tab' => 'import']);
+}
+
+function handle_import_commit(PDO $pdo, array $user): void
+{
+    $stage = $_SESSION['import_stage'] ?? null;
+    if (!is_array($stage) || !isset($stage['path'], $stage['headers'], $stage['mapping'], $stage['defaults'], $stage['preview']['analysis'])) {
+        flash('error', 'No import preview found.');
+        redirect_to(['tab' => 'import']);
+    }
+    $path = (string)$stage['path'];
+    if (!is_file($path)) {
+        flash('error', 'Staged CSV file is missing.');
+        redirect_to(['tab' => 'import']);
+    }
+    $filename = (string)($stage['filename'] ?? 'upload.csv');
+    $mapping = (array)$stage['mapping'];
+    $analysis = (array)$stage['preview']['analysis'];
+    $customDefs = is_array($analysis['custom_fields'] ?? null) ? (array)$analysis['custom_fields'] : [];
+    upsert_custom_field_defs($pdo, $customDefs);
+    $householdCounts = csv_household_counts($path, $mapping);
+
+    $pdo->beginTransaction();
+    $insImp = $pdo->prepare('INSERT INTO imports (filename, rows_total, rows_imported, errors_json, created_at) VALUES (?, ?, 0, ?, ?)');
+    $insImp->execute([$filename, (int)($analysis['rows_total'] ?? 0), json_encode([], JSON_UNESCAPED_SLASHES), now_iso()]);
+    $importId = (int)$pdo->lastInsertId();
+    $pdo->commit();
+
+    $rules = load_rules($pdo);
+    $fh = fopen($path, 'rb');
+    if (!$fh) {
+        flash('error', 'Could not read staged file.');
+        redirect_to(['tab' => 'import']);
+    }
+    $headers = fgetcsv($fh);
+    if (!$headers || !is_array($headers)) {
+        fclose($fh);
+        flash('error', 'Invalid CSV header.');
+        redirect_to(['tab' => 'import']);
+    }
+
+    // Columns that this file is allowed to overwrite on re-import (re-import = update, never duplicate).
+    $mappedCols = ['policy_number' => true];
+    foreach ($mapping as $field => $hname) {
+        if ((string)$hname !== '' && in_array((string)$field, core_import_field_keys(), true)) {
+            $mappedCols[storage_field_for_import((string)$field)] = true;
+        }
+    }
+    if (isset($mappedCols['dob'])) {
+        $mappedCols['age'] = true;
+    }
+    if (isset($mappedCols['line_of_business'])) {
+        $mappedCols['policy_type'] = true;
+    }
+    if (isset($mappedCols['effective_date'])) {
+        $mappedCols['expiration_date'] = true;
+    }
+
+    $rowsTotal = 0;
+    $rowsNew = 0;
+    $rowsUpdated = 0;
+    $errors = [];
+    $seen = [];
+    $cols = policy_storage_columns();
+    $derivedCols = ['ltv_estimate', 'risk_tier', 'is_imputed', 'confidence_score', 'metadata', 'created_at', 'updated_at'];
+    $ins = $pdo->prepare('INSERT INTO policyholders (' . implode(', ', array_merge($cols, $derivedCols)) . ') VALUES (' . implode(', ', array_fill(0, count($cols) + count($derivedCols), '?')) . ')');
+    $find = $pdo->prepare('SELECT id, premium_amount, expiration_date, metadata FROM policyholders WHERE policy_number = ? LIMIT 1');
+
+    $pdo->beginTransaction();
+    while (($row = fgetcsv($fh)) !== false) {
+        $rowsTotal++;
+        $rec = map_row($headers, $row, $mapping);
+        $imputed = [];
+        $validated = normalize_and_impute($rec, (array)$stage['defaults'], $analysis, $imputed, $rowsTotal, $filename);
+        $customFields = extract_custom_fields($headers, $row, $customDefs);
+        $validated['custom'] = $customFields;
+        $hard = validate_policyholder_hard($validated);
+        if ($hard !== null) {
+            if (count($errors) < 50) {
+                $errors[] = ['row' => $rowsTotal + 1, 'type' => 'hard', 'msg' => $hard];
+            }
+            continue;
+        }
+        $policyNumber = (string)$validated['policy_number'];
+        if (isset($seen[$policyNumber])) {
+            if (count($errors) < 50) {
+                $errors[] = ['row' => $rowsTotal + 1, 'type' => 'hard', 'msg' => 'Duplicate policy_number in CSV: ' . $policyNumber];
+            }
+            continue;
+        }
+        $seen[$policyNumber] = true;
+        $hid = (string)($validated['household_id'] ?? '');
+        if ($hid !== '') {
+            $validated['policies_in_household'] = max((int)($householdCounts[$hid] ?? 1), household_count($hid));
+        }
+        $scored = score_policy_record($validated, $imputed, $rules);
+        $values = policy_column_values($validated);
+        $now = now_iso();
+
+        $find->execute([$policyNumber]);
+        $existing = $find->fetch();
+        if ($existing) {
+            $oldMeta = safe_json((string)($existing['metadata'] ?? '{}'));
+            $oldMeta = is_array($oldMeta) ? $oldMeta : [];
+            $oldCustom = is_array($oldMeta['custom_fields'] ?? null) ? (array)$oldMeta['custom_fields'] : [];
+            $meta = $oldMeta;
+            $meta['imputed_fields'] = array_values($imputed);
+            $meta['rule_hits'] = $scored['rule_hits'];
+            $meta['tags'] = $scored['tags'];
+            $meta['tier_rule_id'] = $scored['tier_rule_id'];
+            $meta['custom_fields'] = array_merge($oldCustom, $customFields);
+            $set = [];
+            $args = [];
+            foreach ($values as $col => $val) {
+                if ($col === 'policy_number' || !isset($mappedCols[$col])) {
+                    continue;
+                }
+                if (in_array($col, ['consent_email', 'consent_sms', 'consent_phone'], true) && $val === null) {
+                    continue;
+                }
+                $set[] = $col . ' = ?';
+                $args[] = $val;
+            }
+            $oldPremium = $existing['premium_amount'] !== null ? (float)$existing['premium_amount'] : null;
+            if (isset($mappedCols['premium_amount']) && $oldPremium !== null && $values['premium_amount'] !== null && abs($oldPremium - (float)$values['premium_amount']) >= 0.01) {
+                $set[] = 'prior_premium = ?';
+                $args[] = $oldPremium;
+            }
+            $oldExp = (string)($existing['expiration_date'] ?? '');
+            if (isset($mappedCols['expiration_date']) && $oldExp !== '' && (string)$values['expiration_date'] !== '' && (string)$values['expiration_date'] > add_months_iso($oldExp, 1)) {
+                $set[] = 'renewal_status = NULL';
+            }
+            array_push($set, 'ltv_estimate = ?', 'risk_tier = ?', 'is_imputed = ?', 'confidence_score = ?', 'metadata = ?', 'updated_at = ?');
+            array_push($args, $scored['ltv'], $scored['risk_tier'], count($imputed) > 0 ? 1 : 0, $scored['confidence'], json_encode($meta, JSON_UNESCAPED_SLASHES), $now);
+            $args[] = (int)$existing['id'];
+            $pdo->prepare('UPDATE policyholders SET ' . implode(', ', $set) . ' WHERE id = ?')->execute($args);
+            $rowsUpdated++;
+        } else {
+            foreach (['consent_email', 'consent_sms', 'consent_phone'] as $c) {
+                $values[$c] = (int)($values[$c] ?? 0);
+            }
+            $meta = ['imputed_fields' => array_values($imputed), 'rule_hits' => $scored['rule_hits'], 'tags' => $scored['tags'], 'tier_rule_id' => $scored['tier_rule_id'], 'custom_fields' => $customFields];
+            $ins->execute(array_merge(array_values($values), [$scored['ltv'], $scored['risk_tier'], count($imputed) > 0 ? 1 : 0, $scored['confidence'], json_encode($meta, JSON_UNESCAPED_SLASHES), $now, $now]));
+            $rowsNew++;
+        }
+        if ((($rowsNew + $rowsUpdated) % IMPORT_COMMIT_EVERY_ROWS) === 0) {
             $pdo->commit();
             $pdo->beginTransaction();
         }
     }
     $pdo->commit();
-    audit($pdo, (int)$user['id'], 'cron.recompute', ['updated' => $updated]);
-    flash('success', 'Recompute completed. Updated policyholders: ' . $updated);
-    redirect_to(['tab' => 'settings']);
+    fclose($fh);
+
+    $upd = $pdo->prepare('UPDATE imports SET rows_total = ?, rows_imported = ?, rows_updated = ?, errors_json = ? WHERE id = ?');
+    $upd->execute([$rowsTotal, $rowsNew + $rowsUpdated, $rowsUpdated, json_encode($errors, JSON_UNESCAPED_SLASHES), $importId]);
+    if ($filename === 'liteinsurance_sample.csv' && ($rowsNew + $rowsUpdated) > 0) {
+        seed_sample_campaigns($pdo);
+    }
+    audit($pdo, (int)$user['id'], 'import.commit', ['filename' => $filename, 'rows_total' => $rowsTotal, 'rows_new' => $rowsNew, 'rows_updated' => $rowsUpdated, 'import_id' => $importId]);
+    $_SESSION['import_stage'] = null;
+    flash('success', 'Import completed: ' . $rowsNew . ' new, ' . $rowsUpdated . ' updated' . ($errors ? (', ' . count($errors) . ' skipped') : '') . '.');
+    redirect_to(['tab' => 'import']);
+}
+
+function normalize_and_impute(array $rec, array $defaults, array $analysis, array &$imputedFields, int $rowNumber = 0, string $filename = ''): array
+{
+    $out = [];
+    $out['policy_number'] = trim((string)($rec['policy_number'] ?? ''));
+    if ($out['policy_number'] === '') {
+        $seed = substr(sha1($filename !== '' ? $filename : 'import'), 0, 6);
+        $out['policy_number'] = 'AUTO-' . strtoupper($seed) . '-' . str_pad((string)max(1, $rowNumber), 6, '0', STR_PAD_LEFT);
+        $imputedFields[] = 'record_id';
+    }
+    $out['name'] = trim(preg_replace('/\s+/', ' ', (string)($rec['name'] ?? '')) ?? '');
+    if ($out['name'] === '') {
+        $out['name'] = $out['policy_number'];
+        $imputedFields[] = 'display_name';
+    }
+    $dobRaw = trim((string)($rec['dob'] ?? ''));
+    $out['dob'] = $dobRaw !== '' ? (parse_date_any($dobRaw) ?? $dobRaw) : '';
+    $out['gender'] = normalize_gender(trim((string)($rec['gender'] ?? '')));
+    $out['age'] = parse_int((string)($rec['age'] ?? ''));
+    if ($out['age'] === null && $out['dob'] !== '') {
+        $age = age_from_dob($out['dob']);
+        if ($age !== null) {
+            $out['age'] = $age; // derived from DOB, not imputed
+        }
+    }
+    $out['premium_amount'] = parse_number((string)($rec['premium_amount'] ?? ''));
+    $out['tenure_months'] = parse_int((string)($rec['tenure_months'] ?? ''));
+    $out['sum_assured'] = parse_number((string)($rec['sum_assured'] ?? ''));
+    $out['line_of_business'] = normalize_label_case((string)($rec['line_of_business'] ?? ''));
+    $out['policy_type'] = normalize_policy_type((string)($rec['policy_type'] ?? ''));
+    if ($out['policy_type'] === '' && $out['line_of_business'] !== '') {
+        $out['policy_type'] = policy_type_from_lob($out['line_of_business']);
+    }
+    $out['region'] = normalize_label_case((string)($rec['region'] ?? ''));
+    $out['status'] = normalize_policy_status((string)($rec['status'] ?? ''));
+    $out['carrier'] = normalize_label_case((string)($rec['carrier'] ?? ''));
+    $out['producer'] = trim(preg_replace('/\s+/', ' ', (string)($rec['producer'] ?? '')) ?? '');
+    $out['household_id'] = trim((string)($rec['household_id'] ?? ''));
+    $out['email'] = normalize_email((string)($rec['email'] ?? ''));
+    $out['phone'] = normalize_phone((string)($rec['phone'] ?? ''));
+    $out['consent_email'] = parse_bool_loose((string)($rec['consent_email'] ?? ''));
+    $out['consent_sms'] = parse_bool_loose((string)($rec['consent_sms'] ?? ''));
+    $out['consent_phone'] = parse_bool_loose((string)($rec['consent_phone'] ?? ''));
+    $out['effective_date'] = parse_date_any((string)($rec['effective_date'] ?? '')) ?? '';
+    $out['expiration_date'] = parse_date_any((string)($rec['expiration_date'] ?? '')) ?? '';
+    if ($out['expiration_date'] === '' && $out['effective_date'] !== '') {
+        $term = $out['policy_type'] === 'auto' ? 6 : 12;
+        $out['expiration_date'] = add_months_iso($out['effective_date'], $term);
+        if ($out['expiration_date'] !== '') {
+            $imputedFields[] = 'expiration_date';
+        }
+    }
+
+    if ($out['premium_amount'] === null && field_was_mapped($analysis, 'premium_amount')) {
+        $out['premium_amount'] = round((float)($analysis['means']['premium_amount'] ?? 0), 2);
+        $imputedFields[] = 'premium_amount';
+    }
+    if ($out['tenure_months'] === null && field_was_mapped($analysis, 'tenure_months')) {
+        $out['tenure_months'] = (int)round((float)($analysis['means']['tenure_months'] ?? 0));
+        $imputedFields[] = 'tenure_months';
+    }
+    if ($out['sum_assured'] === null && field_was_mapped($analysis, 'sum_assured') && (float)($analysis['means']['sum_assured'] ?? 0) > 0) {
+        $out['sum_assured'] = round((float)($analysis['means']['sum_assured'] ?? 0), 0);
+        $imputedFields[] = 'sum_assured';
+    }
+    if ($out['policy_type'] === '' && field_was_mapped($analysis, 'policy_type')) {
+        $mode = (string)($analysis['modes']['policy_type'] ?? '');
+        $out['policy_type'] = normalize_policy_type($mode !== '' ? $mode : (string)($defaults['policy_type'] ?? 'term'));
+        $imputedFields[] = 'policy_type';
+    }
+    if ($out['region'] === '' && field_was_mapped($analysis, 'region')) {
+        $mode = (string)($analysis['modes']['region'] ?? '');
+        $out['region'] = normalize_label_case($mode !== '' ? $mode : (string)($defaults['region'] ?? 'Unknown'));
+        $imputedFields[] = 'region';
+    }
+    if ($out['gender'] === '' && field_was_mapped($analysis, 'gender')) {
+        $mode = (string)($analysis['modes']['gender'] ?? '');
+        if ($mode !== '') {
+            $out['gender'] = normalize_gender($mode);
+            $imputedFields[] = 'gender';
+        }
+    }
+    return $out;
+}
+
+function policyholder_record_from_row(array $ph): array
+{
+    $meta = safe_json((string)($ph['metadata'] ?? '{}'));
+    if (!is_array($meta)) {
+        $meta = [];
+    }
+    $customFields = is_array($meta['custom_fields'] ?? null) ? (array)$meta['custom_fields'] : [];
+    $exp = (string)($ph['expiration_date'] ?? '');
+    $hid = (string)($ph['household_id'] ?? '');
+    return [
+        'policy_number' => (string)($ph['policy_number'] ?? ''),
+        'name' => (string)($ph['name'] ?? ''),
+        'dob' => (string)($ph['dob'] ?? ''),
+        'age' => (($ph['age'] ?? null) !== null) ? (int)$ph['age'] : null,
+        'gender' => (string)($ph['gender'] ?? ''),
+        'policy_type' => (string)($ph['policy_type'] ?? ''),
+        'region' => (string)($ph['region'] ?? ''),
+        'premium_amount' => (($ph['premium_amount'] ?? null) !== null) ? (float)$ph['premium_amount'] : null,
+        'tenure_months' => (($ph['tenure_months'] ?? null) !== null) ? (int)$ph['tenure_months'] : null,
+        'sum_assured' => (($ph['sum_assured'] ?? null) !== null) ? (float)$ph['sum_assured'] : null,
+        'ltv_estimate' => (($ph['ltv_estimate'] ?? null) !== null) ? (float)$ph['ltv_estimate'] : null,
+        'risk_tier' => (string)($ph['risk_tier'] ?? ''),
+        'confidence_score' => (int)($ph['confidence_score'] ?? 0),
+        'is_imputed' => (int)($ph['is_imputed'] ?? 0),
+        'effective_date' => (string)($ph['effective_date'] ?? ''),
+        'expiration_date' => $exp,
+        'days_to_expiry' => days_until($exp),
+        'status' => (string)($ph['status'] ?? ''),
+        'line_of_business' => (string)($ph['line_of_business'] ?? ''),
+        'carrier' => (string)($ph['carrier'] ?? ''),
+        'producer' => (string)($ph['producer'] ?? ''),
+        'household_id' => $hid,
+        'policies_in_household' => household_count($hid),
+        'email' => (string)($ph['email'] ?? ''),
+        'phone' => (string)($ph['phone'] ?? ''),
+        'consent_email' => (int)($ph['consent_email'] ?? 0),
+        'consent_sms' => (int)($ph['consent_sms'] ?? 0),
+        'consent_phone' => (int)($ph['consent_phone'] ?? 0),
+        'opted_out' => trim((string)($ph['opt_out_at'] ?? '')) !== '' ? 1 : 0,
+        'renewal_status' => (string)($ph['renewal_status'] ?? '') !== '' ? (string)$ph['renewal_status'] : 'not_started',
+        'renewal_owner' => (string)($ph['renewal_owner'] ?? ''),
+        'prior_premium' => (($ph['prior_premium'] ?? null) !== null) ? (float)$ph['prior_premium'] : null,
+        'custom' => $customFields,
+    ];
+}
+
+function load_rules(PDO $pdo): array
+{
+    // Highest priority first; the first rule that sets a tier wins (same outcome as the v1.0 "last writer in ascending order").
+    $rows = $pdo->query('SELECT id, name, conditions_json, actions_json, priority FROM rules WHERE enabled = 1 ORDER BY priority DESC, id DESC')->fetchAll();
+    $out = [];
+    foreach ($rows as $r) {
+        $out[] = ['id' => (int)$r['id'], 'name' => (string)$r['name'], 'priority' => (int)$r['priority'], 'conditions' => safe_json((string)$r['conditions_json']), 'actions' => safe_json((string)$r['actions_json'])];
+    }
+    return $out;
+}
+
+function evaluate_rules_for_record(array $record, array $rules): array
+{
+    $riskTier = 'Unknown';
+    $tierRuleId = 0;
+    $tierSet = false;
+    $tags = [];
+    $hits = [];
+    $scoreDelta = 0;
+    $stoppedAt = 0;
+    foreach ($rules as $rule) {
+        $conds = $rule['conditions'] ?? null;
+        $actions = $rule['actions'] ?? null;
+        if (!is_array($conds) || !is_array($actions)) {
+            continue;
+        }
+        if (!eval_conditions($record, $conds)) {
+            continue;
+        }
+        $hits[] = (int)($rule['id'] ?? 0);
+        if (!$tierSet && isset($actions['set_risk_tier']) && is_string($actions['set_risk_tier']) && $actions['set_risk_tier'] !== '') {
+            $riskTier = (string)$actions['set_risk_tier'];
+            $tierRuleId = (int)($rule['id'] ?? 0);
+            $tierSet = true;
+        }
+        if (isset($actions['score_delta'])) {
+            $scoreDelta += (int)$actions['score_delta'];
+        }
+        if (isset($actions['add_tag']) && is_string($actions['add_tag']) && $actions['add_tag'] !== '') {
+            $tags[] = (string)$actions['add_tag'];
+        }
+        if (!empty($actions['stop'])) {
+            $stoppedAt = (int)($rule['id'] ?? 0);
+            break;
+        }
+    }
+    $tags = array_values(array_unique($tags));
+    return ['risk_tier' => $riskTier, 'score_delta' => $scoreDelta, 'tags' => $tags, 'rule_hits' => $hits, 'tier_rule_id' => $tierRuleId, 'stopped_at' => $stoppedAt];
+}
+
+function value_for_rule_field(array $record, string $field)
+{
+    $field = trim($field);
+    if (str_starts_with($field, 'custom.')) {
+        $key = substr($field, 7);
+        $custom = is_array($record['custom'] ?? null) ? (array)$record['custom'] : [];
+        return $custom[$key] ?? null;
+    }
+    if (array_key_exists($field, $record)) {
+        return $record[$field];
+    }
+    if ($field === 'days_to_expiry') {
+        return days_until((string)($record['expiration_date'] ?? ''));
+    }
+    if ($field === 'policies_in_household') {
+        return household_count((string)($record['household_id'] ?? ''));
+    }
+    if ($field === 'opted_out') {
+        return 0;
+    }
+    if ($field === 'renewal_status') {
+        return 'not_started';
+    }
+    return null;
+}
+
+function compute_ltv(array $r): ?float
+{
+    $b = ltv_breakdown($r);
+    return $b === null ? null : (float)$b['ltv'];
 }
 
 /*
 Summary:
-- Risk tiers: rules run in priority order; matching rules can set risk_tier and add tags.
+- Risk tiers: rules run highest priority first; the first match that sets a tier wins, tags/score deltas accumulate, `stop` ends evaluation. Hits are stored so the Book panel can explain every tier.
+- Renewals: expiration dates drive Today/Renewals; cadence 120/90/75/45/30/15 days (Settings). Stage, owner and contact log live on each policy.
+- Consent: per-channel consent + opt-out; list exports and campaign reach only count consented, not-opted-out records.
+- Re-import: matching Record IDs are updated in place (premium change kept as prior_premium); workflow fields are preserved.
 - Missing data: numeric mean + categorical mode imputation; imputed fields tracked in metadata.
 - Confidence score: starts at 100, reduced for imputed/missing optional fields, boosted by rule hits.
 - LTV: premium * remaining_months * cross_sell_multiplier(policy_type) * retention_adjustment.
-- Segments: combine rule IDs (AND) + an optional validated WHERE-style filter.
+- Segments ("Lists"): plain-language builder compiles to the validated WHERE grammar (days_to_expiry, policies_in_household, consent fields, …) + optional rule IDs.
 - Campaign simulator: segment_size * rate * avg_offer_value * (1+lift) minus contact costs.
 */
 

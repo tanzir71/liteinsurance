@@ -2,7 +2,7 @@
 
 ## Deploy (shared hosting)
 1) Upload `liteinsurance.php` (and optionally `index.html`) into `public_html/`.
-2) In cPanel -> MultiPHP Manager, set PHP 8.0+ for your domain.
+2) In cPanel -> MultiPHP Manager, set PHP 8.1+ for your domain (8.3 recommended).
 3) Ensure PDO + SQLite are enabled (common on shared hosting).
 4) Permissions: `liteinsurance.php` = 0644, folders = 0755. The app needs to create:
    - `liteinsurance.db` (SQLite database)
@@ -10,9 +10,10 @@
    - `liteinsurance_uploads/` (CSV staging, created automatically)
 5) Visit `https://YOURDOMAIN/liteinsurance.php` and register the first user (becomes `admin`).
 6) Open Settings and review the setup doctor for PHP, PDO SQLite, DB path, upload path, upload limits, `.env`, and `CRON_TOKEN`.
-7) Import -> “Download sample CSV” -> Upload -> Map columns -> Preview -> Confirm & import.
+7) Import & health -> “Download sample CSV” -> Upload -> Map columns -> Preview -> Confirm & import.
+8) Settings -> set currency, terminology and whether premiums are monthly or annual.
 
-Real CSVs can use a mapped Record ID and optional Display name. Unmapped columns are preserved as custom fields and can be referenced later as `custom.field_key` in rules and segment filters.
+Real CSVs can use a mapped Record ID and optional Display name. Agency-system exports (Policy #, Effective/Expiration Date, Line of Business, Company, Agent/CSR, Customer ID, Primary Email/Phone) are recognised automatically. Re-import a newer export at any time: matching Record IDs are updated in place and renewal stage, owner, contact history and opt-outs are kept. Unmapped columns are preserved as custom fields and can be referenced later as `custom.field_key` in rules and segment filters.
 
 ## Optional: .env config (recommended)
 Create `public_html/.env` (not committed) based on `.env.example`.
@@ -24,7 +25,7 @@ Use cron to recompute LTV/risk tiers without long web requests:
 - Command (recommended):
   - `php /home/USER/public_html/liteinsurance.php action=cron_jobs cron_token=YOUR_TOKEN`
 - Schedule example:
-  - Every 15 minutes, or nightly depending on data volume.
+  - Daily at minimum (renewal windows and `days_to_expiry` rules move every day); every 15 minutes for busy books.
 
 ## Backups
 - Back up `liteinsurance.db` regularly (download via File Manager or cPanel backups).

@@ -2,7 +2,9 @@
 
 Self-hosted insurance operations dashboard for turning policyholder CSV exports into LTV estimates, risk tiers, segments, and campaign simulations.
 
-LiteInsurance is intentionally small: one PHP 8 file, SQLite persistence, no build step, and no vendor cloud by default.
+LiteInsurance is intentionally small: one PHP file (8.1+, 8.3 recommended), SQLite persistence, no build step, and no vendor cloud by default.
+
+v1.1 adds the day-to-day agency workflow on top: a renewal worklist and board, per-channel consent and opt-outs, re-imports that update in place, a plain-language list builder, and a "why" panel that explains every score.
 
 ## Try It
 
@@ -16,19 +18,21 @@ LiteInsurance is intentionally small: one PHP 8 file, SQLite persistence, no bui
 2. Visit `/liteinsurance.php` and register the first user. The first user becomes admin.
 3. Open `Settings` and review the setup doctor for PHP, SQLite, path, upload, and cron readiness.
 4. Open `Import`, choose `Load sample rules + data`, then preview and confirm the import.
-5. Explore Dashboard, Profiles, Rules, Segments, Campaigns, and Settings.
+5. Explore Today, Renewals, Book, Lists, Campaigns, Import & health, Scoring rules, and Settings.
 
 ## What It Does
 
 | Area | Capability |
 |---|---|
-| Import | CSV upload, Record ID mapping, custom CSV fields, preview, staged commit |
+| Import | CSV upload, Record ID mapping, AMS header recognition, custom CSV fields, preview, staged commit, re-import updates in place |
+| Renewals | Expiration worklist, stage board, owners, 120/90/75/45/30/15-day touchpoints, contact log, call list CSV, calendar (.ics) |
+| Consent | Per-channel consent and opt-outs, suppression paste, consent-filtered exports and campaign reach |
 | Data quality | Mean/mode imputation, imputed flags, confidence score |
 | LTV | Premium, remaining term, policy multiplier, retention adjustment |
-| Risk | Priority-ordered visual or JSON rules with a rule tester |
-| Segments | Rule IDs plus validated WHERE-style filters, including `custom.field_key` |
-| Campaigns | Cross-sell rate, offer value, contact cost, lift, net revenue |
-| Ops | Audit log, setup doctor, cron recompute, SQLite backup path |
+| Risk | Visual or JSON rules, highest priority first, optional `stop`, a rule tester, and a per-policy "why" panel |
+| Lists | Plain-language builder over validated WHERE-style filters, including `days_to_expiry`, `policies_in_household` and `custom.field_key` |
+| Campaigns | Channel reach, conversions, gross/net, ROI, break-even rate, saved scenarios |
+| Ops | Audit log + CSV export, data inventory, setup doctor, cron recompute, SQLite backup path |
 | Security | CSRF, CSP, sessions, rate limits, upload hardening, PII masking |
 
 ## Files
@@ -50,15 +54,27 @@ Optional `.env` keys:
 - `CRON_TOKEN`: recommended for web cron invocation
 - `DB_PATH`: move SQLite DB outside webroot when hosting allows
 - `UPLOAD_DIR`: move staged uploads outside webroot when hosting allows
+- `CURRENCY_SYMBOL`: default currency symbol (also editable in Settings)
+
+Currency, terminology, premium period (monthly/annual), LTV assumptions, consent policy and renewal cadence live in **Settings** and are stored in SQLite.
 
 ## Cron
 
-Use cPanel cron or shell cron to recompute LTV/risk tiers:
+Use cPanel cron or shell cron (daily) to recompute LTV, risk tiers and list sizes:
 
 ```sh
 php /home/USER/public_html/liteinsurance.php action=cron_jobs cron_token=YOUR_TOKEN
 ```
 
+## Tests
+
+```sh
+node test/commercial-readiness.test.mjs
+node test/hotfix-regression.test.mjs
+```
+
+Both need `php` on PATH; the regression test also boots `php -S` against a throwaway database.
+
 ## Privacy
 
-By default, UI lists mask names and the app keeps data in SQLite on your own server. Treat `liteinsurance.db`, `.env`, and staged uploads as sensitive files and back them up securely.
+By default, UI lists mask names, revealing personal details is audited, and the app keeps data in SQLite on your own server. Treat `liteinsurance.db`, `.env`, and staged uploads as sensitive files and back them up securely.

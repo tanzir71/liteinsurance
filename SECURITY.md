@@ -11,6 +11,10 @@
 - Upload hardening: `.csv` extension required, MIME checked (best-effort), randomized stored filenames, and uploads folder is denied via `.htaccess` + `index.html`.
 - Error handling: fatal errors/exceptions are logged server-side (JSON lines) to `liteinsurance_error.log`; stack traces are not shown to users.
 - Security headers: CSP (nonce-based), X-Frame-Options, X-Content-Type-Options, Referrer-Policy, COOP/CORP, and HSTS (HTTPS only).
+- v1.1: POST actions take precedence over query-string actions (fixes the register/login loop) and every state change is POST + CSRF; JSON endpoints (`segment_count`, `policy_cell_update`, `rule_test`) are admin-only.
+- v1.1: inline event handlers removed so the nonce CSP no longer has to be loosened; confirmations use `data-confirm`.
+- v1.1 privacy: names, emails and phones are masked in list views; revealing them on a policy is recorded as `pii.reveal` in the audit log. Exports (list CSV, call list, .ics, audit CSV) are audited and list exports are filtered by channel consent; opt-outs are always excluded from outreach exports.
+- v1.1 roles: non-admin users can work renewals (stage, owner, contact log, consent) and read the Book; import, rules, lists, campaigns, settings and inline edits stay admin-only.
 
 ## Rotating secrets / keys
 - `CRON_TOKEN` (recommended): set in `.env` and rotate if it may be exposed. Update your cPanel cron line to match.

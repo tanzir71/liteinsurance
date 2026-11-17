@@ -14,7 +14,7 @@
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="LiteInsurance -- Insurance LTV and Risk Segmentation">
   <meta name="twitter:description" content="A portable PHP + SQLite dashboard for insurance CSVs, custom fields, risk rules, LTV, segments, and campaign simulation.">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%230a0a0a'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='32' font-family='monospace' fill='%23f4f3ee'%3ELI%3C/text%3E%3C/svg%3E">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"%3E%3Cpath d="M8 3.5h11.5L26 10v9.8c0 4.6-4.1 7.8-10 9.7-5.9-1.9-10-5.1-10-9.7V5.5a2 2 0 012-2z" fill="%230B0D12"/%3E%3Cpath d="M19.5 3.5V8a2 2 0 002 2H26z" fill="%232540FF"/%3E%3Crect x="10.5" y="14" width="9" height="2.6" rx="1.3" fill="%23fff"/%3E%3Crect x="10.5" y="19" width="6" height="2.6" rx="1.3" fill="%23fff" fill-opacity=".55"/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -23,7 +23,7 @@
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     "name": "LiteInsurance",
-    "operatingSystem": "Any server running PHP 8+ with SQLite",
+    "operatingSystem": "Any server running PHP 8.1+ with SQLite",
     "applicationCategory": "BusinessApplication",
     "description": "Self-hosted PHP and SQLite insurance operations dashboard for policyholder CSV import, custom field preservation, missing-field imputation, LTV scoring, visual or JSON risk rules, segment exports, and campaign simulation.",
     "url": "https://tanzir71.github.io/liteinsurance/",
@@ -45,7 +45,7 @@
       {
         "@type": "Question",
         "name": "What do I need to run it?",
-        "acceptedAnswer": { "@type": "Answer", "text": "PHP 8 or newer with PDO SQLite enabled. It is designed for shared hosting and cPanel-style deployment." }
+        "acceptedAnswer": { "@type": "Answer", "text": "PHP 8.1 or newer (8.3 recommended) with PDO SQLite enabled. It is designed for shared hosting and cPanel-style deployment." }
       },
       {
         "@type": "Question",
@@ -55,214 +55,495 @@
       {
         "@type": "Question",
         "name": "Is it a full agency management system?",
-        "acceptedAnswer": { "@type": "Answer", "text": "No. LiteInsurance focuses on one slice: import, clean, score, segment, and simulate policyholder outreach from CSV data." }
+        "acceptedAnswer": { "@type": "Answer", "text": "No. LiteInsurance focuses on one slice: import, clean, score, work renewals, segment, and simulate policyholder outreach from CSV data." }
       }
     ]
   }
   </script>
   <style>
-    :root {
-      --bg: #f4f3ee;
-      --bg-alt: #ebe9e1;
-      --fg: #0a0a0a;
-      --muted: #6b6b66;
-      --muted-2: #8a877e;
-      --faint: #a8a59c;
-      --border: #cfcdc4;
-      --border-soft: #e3e1d8;
-      --panel: #fbfaf6;
-      --acc: #2540ff;
-      --acc-soft: #c8d0ff;
-      --dk-bg: #0c0d0e;
-      --dk-bg-2: #131416;
-      --dk-ink: #f4f3ee;
-      --dk-mute: #8e8f88;
-      --dk-rule: #232527;
-      --f-sans: "Inter", "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
-      --f-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
-    }
-    * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--fg);
-      font-family: var(--f-sans);
-      line-height: 1.5;
-      -webkit-font-smoothing: antialiased;
-      text-rendering: optimizeLegibility;
-    }
-    a { color: inherit; text-decoration: none; }
-    code, pre, .mono { font-family: var(--f-mono); }
-    .container { max-width: 1152px; margin: 0 auto; padding: 0 20px; }
-    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-    .skip:focus { position: fixed; left: 16px; top: 16px; z-index: 100; width: auto; height: auto; clip: auto; white-space: normal; border: 1px solid var(--fg); background: var(--bg); padding: 8px 12px; font-size: 14px; }
-    .eyebrow { display: inline-flex; align-items: center; gap: 12px; font-family: var(--f-mono); font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
-    .eyebrow::before { content: ""; width: 12px; height: 12px; background: var(--acc); flex: none; }
-    header { position: sticky; top: 0; z-index: 40; border-bottom: 1px solid var(--border); background: rgba(244, 243, 238, .92); backdrop-filter: blur(10px); }
-    header .container { max-width: 1152px; }
-    .header-inner { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-    .brand { display: inline-flex; align-items: center; gap: 12px; }
-    .logo { display: grid; place-items: center; width: 34px; height: 34px; background: var(--fg); color: var(--bg); font-family: var(--f-mono); font-size: 11px; letter-spacing: .05em; }
-    .brand-name { font-size: 14px; font-weight: 650; letter-spacing: -.02em; }
-    nav { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; font-size: 14px; }
-    .nav-link { display: inline-flex; height: 36px; align-items: center; padding: 0 10px; color: var(--muted); transition: background-color 120ms ease, color 120ms ease; }
-    .nav-link:hover { background: var(--bg-alt); color: var(--fg); }
-    .btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 18px; border: 1px solid var(--fg); background: transparent; color: var(--fg); font-size: 14px; font-weight: 600; font-family: var(--f-sans); transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease; }
-    .btn:hover { background: var(--fg); color: var(--bg); }
-    .header-inner .btn { min-height: 44px; padding: 0 18px; font-size: 14px; font-family: var(--f-sans); }
-    .btn-primary { background: var(--fg); color: var(--bg); }
-    .btn-primary:hover { background: var(--acc); border-color: var(--acc); color: #fff; }
-    .btn-dark { border-color: var(--dk-ink); color: var(--dk-ink); }
-    .btn-dark:hover { background: var(--dk-ink); color: var(--dk-bg); }
-    .hero { border-bottom: 1px solid var(--border); overflow: hidden; }
-    .hero-inner { padding: 86px 0 74px; }
-    .hero-grid { display: grid; grid-template-columns: 1fr; gap: 48px; align-items: start; }
-    @media (min-width: 980px) { .hero-grid { grid-template-columns: minmax(0, 11fr) minmax(0, 9fr); } }
-    h1 { margin: 22px 0 0; max-width: 720px; font-size: 44px; font-weight: 650; letter-spacing: -.035em; line-height: 1.02; text-wrap: balance; }
-    @media (min-width: 640px) { h1 { font-size: 62px; } }
-    .lead { margin: 20px 0 0; max-width: 590px; font-size: 17px; line-height: 1.7; color: var(--muted); text-wrap: pretty; }
-    .cta-row { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-    .stats { margin-top: 40px; display: grid; grid-template-columns: repeat(2, 1fr); border-top: 1px solid var(--border); }
-    @media (min-width: 640px) { .stats { grid-template-columns: repeat(4, 1fr); } }
-    .stat { padding: 18px 18px 14px; border-right: 1px solid var(--border-soft); }
-    .stat:first-child { padding-left: 0; }
-    .stat:last-child { border-right: 0; }
-    .stat .num { font-size: 24px; font-weight: 650; letter-spacing: -.03em; }
-    .stat .lbl { margin-top: 2px; font: 11px/1.4 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted-2); }
-    .snippet-card { border: 1px solid var(--fg); background: var(--dk-bg); color: var(--dk-ink); }
-    .snippet-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 14px; border-bottom: 1px solid var(--dk-rule); }
-    .snippet-title { color: var(--dk-mute); font: 11px/1.4 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; }
-    .snippet-body { margin: 0; padding: 18px 16px; color: var(--dk-ink); font: 13px/1.75 var(--f-mono); overflow-x: auto; white-space: pre; }
-    .snippet-body .a { color: #8fa3ff; }
-    .snippet-body .v { color: #c8d0ff; }
-    .snippet-body .c { color: #76776f; }
-    .section { padding: 72px 0; border-bottom: 1px solid var(--border); }
-    .section-head { margin-bottom: 32px; }
-    .idx { font: 12px/1.4 var(--f-mono); color: var(--faint); letter-spacing: .18em; text-transform: uppercase; }
-    h2 { margin: 10px 0 0; max-width: 760px; font-size: 28px; font-weight: 650; letter-spacing: -.03em; line-height: 1.1; text-wrap: balance; }
-    @media (min-width: 640px) { h2 { font-size: 34px; } }
-    .sub { margin: 10px 0 0; max-width: 620px; font-size: 15px; line-height: 1.65; color: var(--muted); }
-    .grid { display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); }
-    @media (min-width: 640px) { .grid-2 { grid-template-columns: repeat(2, 1fr); } }
-    @media (min-width: 980px) { .grid-3 { grid-template-columns: repeat(3, 1fr); } .grid-4 { grid-template-columns: repeat(4, 1fr); } }
-    .cell { background: var(--panel); padding: 20px; min-width: 0; }
-    .cell h3 { margin: 0; font-size: 14.5px; font-weight: 650; letter-spacing: -.01em; }
-    .cell p { margin: 8px 0 0; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
-    .cell .k { display: inline-block; margin-top: 12px; color: var(--acc); font: 11px/1.4 var(--f-mono); letter-spacing: .04em; }
-    .link { color: var(--fg); border-bottom: 1px solid var(--acc); font-weight: 600; }
-    .link:hover { color: var(--acc); }
-    .diagram-wrap { border: 1px solid var(--border); background: var(--panel); overflow-x: auto; }
-    .diagram-wrap svg { display: block; min-width: 860px; width: 100%; height: auto; }
-    .diagram-steps { display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); border-top: 0; }
-    @media (min-width: 640px) { .diagram-steps { grid-template-columns: repeat(4, 1fr); } }
-    .dstep { background: var(--panel); padding: 16px 20px; }
-    .dstep .n { font: 11px/1.4 var(--f-mono); color: var(--acc); letter-spacing: .18em; text-transform: uppercase; }
-    .dstep .t { margin-top: 6px; font-size: 14px; font-weight: 650; }
-    .dstep p { margin: 6px 0 0; font-size: 13px; line-height: 1.55; color: var(--muted); }
-    .flex-layout { display: grid; grid-template-columns: 1fr; gap: 28px; align-items: stretch; }
-    @media (min-width: 980px) { .flex-layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); } }
-    .flex-copy { display: flex; flex-direction: column; min-height: 100%; }
-    .flex-support-grid { margin-top: auto; }
-    @media (max-width: 979px) { .flex-support-grid { margin-top: 24px; } }
-    .field-board { border: 1px solid var(--border); background: var(--panel); overflow-x: auto; }
-    .field-board table { width: 100%; min-width: 660px; border-collapse: collapse; font-size: 13px; }
-    .field-board th, .field-board td { padding: 11px 10px; border-bottom: 1px solid var(--border-soft); text-align: left; white-space: nowrap; }
-    .field-board th { color: var(--muted-2); font: 11px/1.4 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; }
-    .field-board td:last-child { color: var(--acc); font-family: var(--f-mono); font-size: 12px; }
-    .mini-tabs { display: flex; gap: 1px; margin-top: 12px; background: var(--border); border: 1px solid var(--border); }
-    .mini-tab { flex: 1; padding: 11px 10px; background: var(--panel); color: var(--muted); font: 11px/1.4 var(--f-mono); letter-spacing: .12em; text-transform: uppercase; }
-    .mini-tab.active { background: var(--bg); color: var(--fg); box-shadow: inset 0 -3px 0 var(--acc); }
-    .rule-builder-shot { border: 1px solid var(--border); border-top: 0; background: var(--bg); padding: 14px; }
-    .builder-row { display: grid; grid-template-columns: 1fr .6fr 1fr; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border-soft); font: 12px/1.4 var(--f-mono); }
-    .builder-row span { background: var(--panel); border: 1px solid var(--border); padding: 8px; overflow-wrap: anywhere; }
-    .builder-action { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font: 12px/1.4 var(--f-mono); }
-    .builder-action span { background: var(--dk-bg); color: var(--dk-ink); padding: 10px; }
-    .paths { display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); }
-    @media (min-width: 980px) { .paths { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-    .path { background: var(--panel); padding: 24px 22px; min-width: 0; display: flex; flex-direction: column; }
-    .path-copy { min-height: 164px; }
-    .path-tag { align-self: flex-start; border: 1px solid var(--border); color: var(--muted-2); padding: 4px 8px; font: 10.5px/1.4 var(--f-mono); letter-spacing: .16em; text-transform: uppercase; }
-    .path-tag.rec { background: var(--acc); border-color: var(--acc); color: #fff; }
-    .path h3 { margin: 14px 0 0; font-size: 16px; }
-    .path p { margin: 8px 0 0; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
-    .path .link { align-self: flex-start; margin-top: auto; padding-top: 18px; }
-    .pre-block { position: relative; width: 100%; height: 128px; margin: 0; padding: 14px; overflow-x: hidden; overflow-y: auto; background: var(--dk-bg); color: var(--dk-ink); font: 12px/1.65 var(--f-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-    .pre-block .c { color: #76776f; }
-    details { border-top: 1px solid var(--border); }
-    details:last-child { border-bottom: 1px solid var(--border); }
-    summary { cursor: pointer; list-style: none; padding: 18px 0; font-weight: 650; display: flex; justify-content: space-between; gap: 16px; }
-    summary::-webkit-details-marker { display: none; }
-    summary::after { content: "+"; font-family: var(--f-mono); color: var(--acc); }
-    details[open] summary::after { content: "-"; }
-    details p { margin: -4px 0 18px; max-width: 720px; color: var(--muted); font-size: 14px; line-height: 1.65; }
-    .support { background: var(--dk-bg); color: var(--dk-ink); border-bottom: 1px solid var(--dk-rule); }
-    .support-inner { padding: 64px 0; display: flex; flex-direction: column; gap: 24px; align-items: flex-start; justify-content: space-between; }
-    @media (min-width: 800px) { .support-inner { flex-direction: row; align-items: flex-start; } }
-    .support .eyebrow { color: var(--dk-mute); }
-    .support h2 { color: var(--dk-ink); }
-    .support p { margin: 12px 0 0; max-width: 550px; color: var(--dk-mute); font-size: 15px; line-height: 1.65; }
-    footer { padding: 40px 0 48px; }
-    .footer-inner { display: flex; flex-direction: column; gap: 14px; justify-content: space-between; }
-    @media (min-width: 640px) { .footer-inner { flex-direction: row; align-items: center; } }
-    .footer-note { margin: 0; font-size: 12px; color: var(--muted-2); }
-    .footer-links { display: flex; flex-wrap: wrap; gap: 14px; font: 12px/1.4 var(--f-mono); }
-    .footer-links a { color: var(--muted); }
-    .footer-links a:hover { color: var(--acc); }
-    @media (max-width: 760px) {
-      nav { display: none; }
-      .hero-inner { padding: 64px 0 56px; }
-      h1 { font-size: 40px; }
-      .section { padding: 56px 0; }
-      .stat:nth-child(2) { border-right: 0; }
-      .stat:nth-child(n+3) { border-top: 1px solid var(--border-soft); }
-      .path-copy { min-height: 0; margin-bottom: 16px; }
-    }
-  </style>
+:root{
+  --ink:#0B0D12; --ink2:#1F2430; --slate:#4B5262; --muted:#6B7280; --faint:#9AA0AB;
+  --line:#E4E2DA; --line2:#EEECE6; --paper:#F6F5F0; --white:#FFFFFF;
+  --acc:#2540FF; --accInk:#1A2FD6; --acc50:#EEF1FF; --acc100:#DCE2FF;
+  --dark:#0A0E1A; --dark2:#111729; --darkLine:#232B40; --darkInk:#F3F4F7; --darkMute:#8E95A8;
+  --green:#157F3B; --green50:#E7F4EC; --amber:#B45309; --amber50:#FDF2E4; --red:#B42318; --red50:#FCEBE9;
+  --sans: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);color:var(--ink);background:#fff;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.artboard{background:var(--white);container-type:inline-size;container-name:page;overflow:hidden}
+.artboard{width:100%}
+.wrap{width:1152px;margin:0 auto}
+.mono{font-family:var(--mono)}
+
+/* Header */
+.hdr{border-bottom:1px solid var(--line);background:var(--white)}
+.hdr .wrap{height:72px;display:flex;align-items:center;justify-content:space-between}
+header .container{max-width:1152px;}
+.header-inner .btn{min-height:44px;padding:0 18px;}
+.nav .btn{margin-left:10px}
+.brand{display:flex;align-items:center;gap:12px}
+.logo{width:34px;height:34px;background:var(--ink);color:var(--white);display:flex;align-items:center;justify-content:center;font:600 12px/1 var(--mono);letter-spacing:.04em;border-radius:4px}
+.brand-name{font-weight:600;font-size:18px;letter-spacing:-.025em}
+.brand{gap:9px}
+.mark{display:block;flex:none}
+.brand-tag{font:500 11px/1 var(--mono);color:var(--muted);border:1px solid var(--line);padding:5px 7px;border-radius:4px;margin-left:4px;letter-spacing:.02em}
+.nav{display:flex;align-items:center;gap:6px}
+.nav a.nl{font-size:14px;font-weight:500;color:var(--slate);padding:10px 14px;border-radius:4px}
+.nav a.nl.on{color:var(--ink);background:var(--paper)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:44px;padding:0 18px;border-radius:4px;font-size:14px;font-weight:600;border:1px solid transparent;white-space:nowrap}
+.btn-primary{background:var(--ink);color:var(--white)}
+.btn-accent{background:var(--acc);color:var(--white)}
+.btn-ghost{background:var(--white);color:var(--ink);border-color:#CFCDC5}
+.btn-light{background:var(--white);color:var(--ink)}
+.btn-outline-dark{background:transparent;color:var(--darkInk);border-color:#3A4258}
+.btn svg{flex:none}
+.burger{display:none;width:44px;height:44px;border:1px solid var(--line);border-radius:4px;align-items:center;justify-content:center}
+
+/* Hero */
+.hero{background:linear-gradient(180deg,#FFFFFF 0%,#F6F5F0 100%);border-bottom:1px solid var(--line);position:relative}
+.hero:before{content:"";position:absolute;right:-120px;top:-180px;width:980px;height:760px;background:radial-gradient(closest-side,rgba(37,64,255,.10),rgba(37,64,255,0));pointer-events:none}
+.hero .wrap{position:relative;display:grid;grid-template-columns:540px 1fr;gap:56px;padding:88px 0 96px;align-items:center}
+.pill{display:inline-flex;align-items:center;gap:10px;height:32px;padding:0 12px 0 6px;border:1px solid var(--line);background:var(--white);border-radius:4px;font-size:12.5px;font-weight:500;color:var(--slate)}
+.pill b{background:var(--acc50);color:var(--accInk);font:600 11px/1 var(--mono);padding:5px 7px;border-radius:3px;letter-spacing:.02em}
+.pill .sep{width:3px;height:3px;background:var(--faint);border-radius:2px}
+h1{font-size:60px;line-height:1.02;letter-spacing:-.04em;font-weight:700;margin:24px 0 22px}
+h1 em{font-style:normal;color:var(--acc)}
+.lead{font-size:18px;line-height:1.6;color:var(--slate)}
+.cta-row{display:flex;gap:12px;margin-top:32px;flex-wrap:wrap}
+.cta-row .btn{height:50px;padding:0 22px;font-size:15px}
+.micro{display:flex;gap:18px;margin-top:18px;font-size:13px;color:var(--muted);flex-wrap:wrap}
+.micro span{display:inline-flex;align-items:center;gap:7px}
+.micro svg{color:var(--green)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);margin-top:40px;border-top:1px solid var(--line)}
+.stat{padding:18px 16px 0 0}
+.stat + .stat{padding-left:18px;border-left:1px solid var(--line)}
+.stat .num{font-size:30px;font-weight:700;letter-spacing:-.03em}
+.stat .lbl{font-size:12.5px;color:var(--muted);margin-top:2px}
+
+/* product mock */
+.mock-wrap{position:relative;padding-bottom:196px}
+.mock{background:var(--white);border:1px solid #D9D7CF;border-radius:4px;box-shadow:0 1px 0 rgba(11,13,18,.04),0 24px 48px -16px rgba(11,13,18,.18),0 8px 16px -8px rgba(11,13,18,.08);overflow:hidden}
+.mock-top{height:44px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:0 14px;background:#FBFAF7}
+.mock-top .mlogo{width:22px;height:22px;border-radius:3px;background:var(--ink);color:#fff;font:600 8.5px/22px var(--mono);text-align:center}
+.mock-top .crumb{font-size:12px;color:var(--muted)}
+.mock-top .crumb b{color:var(--ink);font-weight:600}
+.mock-top .search{margin-left:auto;width:200px;height:26px;border:1px solid var(--line);border-radius:4px;background:var(--white);font-size:11px;color:var(--faint);display:flex;align-items:center;gap:6px;padding:0 8px}
+.mock-top .avatar{width:26px;height:26px;border-radius:13px;background:var(--acc100);color:var(--accInk);font:600 10px/26px var(--sans);text-align:center}
+.mock-body{display:grid;grid-template-columns:132px 1fr;min-height:410px}
+.mside{border-right:1px solid var(--line);padding:12px 8px;background:#FBFAF7;display:flex;flex-direction:column;gap:2px}
+.mside div{font-size:11.5px;color:var(--slate);padding:7px 8px;border-radius:4px;display:flex;align-items:center;gap:8px}
+.mside div i{width:6px;height:6px;border-radius:2px;background:#C9C7BF;display:block}
+.mside div.on{background:var(--white);color:var(--ink);font-weight:600;box-shadow:inset 2px 0 0 var(--acc),0 0 0 1px var(--line)}
+.mside div.on i{background:var(--acc)}
+.mmain{padding:16px 18px}
+.mhead{display:flex;align-items:baseline;justify-content:space-between}
+.mhead h4{font-size:15px;letter-spacing:-.01em}
+.mhead span{font-size:11px;color:var(--muted)}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}
+.kpi{border:1px solid var(--line);border-radius:4px;padding:10px}
+.kpi .l{font-size:10px;color:var(--muted)}
+.kpi .v{font-size:18px;font-weight:700;letter-spacing:-.02em;margin-top:3px}
+.kpi .d{font-size:9.5px;color:var(--muted);margin-top:2px}
+.kpi .v.red{color:var(--red)}
+.mpanels{display:grid;grid-template-columns:1fr 1.25fr;gap:8px;margin-top:8px}
+.mpanel{border:1px solid var(--line);border-radius:4px;padding:10px 12px}
+.mpanel h5{font-size:11.5px;font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between}
+.mpanel h5 span{font-weight:500;color:var(--muted);font-size:10px}
+.bar{display:grid;grid-template-columns:52px 1fr 28px;align-items:center;gap:8px;font-size:10.5px;margin:7px 0;color:var(--slate)}
+.bar .t{height:8px;background:var(--line2);border-radius:2px;overflow:hidden}
+.bar .t i{display:block;height:100%;border-radius:2px}
+.bar b{text-align:right;color:var(--ink);font-weight:600}
+.seg{display:grid;grid-template-columns:1fr auto;gap:2px 8px;padding:7px 0;border-top:1px solid var(--line2)}
+.seg:first-of-type{border-top:0;padding-top:0}
+.seg .n{font-size:11px;font-weight:600}
+.seg .c{font-size:10.5px;font-weight:600;text-align:right}
+.seg .f{font:400 9.5px/1.4 var(--mono);color:var(--acc);grid-column:1/-1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.seg .ltv{font-size:9.5px;color:var(--muted);text-align:right}
+.term{position:absolute;left:-40px;bottom:0;width:340px;background:var(--dark);color:var(--darkInk);border-radius:4px;border:1px solid var(--darkLine);box-shadow:0 20px 40px -12px rgba(10,14,26,.45)}
+.term-top{height:32px;border-bottom:1px solid var(--darkLine);display:flex;align-items:center;justify-content:space-between;padding:0 12px;font:500 10.5px/1 var(--mono);color:var(--darkMute)}
+.term-top b{color:#7CE0A3;font-weight:500}
+.term pre{font:400 11px/1.65 var(--mono);padding:12px 14px;white-space:pre;color:var(--darkInk)}
+.term .c{color:#6F7891}.term .a{color:#8FA3FF}.term .v{color:#7CE0A3}
+
+/* Strip */
+.strip{border-bottom:1px solid var(--line);background:var(--white)}
+.strip .wrap{display:flex;align-items:center;gap:28px;height:76px}
+.strip .lab{font-size:13px;color:var(--muted);white-space:nowrap}
+.strip .items{display:flex;gap:10px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 12px;border:1px solid var(--line);border-radius:4px;font-size:13px;font-weight:500;color:var(--ink2);background:var(--white)}
+.chip svg{color:var(--acc)}
+
+/* Sections */
+.sec{padding:112px 0;border-bottom:1px solid var(--line)}
+.sec.alt{background:var(--paper)}
+.eyebrow{display:inline-flex;align-items:center;gap:10px;font:600 12px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--acc)}
+.eyebrow i{font-style:normal;color:var(--faint);font-weight:500}
+h2{font-size:42px;line-height:1.1;letter-spacing:-.035em;font-weight:700;margin:16px 0 16px;max-width:760px}
+.sub{font-size:17px;line-height:1.6;color:var(--slate);max-width:700px}
+.shead{margin-bottom:56px}
+.shead.split{display:grid;grid-template-columns:1fr 420px;gap:48px;align-items:end}
+.shead.split .sub{max-width:none}
+.k{display:inline-block;font:500 11.5px/1 var(--mono);color:var(--accInk);background:var(--acc50);padding:6px 8px;border-radius:3px;margin-top:16px}
+
+/* Use cases */
+.uc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.uc{background:var(--white);border:1px solid var(--line);border-radius:4px;padding:24px;display:flex;flex-direction:column}
+.uc .ic{width:40px;height:40px;border-radius:4px;background:var(--acc50);color:var(--acc);display:flex;align-items:center;justify-content:center}
+.uc h3{font-size:18px;letter-spacing:-.02em;margin:20px 0 8px}
+.uc p{font-size:14.5px;line-height:1.55;color:var(--slate);flex:1}
+.uc .filter{margin-top:20px;padding-top:16px;border-top:1px dashed var(--line)}
+.uc .filter .nm{font-size:11px;color:var(--muted);margin-bottom:8px}
+.uc .filter code{display:block;font:500 11.5px/1.5 var(--mono);color:var(--ink2);background:var(--paper);border:1px solid var(--line2);padding:8px 10px;border-radius:4px}
+.uc .res{display:flex;justify-content:space-between;margin-top:14px;font-size:13px}
+.uc .res b{font-weight:700}
+.uc .res span{color:var(--muted)}
+.note{font-size:12.5px;color:var(--muted);margin-top:20px}
+
+/* Workflow */
+.flow{border:1px solid var(--line);border-radius:4px;background:var(--white);overflow:hidden}
+.flow-top{display:flex;justify-content:space-between;align-items:center;padding:16px 24px;border-bottom:1px solid var(--line);font:500 11.5px/1 var(--mono);color:var(--muted);letter-spacing:.04em;background:#FBFAF7}
+.flow-top b{display:inline-flex;align-items:center;gap:8px;color:var(--green);font-weight:600}
+.flow-top b i{width:7px;height:7px;border-radius:4px;background:var(--green);display:block}
+.stages{display:grid;grid-template-columns:repeat(4,1fr);position:relative}
+.stage{padding:28px 24px 30px;position:relative}
+.stage + .stage{border-left:1px solid var(--line)}
+.stage .num{font:600 12px/1 var(--mono);color:var(--acc);letter-spacing:.04em}
+.stage .box{margin:18px 0 20px;border:1px solid var(--ink);border-radius:4px;padding:16px;background:var(--paper)}
+.stage .box .bt{font-weight:700;font-size:16px;letter-spacing:-.01em}
+.stage .box .bs{font:400 11.5px/1 var(--mono);color:var(--muted);margin-top:10px}
+.stage .box .bk{font:500 11.5px/1 var(--mono);color:var(--acc);margin-top:8px}
+.stage.dark .box{background:var(--dark);border-color:var(--dark);color:var(--darkInk)}
+.stage.dark .box .bs{color:var(--darkMute)}
+.stage.dark .box .bk{color:#A9B6FF}
+.stage .arrow{position:absolute;right:-13px;top:96px;width:26px;height:26px;border-radius:13px;background:var(--white);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;z-index:2;color:var(--ink)}
+.stage h3{font-size:18px;letter-spacing:-.02em;margin-bottom:8px}
+.stage p{font-size:14.5px;line-height:1.55;color:var(--slate)}
+
+/* Flexibility */
+.flex-grid{display:grid;grid-template-columns:480px 1fr;gap:64px}
+.flex-copy{display:flex;flex-direction:column}
+.flex-support-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:auto;padding-top:40px}
+.cell{background:var(--white);border:1px solid var(--line);border-radius:4px;padding:22px}
+.cell h3{font-size:16px;letter-spacing:-.01em;margin-bottom:8px}
+.cell p{font-size:14px;line-height:1.55;color:var(--slate)}
+.panel{background:var(--white);border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.panel-h{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line);font-size:13px;font-weight:600}
+.panel-h span{font:400 11.5px/1 var(--mono);color:var(--muted)}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font:600 11px/1 var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding:12px 18px;background:#FBFAF7;border-bottom:1px solid var(--line)}
+td{padding:13px 18px;border-bottom:1px solid var(--line2);font-size:13.5px}
+tr:last-child td{border-bottom:0}
+td.m{font-family:var(--mono);font-size:12.5px}
+td.ref{font-family:var(--mono);font-size:12.5px;color:var(--acc)}
+.role{display:inline-block;font-size:12px;font-weight:600;padding:4px 8px;border-radius:3px}
+.role.id{background:var(--ink);color:#fff}
+.role.ltv{background:var(--green50);color:var(--green)}
+.role.cf{background:var(--acc50);color:var(--accInk)}
+.rb{margin-top:16px}
+.tabs{display:flex;border-bottom:1px solid var(--line)}
+.tab{flex:1;text-align:center;padding:13px 0;font-size:13px;font-weight:600;color:var(--muted)}
+.tab.on{color:var(--ink);box-shadow:inset 0 -2px 0 var(--acc)}
+.rb-body{padding:16px 18px}
+.rb-lbl{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase;margin-bottom:10px;display:flex;justify-content:space-between}
+.rb-lbl span{text-transform:none;letter-spacing:0;font-weight:500}
+.cond{display:grid;grid-template-columns:1.6fr .5fr .7fr;gap:8px;margin-bottom:8px}
+.cond div{height:38px;border:1px solid var(--line);border-radius:4px;display:flex;align-items:center;padding:0 12px;font:500 12.5px/1 var(--mono);background:var(--white)}
+.cond div.op{justify-content:center;background:var(--paper)}
+.and{font:600 11px/1 var(--mono);color:var(--muted);margin:2px 0 10px 4px}
+.acts{display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line2);align-items:center}
+.acts .then{font:600 11px/1 var(--mono);color:var(--muted);margin-right:4px}
+.act{height:34px;display:inline-flex;align-items:center;gap:8px;padding:0 12px;border-radius:4px;font:500 12.5px/1 var(--mono)}
+.act.tier{background:var(--green50);color:var(--green)}
+.act.tag{background:var(--ink);color:#fff}
+
+/* Features */
+.feat-grid{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:4px;overflow:hidden;background:var(--line);gap:1px}
+.feat{background:var(--white);padding:28px 24px 26px}
+.feat .ic{width:36px;height:36px;border:1px solid var(--line);border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--ink)}
+.feat h3{font-size:16.5px;letter-spacing:-.015em;margin:20px 0 8px}
+.feat p{font-size:14px;line-height:1.55;color:var(--slate)}
+
+/* Evaluate */
+.paths{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.path{background:var(--white);border:1px solid var(--line);border-radius:4px;padding:26px;display:flex;flex-direction:column}
+.path.rec{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
+.path-copy{min-height:164px}
+.tagp{display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:3px;font:600 11px/1 var(--mono);letter-spacing:.04em;text-transform:uppercase;border:1px solid var(--line);color:var(--slate)}
+.tagp.blue{background:var(--acc);border-color:var(--acc);color:#fff}
+.tagp.dark{background:var(--ink);border-color:var(--ink);color:#fff}
+.path h3{font-size:20px;letter-spacing:-.02em;margin:18px 0 8px}
+.path p{font-size:14.5px;line-height:1.55;color:var(--slate)}
+.pre-block{height:128px;overflow:hidden;white-space:pre-wrap;background:var(--dark);color:var(--darkInk);border-radius:4px;padding:16px 18px;font:400 12.5px/1.65 var(--mono);margin-top:20px}
+.pre-block .c{color:#6F7891}
+.plink{display:inline-flex;align-items:center;gap:8px;margin-top:20px;font-size:14px;font-weight:600;color:var(--acc)}
+
+/* Security (dark) */
+.sec.dark{background:var(--dark);color:var(--darkInk);border-bottom:0}
+.sec.dark .eyebrow{color:#A9B6FF}
+.sec.dark .sub{color:var(--darkMute)}
+.sec-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.dcell{background:var(--dark2);border:1px solid var(--darkLine);border-radius:4px;padding:26px}
+.dcell .ic{width:40px;height:40px;border-radius:4px;background:#18213A;color:#A9B6FF;display:flex;align-items:center;justify-content:center}
+.dcell h3{font-size:18px;letter-spacing:-.02em;margin:20px 0 8px}
+.dcell p{font-size:14.5px;line-height:1.55;color:var(--darkMute)}
+.dcell .k{background:#18213A;color:#A9B6FF}
+.controls{margin-top:16px;border:1px solid var(--darkLine);border-radius:4px;display:grid;grid-template-columns:repeat(4,1fr)}
+.ctrl{padding:18px 20px;display:flex;gap:12px;align-items:flex-start;font-size:13.5px;line-height:1.45;color:#C8CCD8}
+.ctrl:nth-child(n+5){border-top:1px solid var(--darkLine)}
+.ctrl:not(:nth-child(4n+1)){border-left:1px solid var(--darkLine)}
+.ctrl svg{color:#7CE0A3;flex:none;margin-top:1px}
+
+/* Compare */
+.cmp{background:var(--white);border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.cmp th{font-size:11px;padding:16px 20px}
+.cmp th.us{background:var(--acc50);color:var(--accInk)}
+.cmp td{padding:15px 20px;font-size:14px;color:var(--slate)}
+.cmp td:first-child{color:var(--ink);font-weight:500}
+.cmp td.us{background:#F8F9FF;color:var(--ink);font-weight:600}
+.yes{display:inline-flex;align-items:center;gap:7px;color:var(--green)}
+.no{display:inline-flex;align-items:center;gap:7px;color:var(--muted)}
+.swipe{display:none}
+.cmp-foot{display:flex;justify-content:space-between;align-items:center;margin-top:20px;font-size:14px;color:var(--slate)}
+
+/* FAQ */
+.faq-grid{display:grid;grid-template-columns:400px 1fr;gap:72px}
+.faq-side .sub{margin-bottom:28px}
+.help{border:1px solid var(--line);border-radius:4px;padding:22px;background:var(--white)}
+.help h4{font-size:15px;margin-bottom:6px}
+.help p{font-size:14px;color:var(--slate);line-height:1.55;margin-bottom:16px}
+.help .links{display:flex;gap:16px;font-size:14px;font-weight:600;color:var(--acc)}
+.qa{padding:24px 0;border-top:1px solid var(--line)}
+.qa:last-child{border-bottom:1px solid var(--line)}
+.qa h3{font-size:17px;letter-spacing:-.015em;display:flex;justify-content:space-between;gap:24px}
+.qa h3 span{color:var(--faint);font-weight:500;font-family:var(--mono);font-size:12px;padding-top:4px}
+.qa p{font-size:15px;line-height:1.6;color:var(--slate);margin-top:10px;max-width:700px}
+.qa code{font-family:var(--mono);font-size:13px;background:var(--acc50);color:var(--accInk);padding:2px 6px;border-radius:3px}
+
+/* CTA */
+.cta{background:var(--dark);color:var(--darkInk);position:relative;overflow:hidden}
+.cta .glow{position:absolute;right:-120px;top:-160px;width:620px;height:620px;border-radius:50%;background:radial-gradient(closest-side,rgba(37,64,255,.45),rgba(37,64,255,0))}
+.cta .wrap{position:relative;justify-content:space-between;padding:104px 0}
+.cta .eyebrow{color:#A9B6FF}
+.cta h2{color:#fff;font-size:48px;max-width:720px}
+.cta p{font-size:17px;line-height:1.6;color:var(--darkMute);max-width:640px}
+.cta .btns{display:flex;gap:12px}
+.cta .btns .btn{height:52px;padding:0 24px;font-size:15px}
+
+/* Footer */
+.ftr{background:var(--dark);color:var(--darkMute);border-top:1px solid var(--darkLine)}
+.ftr .wrap{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:48px;padding:56px 0 40px}
+.ftr .brand-name{color:#fff}
+.ftr .logo{background:#fff;color:var(--ink)}
+.footer-note{font-size:14px;line-height:1.6;margin-top:16px;max-width:340px}
+.footer-note a{color:#fff;font-weight:600}
+.fcol h5{font:600 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:#C8CCD8;margin-bottom:16px}
+.fcol a{display:block;font-size:14px;margin-bottom:12px;color:var(--darkMute)}
+.fbot{border-top:1px solid var(--darkLine)}
+.fbot .wrap{display:flex;justify-content:space-between;padding:20px 0;font-size:12.5px;grid-template-columns:none}
+
+/* ===== Layout contracts (pinned by test/commercial-readiness.test.mjs) ===== */
+.path-copy {
+  min-height: 164px;
+}
+.pre-block {
+  height: 128px;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+}
+@media (min-width: 980px) { .paths { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.flex-copy {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.flex-support-grid {
+  margin-top: auto;
+}
+.support-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 48px;
+}
+@media (min-width: 800px) { .support-inner { flex-direction: row; align-items: flex-start; } }
+
+/* ===== Mobile (container) ===== */
+@container page (max-width: 1260px){
+  .wrap{width:auto;margin:0 32px}
+  .hero .wrap{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .uc-grid,.feat-grid{grid-template-columns:repeat(2,1fr)}
+  .term{left:-16px}
+}
+@container page (max-width: 980px){
+  .wrap{width:auto;margin:0 20px}
+  .hdr .wrap{height:64px}
+  .nav{display:none}
+  .brand-tag{display:none}
+  .burger{display:flex}
+  .hero .wrap{grid-template-columns:1fr;gap:40px;padding:48px 0 56px}
+  h1{font-size:40px;margin:20px 0 16px}
+  .lead{font-size:16px}
+  .cta-row{flex-direction:column}
+  .cta-row .btn{width:100%}
+  .stats{grid-template-columns:1fr 1fr}
+  .stat{padding:16px 0 16px 0}
+  .stat + .stat{padding-left:0;border-left:0}
+  .stat:nth-child(2n){padding-left:16px;border-left:1px solid var(--line)}
+  .stat:nth-child(n+3){border-top:1px solid var(--line)}
+  .mock-wrap{padding-bottom:0}
+  .mock-body{grid-template-columns:1fr}
+  .mside{display:none}
+  .kpis{grid-template-columns:1fr 1fr}
+  .mpanels{grid-template-columns:1fr}
+  .mock-top .search{display:none}
+  .mock-top .avatar{margin-left:auto}
+  .term{position:relative;left:0;width:auto;margin-top:16px}
+  .strip .wrap{height:auto;flex-direction:column;align-items:flex-start;gap:14px;padding:24px 0}
+  .sec{padding:64px 0}
+  h2{font-size:30px}
+  .sub{font-size:16px}
+  .shead{margin-bottom:32px}
+  .shead.split{grid-template-columns:1fr;gap:0}
+  .uc-grid,.feat-grid,.paths,.sec-grid{grid-template-columns:1fr}
+  .stages{grid-template-columns:1fr}
+  .stage + .stage{border-left:0;border-top:1px solid var(--line)}
+  .stage .arrow{display:none}
+  .flex-grid{grid-template-columns:minmax(0,1fr);gap:32px}
+  .flex-grid > *{min-width:0}
+  .panel{overflow:hidden}
+  .panel td.m,.panel td.ref{font-size:11px;word-break:break-all}
+  .role{font-size:11px;padding:3px 6px}
+  .cond{grid-template-columns:1fr 44px 52px}
+  .cond div{font-size:11px;padding:0 8px}
+  .pill .xm{display:none}
+  .flow-top{flex-direction:column;align-items:flex-start;gap:8px;height:auto;line-height:1.4}
+  .swipe{display:block;font-size:12px;color:var(--muted);margin:0 0 10px}
+  .acts{flex-wrap:wrap}
+  .flex-support-grid{grid-template-columns:1fr;padding-top:24px}
+  .path-copy{min-height:0}
+  .controls{grid-template-columns:1fr}
+  .ctrl:not(:nth-child(4n+1)){border-left:0}
+  .ctrl + .ctrl{border-top:1px solid var(--darkLine)}
+  .cmp .hide-m{display:none}
+  .cmp th,.cmp td{padding:12px 12px;font-size:12.5px}
+  .swipe{display:none}
+.cmp-foot{flex-direction:column;align-items:flex-start;gap:8px}
+  .faq-grid{grid-template-columns:1fr;gap:32px}
+  .qa h3{font-size:16px}
+  .cta .wrap{padding:64px 0;gap:28px}
+  .cta h2{font-size:32px}
+  .cta .btns{flex-direction:column}
+  .cta .btns .btn{width:100%}
+  .ftr .wrap{grid-template-columns:1fr 1fr;gap:32px}
+  .ftr .wrap > div:first-child{grid-column:1/-1}
+  .fbot .wrap{flex-direction:column;gap:6px}
+  td,th{padding:11px 12px}
+  .flow-top span.r{display:none}
+}
+</style>
 </head>
 <body>
-  <a class="sr-only skip" href="#content">Skip to content</a>
-  <header>
-    <div class="container header-inner">
+<div class="artboard">
+  <a class="sr-only" href="#content">Skip to content</a>
+  <header class="hdr">
+    <div class="wrap container header-inner">
       <a class="brand" href="./index.html" aria-label="LiteInsurance home">
-        <span class="logo">LI</span>
+        <svg class="mark" width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><path d="M8 3.5h11.5L26 10v9.8c0 4.6-4.1 7.8-10 9.7-5.9-1.9-10-5.1-10-9.7V5.5a2 2 0 012-2z" fill="#0B0D12"/><path d="M19.5 3.5V8a2 2 0 002 2H26z" fill="#2540FF"/><rect x="10.5" y="14" width="9" height="2.6" rx="1.3" fill="#fff"/><rect x="10.5" y="19" width="6" height="2.6" rx="1.3" fill="#fff" fill-opacity=".55"/></svg>
         <span class="brand-name">LiteInsurance</span>
+        <span class="brand-tag">v1.1 · self-hosted</span>
       </a>
-      <nav aria-label="Primary">
-        <a class="nav-link" href="./index.html">Home</a>
-        <a class="nav-link" href="./demo.html">Demo</a>
-        <a class="nav-link" href="./docs.html">Docs</a>
-        <a class="nav-link" href="./compare.html">Compare</a>
-        <a class="btn btn-primary" href="https://github.com/tanzir71/liteinsurance" target="_blank" rel="noopener">GitHub</a>
+      <nav class="nav" aria-label="Primary">
+        <a class="nl on" href="./index.html">Home</a>
+        <a class="nl" href="./demo.html">Demo</a>
+        <a class="nl" href="./docs.html">Docs</a>
+        <a class="nl" href="./compare.html">Compare</a>
+        <a class="btn btn-primary" href="https://github.com/tanzir71/liteinsurance">GitHub</a>
       </nav>
+      <span class="burger" aria-label="Menu"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 5h14M2 9h14M2 13h14"/></svg></span>
     </div>
   </header>
 
   <main id="content">
-    <section class="hero">
-      <div class="container hero-inner">
-        <div class="hero-grid">
-          <div>
-            <span class="eyebrow">Insurance ops / self-hosted / PHP + SQLite</span>
-            <h1>Insurance LTV and risk segmentation in one PHP file.</h1>
-            <p class="lead">Import policyholder CSVs, preserve custom fields, impute missing values, compute LTV, apply visual or JSON risk rules, build exportable segments, and simulate cross-sell revenue on your own server. No SaaS bill. No customer data egress.</p>
-            <div class="cta-row">
-              <a class="btn btn-primary" href="./demo.html">Try the no-install demo</a>
-              <a class="btn" href="./docs.html">Read setup docs</a>
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <span class="pill"><b>SELF-HOSTED</b>Insurance ops<span class="sep"></span>PHP + SQLite<span class="sep xm"></span><span class="xm">No SaaS</span></span>
+        <h1>Insurance LTV and risk segmentation in <em>one PHP file.</em></h1>
+        <p class="lead">Import policyholder CSVs, preserve custom fields, impute missing values, compute LTV, apply visual or JSON risk rules, build exportable segments, and simulate cross-sell revenue on your own server. No SaaS bill. No customer data egress.</p>
+        <div class="cta-row">
+          <a class="btn btn-accent" href="./demo.html">Try the no-install demo
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8h10M9 4l4 4-4 4"/></svg></a>
+          <a class="btn btn-ghost" href="./docs.html">Read setup docs</a>
+        </div>
+        <div class="micro">
+          <span><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 7.5l3 3 6-7"/></svg>No signup</span>
+          <span><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 7.5l3 3 6-7"/></svg>Runs in your browser</span>
+          <span><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 7.5l3 3 6-7"/></svg>Data never leaves the page</span>
+        </div>
+        <div class="stats" aria-label="Product facts">
+          <div class="stat"><div class="num">1</div><div class="lbl">PHP file</div></div>
+          <div class="stat"><div class="num">200</div><div class="lbl">policy demo</div></div>
+          <div class="stat"><div class="num">$0</div><div class="lbl">cloud fees</div></div>
+          <div class="stat"><div class="num">0</div><div class="lbl">vendor DBs</div></div>
+        </div>
+      </div>
+
+      <div class="mock-wrap">
+        <div class="mock" aria-label="LiteInsurance dashboard preview">
+          <div class="mock-top">
+            <svg class="mark" width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M8 3.5h11.5L26 10v9.8c0 4.6-4.1 7.8-10 9.7-5.9-1.9-10-5.1-10-9.7V5.5a2 2 0 012-2z" fill="#0B0D12"/><path d="M19.5 3.5V8a2 2 0 002 2H26z" fill="#2540FF"/><rect x="10.5" y="14" width="9" height="2.6" rx="1.3" fill="#fff"/><rect x="10.5" y="19" width="6" height="2.6" rx="1.3" fill="#fff" fill-opacity=".55"/></svg>
+            <span class="crumb">LiteInsurance / <b>Dashboard</b></span>
+            <span class="search"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="5" r="3.6"/><path d="M8 8l3 3"/></svg>Search policy or name</span>
+            <span class="avatar">OP</span>
+          </div>
+          <div class="mock-body">
+            <div class="mside">
+              <div class="on"><i></i>Dashboard</div>
+              <div><i></i>Import</div>
+              <div><i></i>Profiles</div>
+              <div><i></i>Rules</div>
+              <div><i></i>Segments</div>
+              <div><i></i>Campaigns</div>
+              <div><i></i>Settings</div>
             </div>
-            <div class="stats" aria-label="Product facts">
-              <div class="stat"><div class="num">1</div><div class="lbl">PHP file</div></div>
-              <div class="stat"><div class="num">200</div><div class="lbl">policy demo</div></div>
-              <div class="stat"><div class="num">$0</div><div class="lbl">cloud fees</div></div>
-              <div class="stat"><div class="num">0</div><div class="lbl">vendor DBs</div></div>
+            <div class="mmain">
+              <div class="mhead"><h4>Book overview</h4><span>Demo dataset · 4 active rules · 5 segments</span></div>
+              <div class="kpis">
+                <div class="kpi"><div class="l">Policyholders</div><div class="v">200</div><div class="d">115 with imputed fields</div></div>
+                <div class="kpi"><div class="l">Average LTV</div><div class="v">$10,234</div><div class="d">premium × term × retention</div></div>
+                <div class="kpi"><div class="l">High-risk</div><div class="v red">4</div><div class="d">+2 in Review</div></div>
+                <div class="kpi"><div class="l">Avg confidence</div><div class="v">93</div><div class="d">data completeness</div></div>
+              </div>
+              <div class="mpanels">
+                <div class="mpanel">
+                  <h5>Risk tier distribution <span>200</span></h5>
+                  <div class="bar"><span>Medium</span><span class="t"><i style="width:92%;background:var(--acc)"></i></span><b>184</b></div>
+                  <div class="bar"><span>Low</span><span class="t"><i style="width:9%;background:var(--green)"></i></span><b>10</b></div>
+                  <div class="bar"><span>High</span><span class="t"><i style="width:5%;background:var(--red)"></i></span><b>4</b></div>
+                  <div class="bar"><span>Review</span><span class="t"><i style="width:3%;background:var(--amber)"></i></span><b>2</b></div>
+                  <h5 style="margin-top:14px">Policy type mix <span>200</span></h5>
+                  <div class="bar"><span>term</span><span class="t"><i style="width:40%;background:var(--ink2)"></i></span><b>79</b></div>
+                  <div class="bar"><span>health</span><span class="t"><i style="width:26%;background:var(--ink2)"></i></span><b>51</b></div>
+                  <div class="bar"><span>life</span><span class="t"><i style="width:23%;background:var(--ink2)"></i></span><b>46</b></div>
+                  <div class="bar"><span>auto</span><span class="t"><i style="width:12%;background:var(--ink2)"></i></span><b>24</b></div>
+                </div>
+                <div class="mpanel">
+                  <h5>Saved segments <span>policies · avg LTV</span></h5>
+                  <div class="seg"><span class="n">High LTV loyalists</span><span class="c">52</span><span class="f">ltv_estimate &gt; 9000 AND tenure_months &gt;= 30</span><span></span><span class="ltv">$11,377</span></div>
+                  <div class="seg"><span class="n">Health cross-sell candidates</span><span class="c">45</span><span class="f">policy_type = 'health' AND ltv_estimate &gt; 6000</span><span></span><span class="ltv">$9,883</span></div>
+                  <div class="seg"><span class="n">High-risk senior review</span><span class="c">12</span><span class="f">risk_tier = 'High' OR age &gt;= 63</span><span></span><span class="ltv">$11,868</span></div>
+                  <div class="seg"><span class="n">Data repair queue</span><span class="c">115</span><span class="f">confidence_score &lt; 80 OR is_imputed = 1</span><span></span><span class="ltv">$9,958</span></div>
+                </div>
+              </div>
             </div>
           </div>
-          <div>
-            <div class="snippet-card" aria-label="Fast setup snippet">
-              <div class="snippet-head">
-                <span class="snippet-title">public_html / deploy</span>
-              </div>
-              <pre class="snippet-body"><span class="c"># upload one file</span>
+        </div>
+        <div class="term" aria-label="Fast setup snippet">
+          <div class="term-top"><span>public_html / deploy</span><b>● ready</b></div>
+<pre><span class="c"># upload one file</span>
 liteinsurance.php <span class="a">--&gt;</span> /public_html/
 
 <span class="c"># open in browser</span>
@@ -271,256 +552,325 @@ https://yourdomain.com/<span class="v">liteinsurance.php</span>
 <span class="c"># first user becomes admin</span>
 Register <span class="a">--&gt;</span> Import <span class="a">--&gt;</span> Load sample
 Preview <span class="a">--&gt;</span> Confirm import</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="strip">
+    <div class="wrap">
+      <span class="lab">Runs where your data already lives</span>
+      <div class="items">
+        <span class="chip"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1.5" y="2" width="11" height="10" rx="1.5"/><path d="M4 5.5l2 1.5-2 1.5M7.5 9h2.5"/></svg>PHP 8.1+</span>
+        <span class="chip"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="7" cy="3.5" rx="5" ry="2"/><path d="M2 3.5v7c0 1.1 2.2 2 5 2s5-.9 5-2v-7M2 7c0 1.1 2.2 2 5 2s5-.9 5-2"/></svg>PDO SQLite</span>
+        <span class="chip"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1.5" y="2" width="11" height="4" rx="1"/><rect x="1.5" y="8" width="11" height="4" rx="1"/><path d="M4 4h.01M4 10h.01"/></svg>cPanel &amp; shared hosting</span>
+        <span class="chip"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 1.5h5l3 3v8H3z"/><path d="M8 1.5v3h3"/></svg>No build step</span>
+        <span class="chip"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M7 1.5l4.5 2v3.5c0 2.8-2 4.6-4.5 5.5-2.5-.9-4.5-2.7-4.5-5.5V3.5z"/></svg>CSRF · CSP · rate limits</span>
+        <span class="chip"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 3h10M2 7h10M2 11h6"/></svg>Audit log</span>
+      </div>
+    </div>
+  </div>
+
+  <section id="use-cases" class="sec alt">
+    <div class="wrap">
+      <div class="shead split">
+        <div>
+          <span class="eyebrow">Use cases</span>
+          <h2>Built around the jobs an insurance ops team actually runs.</h2>
+        </div>
+        <p class="sub">Start from saved segments that mirror everyday book-of-business work, then tune the rules and filters to your own definitions.</p>
+      </div>
+      <div class="uc-grid">
+        <div class="uc">
+          <span class="ic"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 2.5l6 2.5v4.5c0 3.8-2.6 6.4-6 8-3.4-1.6-6-4.2-6-8V5z"/><path d="M10 7v3.5M10 13h.01"/></svg></span>
+          <h3>Retention review</h3>
+          <p>Surface policies that need a human look before renewal: high-risk tiers and older insureds.</p>
+          <div class="filter"><div class="nm">High-risk senior review</div><code>risk_tier = 'High' OR age &gt;= 63</code></div>
+          <div class="res"><b>12 policies</b><span>avg LTV $11,868</span></div>
+        </div>
+        <div class="uc">
+          <span class="ic"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="5" width="9" height="9" rx="1.5"/><rect x="8.5" y="8" width="9" height="9" rx="1.5"/></svg></span>
+          <h3>Cross-sell targeting</h3>
+          <p>Find in-force customers who already value their coverage and are good candidates for a second line.</p>
+          <div class="filter"><div class="nm">Health cross-sell candidates</div><code>policy_type = 'health' AND ltv_estimate &gt; 6000</code></div>
+          <div class="res"><b>45 policies</b><span>avg LTV $9,883</span></div>
+        </div>
+        <div class="uc">
+          <span class="ic"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 2.5l2.3 4.7 5.2.8-3.8 3.6.9 5.1L10 14.3l-4.6 2.4.9-5.1-3.8-3.6 5.2-.8z"/></svg></span>
+          <h3>Protect top accounts</h3>
+          <p>Keep your highest-value, longest-tenured policyholders on a proactive service cadence.</p>
+          <div class="filter"><div class="nm">High LTV loyalists</div><code>ltv_estimate &gt; 9000 AND tenure_months &gt;= 30</code></div>
+          <div class="res"><b>52 policies</b><span>avg LTV $11,377</span></div>
+        </div>
+        <div class="uc">
+          <span class="ic"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12.5 3.5a4 4 0 00-5 5L3 13l4 4 4.5-4.5a4 4 0 005-5l-2.5 2.5-2.5-.5-.5-2.5z"/></svg></span>
+          <h3>Data repair queue</h3>
+          <p>Route records with imputed or low-confidence fields to cleanup before anyone acts on them.</p>
+          <div class="filter"><div class="nm">Data repair queue</div><code>confidence_score &lt; 80 OR is_imputed = 1</code></div>
+          <div class="res"><b>115 policies</b><span>avg LTV $9,958</span></div>
+        </div>
+      </div>
+      <p class="note">Counts from the deterministic 200-policy demo dataset. Every segment exports to CSV and feeds the campaign simulator.</p>
+    </div>
+  </section>
+
+  <section id="workflow" class="sec">
+    <div class="wrap">
+      <div class="shead">
+        <span class="eyebrow">01 <i>/</i> Workflow</span>
+        <h2>The whole workflow, from raw policy CSV to outreach math.</h2>
+        <p class="sub">LiteInsurance is intentionally narrow: a local-first dashboard for getting useful segmentation and revenue estimates out of imperfect policyholder exports.</p>
+      </div>
+      <div class="flow" role="img" aria-label="CSV import flows through custom fields, imputation, LTV scoring, risk rules, segment export, and campaign simulation.">
+        <div class="flow-top"><span>LI / SYS / 01 · LiteInsurance workflow</span><b><i></i>NO CLOUD LOOP · everything runs on your server</b></div>
+        <div class="stages">
+          <div class="stage">
+            <div class="num">01 / Import</div>
+            <div class="box"><div class="bt">CSV import</div><div class="bs">map + preview</div><div class="bk">policy_number</div></div>
+            <h3>Map any CSV</h3>
+            <p>Upload, map columns, preview imputation, then commit rows into SQLite.</p>
+            <span class="arrow"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 6h8M7 3l3 3-3 3"/></svg></span>
+          </div>
+          <div class="stage">
+            <div class="num">02 / Repair</div>
+            <div class="box"><div class="bt">Impute</div><div class="bs">mean / mode</div><div class="bk">confidence_score</div></div>
+            <h3>Expose weak data</h3>
+            <p>Missing values are imputed and marked, not silently hidden.</p>
+            <span class="arrow"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 6h8M7 3l3 3-3 3"/></svg></span>
+          </div>
+          <div class="stage">
+            <div class="num">03 / Decide</div>
+            <div class="box"><div class="bt">Score</div><div class="bs">LTV + rules</div><div class="bk">risk_tier</div></div>
+            <h3>Run risk rules</h3>
+            <p>Priority-ordered visual or JSON rules set tiers, tags, and confidence adjustments.</p>
+            <span class="arrow"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 6h8M7 3l3 3-3 3"/></svg></span>
+          </div>
+          <div class="stage dark">
+            <div class="num">04 / Act</div>
+            <div class="box"><div class="bt">Segments</div><div class="bs">rules_and_where</div><div class="bk">export CSV · campaign ROI</div></div>
+            <h3>Export and simulate</h3>
+            <p>Build segments, export CSV, and model cross-sell revenue before outreach.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="flexibility" class="sec alt">
+    <div class="wrap">
+      <div class="flex-grid">
+        <div class="flex-copy">
+          <span class="eyebrow">02 <i>/</i> Flexible fields</span>
+          <h2>Flexible fields without turning the app into a database project.</h2>
+          <p class="sub">LiteInsurance treats your CSV like the source of truth: map the few columns the scorer needs, keep every extra column as a typed custom field, then reference those fields from visual rules, raw JSON, segment filters, and exports.</p>
+          <div class="grid grid-2 flex-support-grid">
+            <div class="cell"><h3>Spreadsheet-like custom fields</h3><p>Unmapped CSV columns become editable local fields instead of requiring schema migrations.</p><span class="k">metadata.custom_fields</span></div>
+            <div class="cell"><h3>Two rule editing modes</h3><p>Use field/operator/value controls for normal edits, or switch to plain JSON for nested groups and advanced operators.</p><span class="k">visual + JSON</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="panel" aria-label="Custom field mapping example">
+            <div class="panel-h">Column mapping <span>policyholders_export.csv</span></div>
+            <table>
+              <thead><tr><th>CSV header</th><th>App role</th><th>Rule reference</th></tr></thead>
+              <tbody>
+                <tr><td class="m">policy_number</td><td><span class="role id">Record ID</span></td><td class="ref">policy_number</td></tr>
+                <tr><td class="m">premium_amount</td><td><span class="role ltv">LTV input</span></td><td class="ref">premium_amount</td></tr>
+                <tr><td class="m">agent_code</td><td><span class="role cf">Custom field</span></td><td class="ref">custom.agent_code</td></tr>
+                <tr><td class="m">renewal_probability</td><td><span class="role cf">Custom field</span></td><td class="ref">custom.renewal_probability</td></tr>
+                <tr><td class="m">source_channel</td><td><span class="role cf">Custom field</span></td><td class="ref">custom.source_channel</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="panel rb" aria-label="Visual rule builder example">
+            <div class="tabs"><div class="tab on">Visual builder</div><div class="tab">Plain JSON</div></div>
+            <div class="rb-body">
+              <div class="rb-lbl">When all conditions match <span>Rule · priority 120</span></div>
+              <div class="cond"><div>custom.renewal_probability</div><div class="op">&gt;=</div><div>0.7</div></div>
+              <div class="and">AND</div>
+              <div class="cond"><div>premium_amount</div><div class="op">&gt;</div><div>120</div></div>
+              <div class="acts"><span class="then">THEN</span><span class="act tier">set tier: Low</span><span class="act tag">tag: renewal_ready</span></div>
             </div>
           </div>
         </div>
       </div>
-    </section>
+    </div>
+  </section>
 
-    <section id="workflow" class="section">
-      <div class="container">
-        <div class="section-head">
-          <span class="idx">SYS / 01</span>
-          <h2>The whole workflow, from raw policy CSV to outreach math.</h2>
-          <p class="sub">LiteInsurance is intentionally narrow: a local-first dashboard for getting useful segmentation and revenue estimates out of imperfect policyholder exports.</p>
+  <section id="features" class="sec">
+    <div class="wrap">
+      <div class="shead split">
+        <div>
+          <span class="eyebrow">03 <i>/</i> Product surfaces</span>
+          <h2>Eight product surfaces, one PHP file.</h2>
         </div>
-        <div class="diagram-wrap">
-          <svg viewBox="0 0 1120 360" role="img" aria-labelledby="diagram-title diagram-desc" xmlns="http://www.w3.org/2000/svg">
-            <title id="diagram-title">LiteInsurance workflow diagram</title>
-            <desc id="diagram-desc">CSV import flows through custom fields, imputation, LTV scoring, risk rules, segment export, and campaign simulation.</desc>
-            <defs>
-              <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#e3e1d8" stroke-width="1"/>
-              </pattern>
-              <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
-                <path d="M0,0 L10,5 L0,10 Z" fill="#0a0a0a"/>
-              </marker>
-            </defs>
-            <rect width="1120" height="360" fill="#fbfaf6"/>
-            <rect width="1120" height="360" fill="url(#grid)" opacity=".75"/>
-            <text x="28" y="34" font-family="JetBrains Mono, monospace" font-size="11" letter-spacing="2" fill="#8a877e">LI/SYS/01</text>
-            <text x="1006" y="34" font-family="JetBrains Mono, monospace" font-size="11" letter-spacing="2" fill="#8a877e">NO CLOUD LOOP</text>
-            <g font-family="Inter, Arial, sans-serif">
-              <g transform="translate(54 96)">
-                <rect width="150" height="108" fill="#f4f3ee" stroke="#0a0a0a"/>
-                <text x="18" y="34" font-size="16" font-weight="650">CSV import</text>
-                <text x="18" y="62" font-family="JetBrains Mono, monospace" font-size="11" fill="#6b6b66">map + preview</text>
-                <text x="18" y="84" font-family="JetBrains Mono, monospace" font-size="11" fill="#2540ff">policy_number</text>
-              </g>
-              <path d="M224 150 H302" stroke="#0a0a0a" stroke-width="2" marker-end="url(#arrow)"/>
-              <g transform="translate(322 96)">
-                <rect width="150" height="108" fill="#f4f3ee" stroke="#0a0a0a"/>
-                <text x="18" y="34" font-size="16" font-weight="650">Impute</text>
-                <text x="18" y="62" font-family="JetBrains Mono, monospace" font-size="11" fill="#6b6b66">mean / mode</text>
-                <text x="18" y="84" font-family="JetBrains Mono, monospace" font-size="11" fill="#2540ff">confidence_score</text>
-              </g>
-              <path d="M492 150 H570" stroke="#0a0a0a" stroke-width="2" marker-end="url(#arrow)"/>
-              <g transform="translate(590 96)">
-                <rect width="150" height="108" fill="#f4f3ee" stroke="#0a0a0a"/>
-                <text x="18" y="34" font-size="16" font-weight="650">Score</text>
-                <text x="18" y="62" font-family="JetBrains Mono, monospace" font-size="11" fill="#6b6b66">LTV + rules</text>
-                <text x="18" y="84" font-family="JetBrains Mono, monospace" font-size="11" fill="#2540ff">risk_tier</text>
-              </g>
-              <path d="M760 150 H838" stroke="#0a0a0a" stroke-width="2" marker-end="url(#arrow)"/>
-              <g transform="translate(858 76)">
-                <rect width="184" height="148" fill="#0c0d0e" stroke="#0a0a0a"/>
-                <text x="20" y="42" font-size="18" font-weight="650" fill="#f4f3ee">Segments</text>
-                <text x="20" y="72" font-family="JetBrains Mono, monospace" font-size="11" fill="#8e8f88">rules_and_where</text>
-                <text x="20" y="99" font-family="JetBrains Mono, monospace" font-size="11" fill="#c8d0ff">export CSV</text>
-                <text x="20" y="124" font-family="JetBrains Mono, monospace" font-size="11" fill="#8fa3ff">campaign ROI</text>
-              </g>
-            </g>
-          </svg>
-        </div>
-        <div class="diagram-steps">
-          <div class="dstep"><div class="n">01 / Import</div><div class="t">Map any CSV</div><p>Upload, map columns, preview imputation, then commit rows into SQLite.</p></div>
-          <div class="dstep"><div class="n">02 / Repair</div><div class="t">Expose weak data</div><p>Missing values are imputed and marked, not silently hidden.</p></div>
-          <div class="dstep"><div class="n">03 / Decide</div><div class="t">Run risk rules</div><p>Priority-ordered visual or JSON rules set tiers, tags, and confidence adjustments.</p></div>
-          <div class="dstep"><div class="n">04 / Act</div><div class="t">Export and simulate</div><p>Build segments, export CSV, and model cross-sell revenue before outreach.</p></div>
-        </div>
+        <p class="sub">The app is compact, but it is not a static mockup. The importer, scorer, rule tester, renewal board, list builder, exports, and campaign simulator all use real local state.</p>
       </div>
-    </section>
-
-    <section id="flexibility" class="section">
-      <div class="container">
-        <div class="flex-layout">
-          <div class="flex-copy">
-            <span class="idx">FLX / 02</span>
-            <h2>Flexible fields without turning the app into a database project.</h2>
-            <p class="sub">LiteInsurance treats your CSV like the source of truth: map the few columns the scorer needs, keep every extra column as a typed custom field, then reference those fields from visual rules, raw JSON, segment filters, and exports.</p>
-            <div class="grid grid-2 flex-support-grid">
-              <div class="cell"><h3>Spreadsheet-like custom fields</h3><p>Unmapped CSV columns become editable local fields instead of requiring schema migrations.</p><span class="k">metadata.custom_fields</span></div>
-              <div class="cell"><h3>Two rule editing modes</h3><p>Use field/operator/value controls for normal edits, or switch to plain JSON for nested groups and advanced operators.</p><span class="k">visual + JSON</span></div>
-            </div>
-          </div>
-          <div>
-            <div class="field-board" aria-label="Custom field mapping example">
-              <table>
-                <thead><tr><th>CSV header</th><th>App role</th><th>Rule reference</th></tr></thead>
-                <tbody>
-                  <tr><td>policy_number</td><td>Record ID</td><td>policy_number</td></tr>
-                  <tr><td>premium_amount</td><td>LTV input</td><td>premium_amount</td></tr>
-                  <tr><td>agent_code</td><td>Custom field</td><td>custom.agent_code</td></tr>
-                  <tr><td>renewal_probability</td><td>Custom field</td><td>custom.renewal_probability</td></tr>
-                  <tr><td>source_channel</td><td>Custom field</td><td>custom.source_channel</td></tr>
-                </tbody>
-              </table>
-            </div>
-            <div class="mini-tabs" aria-hidden="true">
-              <div class="mini-tab active">Visual builder</div>
-              <div class="mini-tab">Plain JSON</div>
-            </div>
-            <div class="rule-builder-shot" aria-label="Visual rule builder example">
-              <div class="builder-row"><span>custom.renewal_probability</span><span>&gt;=</span><span>0.7</span></div>
-              <div class="builder-row"><span>premium_amount</span><span>&gt;</span><span>120</span></div>
-              <div class="builder-action"><span>set tier: Low</span><span>tag: renewal_ready</span></div>
-            </div>
-          </div>
-        </div>
+      <div class="feat-grid">
+        <div class="feat"><span class="ic"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="14" height="12" rx="1.5"/><path d="M2 7h14M7 7v8"/></svg></span><h3>CSV mapping</h3><p>Header guessing for AMS and spreadsheet exports, manual field mapping, preview rows, staged commit, re-imports that update in place, and custom CSV fields preserved locally.</p><span class="k">import_stage</span></div>
+        <div class="feat"><span class="ic"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 9h3l2-5 2 10 2-5h3"/></svg></span><h3>Missing-data repair</h3><p>Numeric mean, categorical mode, imputed flags, bulk repair tools.</p><span class="k">is_imputed</span></div>
+        <div class="feat"><span class="ic"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 15.5h13M4 12l3.5-3.5 3 2.5L15 5"/><path d="M11.5 5H15v3.5"/></svg></span><h3>LTV model</h3><p>Premium, tenure, policy type multiplier, and retention adjustment.</p><span class="k">ltv_estimate</span></div>
+        <div class="feat"><span class="ic"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4.5" cy="4.5" r="2"/><circle cx="4.5" cy="13.5" r="2"/><circle cx="13.5" cy="9" r="2"/><path d="M6.5 4.5h2a2 2 0 012 2V9h1M6.5 13.5h2a2 2 0 002-2V9"/></svg></span><h3>Risk rules</h3><p>JSON conditions with operators, nested all/any groups, tags, tiers.</p><span class="k">conditions_json</span></div>
+        <div class="feat"><span class="ic"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 2.5h4M8 2.5v4.5L3.5 14a1.2 1.2 0 001 1.8h9a1.2 1.2 0 001-1.8L10 7V2.5"/><path d="M5.5 11h7"/></svg></span><h3>Renewals + rule tester</h3><p>A 120-day renewal board with owners, touchpoints and consent-aware call lists; test any rule against a real policy before saving it.</p><span class="k">renewal_status</span></div>
+        <div class="feat"><span class="ic"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 2l7 3.5-7 3.5-7-3.5z"/><path d="M2 9l7 3.5L16 9M2 12.5L9 16l7-3.5"/></svg></span><h3>Lists</h3><p>Plain-language conditions compiled to a validated SQL-ish filter, combined with selected rules; counts and exports respect consent.</p><span class="k">rules_and_where</span></div>
+        <div class="feat"><span class="ic"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="6.5"/><circle cx="9" cy="9" r="3.5"/><circle cx="9" cy="9" r=".8" fill="currentColor"/></svg></span><h3>Campaign simulator</h3><p>Model conversion rate, offer value, contact cost, and lift.</p><span class="k">net_revenue</span></div>
+        <div class="feat"><span class="ic"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="2.5"/><path d="M9 1.5v2M9 14.5v2M1.5 9h2M14.5 9h2M3.7 3.7l1.4 1.4M12.9 12.9l1.4 1.4M3.7 14.3l1.4-1.4M12.9 5.1l1.4-1.4"/></svg></span><h3>Ops controls</h3><p>Audit log, CSRF, CSP, rate limits, cron recompute, backup-friendly DB, and a setup doctor validates deployment.</p><span class="k">cron_jobs</span></div>
       </div>
-    </section>
+    </div>
+  </section>
 
-    <section id="features" class="section">
-      <div class="container">
-        <div class="section-head">
-          <span class="idx">FTR / 03</span>
-          <h2>Eight product surfaces that make the demo feel real.</h2>
-          <p class="sub">The app is compact, but it is not a static mockup. The importer, scorer, rule tester, segment builder, exports, and campaign simulator all use real local state.</p>
-        </div>
-        <div class="grid grid-2 grid-4">
-          <div class="cell"><h3>CSV mapping</h3><p>Header guessing, manual field mapping, preview rows, staged commit, and custom CSV fields preserved locally.</p><span class="k">import_stage</span></div>
-          <div class="cell"><h3>Missing-data repair</h3><p>Numeric mean, categorical mode, imputed flags, bulk repair tools.</p><span class="k">is_imputed</span></div>
-          <div class="cell"><h3>LTV model</h3><p>Premium, tenure, policy type multiplier, and retention adjustment.</p><span class="k">ltv_estimate</span></div>
-          <div class="cell"><h3>Risk rules</h3><p>JSON conditions with operators, nested all/any groups, tags, tiers.</p><span class="k">conditions_json</span></div>
-          <div class="cell"><h3>Rule tester</h3><p>Run a candidate rule against a recent policy before saving it.</p><span class="k">rule_test</span></div>
-          <div class="cell"><h3>Segments</h3><p>Combine selected rules with a validated SQL-ish filter expression.</p><span class="k">rules_and_where</span></div>
-          <div class="cell"><h3>Campaign simulator</h3><p>Model conversion rate, offer value, contact cost, and lift.</p><span class="k">net_revenue</span></div>
-          <div class="cell"><h3>Ops controls</h3><p>Audit log, CSRF, CSP, rate limits, cron recompute, backup-friendly DB, and a setup doctor validates deployment.</p><span class="k">cron_jobs</span></div>
-        </div>
-      </div>
-    </section>
-
-    <section id="setup" class="section">
-      <div class="container">
-        <div class="section-head">
-          <span class="idx">RUN / 04</span>
+  <section id="setup" class="sec alt">
+    <div class="wrap">
+      <div class="shead split">
+        <div>
+          <span class="eyebrow">04 <i>/</i> Evaluate</span>
           <h2>Three ways to evaluate it.</h2>
-          <p class="sub">Start in the browser, then deploy the PHP app when you want to test imports, users, exports, and server-side persistence.</p>
         </div>
-        <div class="paths">
-          <div class="path">
-            <div class="path-copy">
-              <span class="path-tag rec">No install</span>
-              <h3>Browser demo</h3>
-              <p>Runs entirely client-side with a deterministic 200-policy seed dataset, local CSV upload for policyholder rows, editable custom fields, and visual or JSON rules saved only in the browser.</p>
-            </div>
-            <pre class="pre-block"><span class="c"># nothing to install</span>
-open ./demo.html</pre>
-            <a class="link" href="./demo.html">Launch demo</a>
+        <p class="sub">Start in the browser, then deploy the PHP app when you want to test imports, users, exports, and server-side persistence.</p>
+      </div>
+      <div class="paths">
+        <div class="path">
+          <div class="path-copy">
+            <span class="tagp blue">No install</span>
+            <h3>Browser demo</h3>
+            <p>Runs entirely client-side with a deterministic 200-policy seed dataset, local CSV upload for policyholder rows, editable custom fields, and visual or JSON rules saved only in the browser.</p>
           </div>
-          <div class="path">
-            <div class="path-copy">
-              <span class="path-tag">Recommended</span>
-              <h3>Shared hosting</h3>
-              <p>Upload the single PHP file, register the first admin, then use Settings to run the setup doctor before importing real CSVs.</p>
-            </div>
-            <pre class="pre-block"><span class="c"># public_html/</span>
+          <pre class="pre-block"><span class="c"># nothing to install</span>
+open ./demo.html</pre>
+          <a class="plink" href="./demo.html">Launch demo <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 7h10M8 3l4 4-4 4"/></svg></a>
+        </div>
+        <div class="path rec">
+          <div class="path-copy">
+            <span class="tagp dark">Recommended</span>
+            <h3>Shared hosting</h3>
+            <p>Upload the single PHP file, register the first admin, then use Settings to run the setup doctor before importing real CSVs.</p>
+          </div>
+          <pre class="pre-block"><span class="c"># public_html/</span>
 liteinsurance.php
 
 <span class="c"># then visit</span>
 https://YOURDOMAIN/liteinsurance.php</pre>
-            <a class="link" href="./docs.html#deploy">Deployment docs</a>
+          <a class="plink" href="./docs.html#deploy">Deployment docs <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 7h10M8 3l4 4-4 4"/></svg></a>
+        </div>
+        <div class="path">
+          <div class="path-copy">
+            <span class="tagp">Local</span>
+            <h3>Developer run</h3>
+            <p>Use PHP's built-in server to test the same app locally before uploading it.</p>
           </div>
-          <div class="path">
-            <div class="path-copy">
-              <span class="path-tag">Local</span>
-              <h3>Developer run</h3>
-              <p>Use PHP's built-in server to test the same app locally before uploading it.</p>
-            </div>
-            <pre class="pre-block">php -S 127.0.0.1:8000
+          <pre class="pre-block">php -S 127.0.0.1:8000
 open http://127.0.0.1:8000/liteinsurance.php</pre>
-            <a class="link" href="./docs.html#local">Local docs</a>
-          </div>
+          <a class="plink" href="./docs.html#local">Local docs <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 7h10M8 3l4 4-4 4"/></svg></a>
         </div>
-      </div>
-    </section>
-
-    <section id="trust" class="section">
-      <div class="container">
-        <div class="section-head">
-          <span class="idx">SEC / 05</span>
-          <h2>Built for sensitive policyholder data.</h2>
-          <p class="sub">LiteInsurance assumes CSVs contain private customer data, so the default architecture keeps the app small, self-hosted, and inspectable.</p>
-        </div>
-        <div class="grid grid-3">
-          <div class="cell"><h3>No vendor data loop</h3><p>Production data stays in your SQLite database and upload directory.</p><span class="k">DB_PATH / UPLOAD_DIR</span></div>
-          <div class="cell"><h3>Guarded web surface</h3><p>CSRF checks, nonce-based CSP, rate limits, upload hardening, and security headers.</p><span class="k">csrf_token</span></div>
-          <div class="cell"><h3>Operationally boring</h3><p>Back up one SQLite file, rotate one cron token, and keep uploads out of webroot when possible.</p><span class="k">CRON_TOKEN</span></div>
-        </div>
-      </div>
-    </section>
-
-    <section id="faq" class="section">
-      <div class="container">
-        <div class="section-head">
-          <span class="idx">FAQ / 06</span>
-          <h2>Questions an evaluator will ask before uploading a real CSV.</h2>
-        </div>
-        <details>
-          <summary>Does LiteInsurance send policyholder data to a cloud service?</summary>
-          <p>No. The production app is a PHP file backed by SQLite on your server. Imported CSV data stays in your hosting account unless you export it.</p>
-        </details>
-        <details>
-          <summary>What are the server requirements?</summary>
-          <p>PHP 8 or newer with PDO SQLite enabled. The default setup is designed for shared hosting and cPanel-style environments.</p>
-        </details>
-        <details>
-          <summary>Can I try it before deploying PHP?</summary>
-          <p>Yes. The no-install demo starts with a deterministic 200-policy dataset, then lets you replace it with a local policyholder CSV, edit custom field cells, and build risk rules visually or as JSON for dashboards, segments, and campaign math.</p>
-        </details>
-        <details>
-          <summary>Is this a full agency management system?</summary>
-          <p>No. LiteInsurance focuses on one slice: importing policyholder exports, cleaning them, scoring LTV and risk, segmenting, and simulating outreach.</p>
-        </details>
-        <details>
-          <summary>What happens with missing CSV fields?</summary>
-          <p>Mapped numeric fields use mean imputation; mapped categorical fields use mode or defaults. Unmapped columns are retained as custom fields, and LTV/risk scoring stays blank or Unknown until the required scoring inputs are mapped.</p>
-        </details>
-        <details>
-          <summary>Can my CSV have custom fields?</summary>
-          <p>Yes. The importer uses Record ID and optional Display name mapping, while custom CSV fields preserved locally can be viewed, exported, and referenced from rules or segments with <code>custom.field_key</code>.</p>
-        </details>
-        <details>
-          <summary>How do risk rules work?</summary>
-          <p>Rules use the same conditions-and-actions format whether you edit them in the visual builder or the plain JSON editor. Matching rules can set a risk tier, adjust confidence, and add tags for segment logic.</p>
-        </details>
-      </div>
-    </section>
-
-    <section class="support">
-      <div class="container support-inner">
-        <div>
-          <span class="eyebrow">Demo first / deploy second</span>
-          <h2>See the full insurance workflow before you touch a server.</h2>
-          <p>The browser demo shows the dashboard, policy table, custom field sheet, rule builder, risk segments, and campaign simulator with realistic sample data.</p>
-        </div>
-        <a class="btn btn-dark" href="./demo.html">Open the demo</a>
-      </div>
-    </section>
-  </main>
-
-  <footer>
-    <div class="container footer-inner">
-      <p class="footer-note">LiteInsurance -- self-hosted insurance ops tooling by <a class="link" href="https://tanziro.com" target="_blank" rel="noopener">tanziro.com</a>.</p>
-      <div class="footer-links">
-        <a href="./docs.html">docs</a>
-        <a href="./compare.html">compare</a>
-        <a href="./demo.html">demo</a>
-        <a href="./SETUP.md">setup</a>
-        <a href="./SECURITY.md">security</a>
-        <a href="https://github.com/tanzir71/liteinsurance" target="_blank" rel="noopener">github</a>
       </div>
     </div>
+  </section>
+
+  <section id="trust" class="sec dark">
+    <div class="wrap">
+      <div class="shead split">
+        <div>
+          <span class="eyebrow">05 <i>/</i> Security</span>
+          <h2>Built for sensitive policyholder data.</h2>
+        </div>
+        <p class="sub">LiteInsurance assumes CSVs contain private customer data, so the default architecture keeps the app small, self-hosted, and inspectable.</p>
+      </div>
+      <div class="sec-grid">
+        <div class="dcell"><span class="ic"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="10" cy="5" rx="6" ry="2.5"/><path d="M4 5v10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V5M4 10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5"/></svg></span><h3>No vendor data loop</h3><p>Production data stays in your SQLite database and upload directory.</p><span class="k">DB_PATH / UPLOAD_DIR</span></div>
+        <div class="dcell"><span class="ic"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 2.5l6 2.5v4.5c0 3.8-2.6 6.4-6 8-3.4-1.6-6-4.2-6-8V5z"/><path d="M7.5 10l2 2 3.5-4"/></svg></span><h3>Guarded web surface</h3><p>CSRF checks, nonce-based CSP, rate limits, upload hardening, and security headers.</p><span class="k">csrf_token</span></div>
+        <div class="dcell"><span class="ic"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="M6.5 8.5l2 1.5-2 1.5M10.5 12h3"/></svg></span><h3>Operationally boring</h3><p>Back up one SQLite file, rotate one cron token, and keep uploads out of webroot when possible.</p><span class="k">CRON_TOKEN</span></div>
+      </div>
+      <div class="controls">
+        <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>CSRF verified on every POST</div>
+        <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>Nonce CSP, HSTS, X-Frame-Options</div>
+        <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>Strict sessions, 30-minute idle timeout</div>
+        <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>SQLite-backed login &amp; upload rate limits</div>
+        <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>.csv + MIME checks, randomized filenames</div>
+        <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>Segment filters compiled to placeholders</div>
+        <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>Names masked in list views</div>
+        <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>Audit log of imports, rules &amp; campaigns</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="compare" class="sec">
+    <div class="wrap">
+      <div class="shead split">
+        <div>
+          <span class="eyebrow">Compare</span>
+          <h2>Smaller on purpose.</h2>
+        </div>
+        <p class="sub">Large agency systems, CRMs, and BI stacks are good at broad workflows. LiteInsurance does the CSV-to-segment slice without adding a vendor database.</p>
+      </div>
+      <p class="swipe">Scroll the table sideways to see CRM / AMS and BI stack →</p>
+      <div class="cmp">
+        <table>
+          <thead><tr><th>Capability</th><th class="us">LiteInsurance</th><th>Spreadsheet</th><th class="hide-m">CRM / AMS</th><th class="hide-m">BI stack</th></tr></thead>
+          <tbody>
+            <tr><td>CSV import and column mapping</td><td class="us"><span class="yes"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 7.5l3 3 6-7"/></svg>Built in</span></td><td>Manual</td><td class="hide-m">Often available</td><td class="hide-m">Requires pipeline</td></tr>
+            <tr><td>Missing-field imputation with confidence flags</td><td class="us"><span class="yes"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 7.5l3 3 6-7"/></svg>Built in</span></td><td>Manual formulas</td><td class="hide-m">Varies by configuration</td><td class="hide-m">Requires modeling</td></tr>
+            <tr><td>Visual or JSON risk rules with tester</td><td class="us"><span class="yes"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 7.5l3 3 6-7"/></svg>Built in</span></td><td>Fragile formulas</td><td class="hide-m">Workflow-dependent</td><td class="hide-m">Requires custom logic</td></tr>
+            <tr><td>Segment CSV export</td><td class="us"><span class="yes"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 7.5l3 3 6-7"/></svg>Built in</span></td><td>Manual filters</td><td class="hide-m">Usually available</td><td class="hide-m">Requires query/export</td></tr>
+            <tr><td>Full policy servicing</td><td class="us"><span class="no">— Not included</span></td><td>Not suitable</td><td class="hide-m">Core strength</td><td class="hide-m">Not core</td></tr>
+            <tr><td>Data leaves your hosting account</td><td class="us"><span class="yes"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 7.5l3 3 6-7"/></svg>No, by default</span></td><td>No by default</td><td class="hide-m">Depends on vendor</td><td class="hide-m">Depends on architecture</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cmp-foot"><span>No carrier integrations, no enterprise workflow suite, no warehouse-scale analytics — by design.</span><a class="plink" style="margin-top:0" href="./compare.html">Read the full comparison <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 7h10M8 3l4 4-4 4"/></svg></a></div>
+    </div>
+  </section>
+
+  <section id="faq" class="sec alt">
+    <div class="wrap">
+      <div class="faq-grid">
+        <div class="faq-side">
+          <span class="eyebrow">06 <i>/</i> FAQ</span>
+          <h2>Questions an evaluator will ask before uploading a real CSV.</h2>
+          <p class="sub">Short answers here; the docs cover deployment, configuration, and the scoring pipeline in detail.</p>
+          <div class="help"><h4>Still evaluating?</h4><p>Read the operating docs or open an issue on GitHub.</p><div class="links"><a href="./docs.html">Docs →</a><a href="https://github.com/tanzir71/liteinsurance">GitHub →</a></div></div>
+        </div>
+        <div>
+          <div class="qa"><h3>Does LiteInsurance send policyholder data to a cloud service?<span>01</span></h3><p>No. The production app is a PHP file backed by SQLite on your server. Imported CSV data stays in your hosting account unless you export it.</p></div>
+          <div class="qa"><h3>What are the server requirements?<span>02</span></h3><p>PHP 8.1 or newer (8.3 recommended) with PDO SQLite enabled. The default setup is designed for shared hosting and cPanel-style environments.</p></div>
+          <div class="qa"><h3>Can I try it before deploying PHP?<span>03</span></h3><p>Yes. The no-install demo starts with a deterministic 200-policy dataset, then lets you replace it with a local policyholder CSV, edit custom field cells, and build risk rules visually or as JSON for dashboards, segments, and campaign math.</p></div>
+          <div class="qa"><h3>Is this a full agency management system?<span>04</span></h3><p>No. LiteInsurance focuses on one slice: importing policyholder exports, cleaning them, scoring LTV and risk, working renewals, building consent-aware lists, and simulating outreach.</p></div>
+          <div class="qa"><h3>What happens with missing CSV fields?<span>05</span></h3><p>Mapped numeric fields use mean imputation; mapped categorical fields use mode or defaults. Unmapped columns are retained as custom fields, and LTV/risk scoring stays blank or Unknown until the required scoring inputs are mapped.</p></div>
+          <div class="qa"><h3>Can my CSV have custom fields?<span>06</span></h3><p>Yes. The importer uses Record ID and optional Display name mapping, while custom CSV fields preserved locally can be viewed, exported, and referenced from rules or segments with <code>custom.field_key</code>.</p></div>
+          <div class="qa"><h3>How do risk rules work?<span>07</span></h3><p>Rules use the same conditions-and-actions format whether you edit them in the visual builder or the plain JSON editor. Matching rules can set a risk tier, adjust confidence, and add tags for segment logic.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="glow"></div>
+    <div class="wrap support-inner">
+      <div>
+        <span class="eyebrow">Demo first <i>/</i> deploy second</span>
+        <h2>See the full insurance workflow before you touch a server.</h2>
+        <p>The browser demo shows the dashboard, policy table, custom field sheet, rule builder, risk segments, and campaign simulator with realistic sample data.</p>
+      </div>
+      <div class="btns">
+        <a class="btn btn-accent" href="./demo.html">Open the demo <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8h10M9 4l4 4-4 4"/></svg></a>
+        <a class="btn btn-outline-dark" href="./docs.html">Read setup docs</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+  <footer class="ftr">
+    <div class="wrap">
+      <div>
+        <a class="brand" href="./index.html"><svg class="mark" width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><path d="M8 3.5h11.5L26 10v9.8c0 4.6-4.1 7.8-10 9.7-5.9-1.9-10-5.1-10-9.7V5.5a2 2 0 012-2z" fill="#FFFFFF"/><path d="M19.5 3.5V8a2 2 0 002 2H26z" fill="#4D66FF"/><rect x="10.5" y="14" width="9" height="2.6" rx="1.3" fill="#0A0E1A"/><rect x="10.5" y="19" width="6" height="2.6" rx="1.3" fill="#0A0E1A" fill-opacity=".55"/></svg><span class="brand-name">LiteInsurance</span></a>
+        <p class="footer-note">LiteInsurance — self-hosted insurance ops tooling by <a href="https://tanziro.com">tanziro.com</a>.</p>
+      </div>
+      <div class="fcol"><h5>Product</h5><a href="./demo.html">Demo</a><a href="./docs.html">Docs</a><a href="./compare.html">Compare</a></div>
+      <div class="fcol"><h5>Resources</h5><a href="./SETUP.md">Setup</a><a href="./SECURITY.md">Security</a><a href="https://github.com/tanzir71/liteinsurance">GitHub</a></div>
+      <div class="fcol"><h5>Stack</h5><a>PHP 8.1+ · PDO SQLite</a><a>No build step</a><a href="https://github.com/tanzir71/liteinsurance">Source on GitHub</a></div>
+    </div>
+    <div class="fbot"><div class="wrap"><span>© 2026 LiteInsurance</span><span>No affiliation with any CRM, AMS, BI, or insurance software vendor.</span></div></div>
   </footer>
+
+</div>
 </body>
 </html>
