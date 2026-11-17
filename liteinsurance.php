@@ -1118,7 +1118,7 @@ a{color:inherit;}code{font-family:var(--mono);font-size:.92em;background:var(--l
 .navLogout{background:transparent;border:1px solid var(--navLine);color:var(--navInk);border-radius:var(--r);padding:7px 10px;font:inherit;font-size:12.5px;cursor:pointer;width:100%;text-align:left;}
 .navLogout:hover{border-color:var(--navMute);}
 .topBar{grid-column:2;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 28px;background:var(--white);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;}
-.topTitle{min-width:0;}.topTitle .muted{margin-top:2px;}
+.topTitle{min-width:0;flex:1;}.topTitle .muted{margin-top:2px;}
 .topSearch{flex:0 1 340px;}.topSearch .input{background:var(--paper);}
 .main{grid-column:2;padding:22px 28px 44px;max-width:1360px;width:100%;}
 .footer{grid-column:2;border-top:1px solid var(--line);padding:14px 28px;color:var(--muted);font-size:12px;display:flex;gap:14px;align-items:center;}
@@ -1251,19 +1251,55 @@ a{color:inherit;}code{font-family:var(--mono);font-size:.92em;background:var(--l
 .stepNum{flex:none;width:22px;height:22px;border-radius:var(--r);display:grid;place-items:center;background:var(--line2);font:11px var(--mono);}
 .stepLabel{flex:1;}
 .stepDone{color:var(--muted);}.stepDone .stepNum{background:var(--green);color:#fff;}
-.board{display:grid;grid-template-columns:repeat(6,minmax(180px,1fr));gap:10px;overflow-x:auto;padding-bottom:8px;align-items:start;}
-.boardCol{background:var(--line2);border-radius:var(--r);padding:8px;min-height:120px;display:flex;flex-direction:column;gap:8px;}
-.boardHead{display:flex;align-items:center;gap:8px;padding:2px 2px 4px;}
-.boardCount{font:12px var(--mono);color:var(--slate);}
-.boardHead .muted{margin-left:auto;}
-.boardEmpty,.boardMore{padding:8px;color:var(--muted);font-size:12px;}
-.rcard{background:var(--white);border:1px solid var(--line);border-radius:var(--r);padding:10px;display:flex;flex-direction:column;gap:4px;font-size:12.5px;}
-.rcardDue{box-shadow:inset 3px 0 0 var(--red);}
+.topActions{display:flex;gap:10px;align-items:center;flex:none;}.topActions form{margin:0;}
+.btnLg{padding:10px 16px;font-size:14px;}
+.boardFilters{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 16px;}
+.pillSelect{appearance:none;-webkit-appearance:none;height:34px;padding:0 30px 0 12px;border:1px solid var(--line);border-radius:var(--r);background:var(--white) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236B7280' stroke-width='1.4'/%3E%3C/svg%3E") no-repeat right 11px center;color:var(--slate);font:inherit;font-size:13px;cursor:pointer;max-width:240px;}
+.pillSelect:hover{border-color:var(--slate);}
+.pillToggle{display:inline-flex;align-items:center;height:34px;padding:0 12px;border:1px solid var(--line);border-radius:var(--r);background:var(--white);color:var(--slate);font-size:13px;text-decoration:none;}
+.pillToggle:hover{border-color:var(--slate);color:var(--ink);}
+.pillOn,.pillOn:hover{background:var(--acc50);border-color:var(--acc100);color:var(--accInk);}
+.switch{position:relative;display:inline-flex;align-items:center;gap:8px;margin-left:10px;font-size:13px;color:var(--slate);cursor:pointer;}
+.switch input{position:absolute;opacity:0;width:1px;height:1px;}
+.switch i{position:relative;width:30px;height:17px;border-radius:9px;background:#D7D5CE;transition:background .15s;}
+.switch i::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff;transition:transform .15s;}
+.switch input:checked+i{background:var(--acc);}.switch input:checked+i::after{transform:translateX(13px);}
+.switch input:focus-visible+i{outline:2px solid var(--acc);outline-offset:2px;}
+.boardHint{margin-left:auto;color:var(--muted);font-size:12.5px;}
+.board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(178px,1fr);gap:12px;overflow-x:auto;align-items:stretch;min-height:calc(100vh - 230px);padding-bottom:6px;}
+.boardCol{display:flex;flex-direction:column;gap:10px;min-width:0;padding:12px 10px;border:1px solid var(--line);border-radius:var(--r);background:#F0EEE8;}
+.boardHot{background:#FBE9E6;border-color:#F3D2CD;}
+.boardHead h3{display:flex;justify-content:space-between;align-items:center;gap:6px;margin:0;font-size:13.5px;font-weight:600;letter-spacing:-.01em;}
+.boardHead h3 b{min-width:20px;padding:0 6px;border-radius:9px;background:var(--ink);color:#fff;font:600 10.5px/17px var(--mono);text-align:center;}
+.boardHot .boardHead h3 b{background:var(--red);}
+.boardWin{margin-top:2px;font:11.5px/1.3 var(--mono);color:var(--muted);}
+.boardHot .boardWin{color:var(--red);}
+.boardHead p{margin:3px 0 0;font-size:11.5px;line-height:1.35;color:var(--muted);}
+.boardEmpty{padding:4px 2px;color:var(--muted);font-size:12px;}
+.boardMore{display:block;padding:8px;border:1px dashed #CFCDC5;border-radius:var(--r);color:var(--muted);font-size:12.5px;font-weight:600;text-align:center;text-decoration:none;}
+.boardMore:hover{color:var(--ink);border-color:var(--slate);}
+.boardHot .boardMore{border-color:#EDBAB2;}
+.boardNote{margin:10px 0 0;}
+.rcard{display:flex;flex-direction:column;gap:3px;padding:11px 11px 12px;border:1px solid var(--line);border-radius:var(--r);background:var(--white);font-size:12.5px;}
 .rcardTop{display:flex;justify-content:space-between;align-items:center;gap:6px;}
-.rcardName{font-weight:600;font-size:13px;}
-.rcardMeta{display:flex;justify-content:space-between;gap:6px;color:var(--slate);}
-.rcardForm{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;padding-top:6px;border-top:1px solid var(--line2);}
-.rcardForm .select{flex:1 1 100px;}.rcardForm .input{flex:1 1 80px;min-width:0;}
+.rcardName{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:13px;font-weight:600;letter-spacing:.02em;text-decoration:none;}
+.rcardName:hover{color:var(--acc);}
+.rcardPol{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11.5px var(--mono);color:var(--muted);}
+.rcardDate{margin-top:2px;color:var(--ink);}.rcardDate.due{color:var(--red);font-weight:600;}
+.rcardPrem{font-variant-numeric:tabular-nums;color:var(--ink);}
+.chg{margin-left:3px;font-weight:600;}.chgUp{color:var(--red);}.chgMid{color:var(--amber);}.chgDown{color:var(--green);}
+.rcardPills{margin-top:5px;}
+.rcard .tier{border-radius:10px;padding:1px 9px 1px 8px;}
+.rcard .tier::before{content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:currentColor;vertical-align:1px;}
+.rcardForm{margin-top:4px;}
+.stPick{position:relative;display:inline-flex;max-width:100%;}
+.stPick::before{content:"";position:absolute;left:9px;top:50%;width:7px;height:7px;margin-top:-3.5px;border-radius:1px;background:#8A8F99;pointer-events:none;}
+.stp-contacted::before{background:var(--acc);}.stp-quoted::before{background:#5B34C7;}.stp-remarketing::before{background:var(--amber);}.stp-renewed::before{background:var(--green);}.stp-lost::before{background:var(--red);}
+.stPick select{appearance:none;-webkit-appearance:none;max-width:100%;padding:3px 24px 3px 22px;border:1px solid var(--line);border-radius:var(--r);background:var(--white) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%238A8F99' stroke-width='1.3'/%3E%3C/svg%3E") no-repeat right 8px center;color:var(--slate);font:inherit;font-size:12px;cursor:pointer;}
+.stPick select:hover{border-color:var(--slate);}
+.avatar{display:inline-grid;place-items:center;flex:none;width:24px;height:24px;border-radius:50%;font:700 9.5px/1 var(--sans);letter-spacing:.02em;}
+.avatar-a{background:#DCE2FF;color:#1A2FD6;}.avatar-b{background:#E7F4EC;color:#157F3B;}.avatar-c{background:#F1ECFE;color:#5B34C7;}.avatar-d{background:#FDF2E4;color:#B45309;}
+.avatarSoft{opacity:.55;}.avatarNone{background:var(--line2);color:var(--muted);}
 .panel{border-color:var(--acc100);box-shadow:0 1px 0 var(--acc100);}
 .panelHead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;}
 .panelHead .actionsRow{margin:0;}
@@ -1320,7 +1356,7 @@ a.userPill:hover,.userPillOn{background:var(--nav2);color:var(--navInk);}
 .dangerBtn:hover{background:var(--red50);}
 .btnSecondary:disabled{opacity:.5;cursor:not-allowed;}
 @media (max-width:1200px){.kpiGrid.kpi5{grid-template-columns:repeat(3,minmax(0,1fr));}.gridMap{grid-template-columns:repeat(2,minmax(0,1fr));}.whyGrid{grid-template-columns:1fr;}.steps{grid-template-columns:1fr 1fr;}}
-@media (max-width:900px){.appShell{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto 1fr auto;background:var(--paper);}.sideNav{grid-row:auto;grid-column:1;position:static;height:auto;flex-direction:row;align-items:center;overflow-x:auto;padding:8px;gap:4px;}.brand{padding:4px 8px;}.brand span{display:none;}.navGroup{display:none;}.navItem{white-space:nowrap;}.sideFoot{margin:0 0 0 auto;border:0;padding:0;flex-direction:row;}.userPill{display:none;}.topBar,.main,.footer{grid-column:1;}.topBar{position:static;flex-wrap:wrap;padding:12px 16px;}.topSearch{flex:1 1 100%;}.main{padding:16px 12px 36px;}.grid2,.gridWide,.grid3,.panelGrid{grid-template-columns:1fr;}.kpiGrid,.kpiGrid.kpi5{grid-template-columns:1fr 1fr;}.gridMap{grid-template-columns:1fr;}.checkGrid{grid-template-columns:1fr;}.ruleConditionRow{grid-template-columns:1fr;}.ruleActionGrid{grid-template-columns:1fr 1fr;}.lbRow{grid-template-columns:1fr 1fr;}.steps{grid-template-columns:1fr;}.statRow{grid-template-columns:repeat(3,minmax(0,1fr));}.fnRow{grid-template-columns:110px minmax(0,1fr) 70px;}.fnTotals{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media (max-width:900px){.appShell{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto 1fr auto;background:var(--paper);}.sideNav{grid-row:auto;grid-column:1;position:static;height:auto;flex-direction:row;align-items:center;overflow-x:auto;padding:8px;gap:4px;}.brand{padding:4px 8px;}.brand span{display:none;}.navGroup{display:none;}.navItem{white-space:nowrap;}.sideFoot{margin:0 0 0 auto;border:0;padding:0;flex-direction:row;}.userPill{display:none;}.topBar,.main,.footer{grid-column:1;}.topBar{position:static;flex-wrap:wrap;padding:12px 16px;}.topSearch{flex:1 1 100%;}.topTitle{flex:1 1 100%;}.topActions{flex:1 1 100%;flex-wrap:wrap;}.boardHint{margin-left:0;flex:1 1 100%;}.switch{margin-left:0;}.main{padding:16px 12px 36px;}.grid2,.gridWide,.grid3,.panelGrid{grid-template-columns:1fr;}.kpiGrid,.kpiGrid.kpi5{grid-template-columns:1fr 1fr;}.gridMap{grid-template-columns:1fr;}.checkGrid{grid-template-columns:1fr;}.ruleConditionRow{grid-template-columns:1fr;}.ruleActionGrid{grid-template-columns:1fr 1fr;}.lbRow{grid-template-columns:1fr 1fr;}.steps{grid-template-columns:1fr;}.statRow{grid-template-columns:repeat(3,minmax(0,1fr));}.fnRow{grid-template-columns:110px minmax(0,1fr) 70px;}.fnTotals{grid-template-columns:repeat(2,minmax(0,1fr));}}
 CSS;
     return '<style nonce="' . $nonce . '">' . app_font_faces() . str_replace('__ACCENT__', $accent, $css) . '</style>';
 }
@@ -4454,6 +4490,9 @@ function render_app(PDO $pdo, array $user, string $tab): void
     $tab = normalize_tab($tab);
     $GLOBALS['LI_USER'] = $user;
     [$title, $subtitle] = page_meta($tab);
+    if ($tab === 'renewals') {
+        $subtitle = renewals_subtitle($pdo);
+    }
     $isAdmin = (string)$user['role'] === 'admin';
     $dueSoon = (int)$pdo->query('SELECT COUNT(*) FROM policyholders WHERE expiration_date IS NOT NULL AND ' . sql_days_to_expiry() . " BETWEEN 0 AND 30 AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND " . sql_in_force())->fetchColumn();
 
@@ -4484,7 +4523,8 @@ function render_app(PDO $pdo, array $user, string $tab): void
     echo '</aside>';
 
     echo '<header class="topBar"><div class="topTitle"><h1 class="h1">' . h($title) . '</h1><div class="muted">' . h($subtitle) . '</div></div>';
-    echo '<form class="topSearch" method="get" role="search"><input type="hidden" name="tab" value="profiles"><input class="input" type="search" name="q" placeholder="Search policy #, ' . h(strtolower(lbl('client'))) . ', household" aria-label="Search the book" value="' . h($tab === 'profiles' ? (string)($_GET['q'] ?? '') : '') . '"></form>';
+    echo $tab === 'renewals' ? '' : '<form class="topSearch" method="get" role="search"><input type="hidden" name="tab" value="profiles"><input class="input" type="search" name="q" placeholder="Search policy #, ' . h(strtolower(lbl('client'))) . ', household" aria-label="Search the book" value="' . h($tab === 'profiles' ? (string)($_GET['q'] ?? '') : '') . '"></form>';
+    echo page_actions($tab);
     echo '</header>';
 
     echo '<main class="main">';
@@ -4712,124 +4752,238 @@ function render_first_run_checklist(PDO $pdo, int $total): void
 
 function renewal_filters(): array
 {
-    $win = (int)($_GET['win'] ?? ($_POST['win'] ?? 60));
-    if (!in_array($win, [30, 60, 90, 120], true)) {
-        $win = 60;
+    $max = max(renewal_cadence());
+    $win = (int)($_GET['win'] ?? ($_POST['win'] ?? $max));
+    if ($win < 1 || $win > 365) {
+        $win = $max;
     }
     $owner = trim((string)($_GET['owner'] ?? ($_POST['owner'] ?? '')));
     return [$win, $owner];
 }
 
-function renewal_window_query(PDO $pdo, int $win, string $owner, string $select, string $extra = '', int $limit = 600): array
+/** Line, risk and premium-change filters shared by the board and its exports. */
+function renewal_extra_filters(): array
+{
+    $line = trim((string)($_GET['line'] ?? ($_POST['line'] ?? '')));
+    $risk = (string)($_GET['risk'] ?? ($_POST['risk'] ?? '')) === '1';
+    $chg = (string)($_GET['chg'] ?? ($_POST['chg'] ?? '')) === '1';
+    $sql = [];
+    $args = [];
+    if ($line !== '') {
+        $sql[] = "COALESCE(NULLIF(line_of_business,''), policy_type) = ?";
+        $args[] = mb_substr($line, 0, 120);
+    }
+    if ($risk) {
+        $sql[] = "risk_tier IN ('High','Review')";
+    }
+    if ($chg) {
+        $sql[] = 'prior_premium > 0 AND premium_amount >= prior_premium * 1.1';
+    }
+    return ['line' => $line, 'risk' => $risk, 'chg' => $chg, 'sql' => implode(' AND ', $sql), 'args' => $args];
+}
+
+function renewal_owner_sql(): string
+{
+    return "COALESCE(NULLIF(renewal_owner,''), NULLIF(producer,''))";
+}
+
+function renewal_window_query(PDO $pdo, int $win, string $owner, string $select, string $extra = '', int $limit = 600, array $extraArgs = []): array
 {
     $days = sql_days_to_expiry();
     $where = "expiration_date IS NOT NULL AND expiration_date <> '' AND $days BETWEEN -30 AND ? AND " . sql_in_force();
     $args = [$win];
     if ($owner === '__none__') {
-        $where .= " AND (renewal_owner IS NULL OR renewal_owner = '')";
+        $where .= ' AND ' . renewal_owner_sql() . ' IS NULL';
     } elseif ($owner !== '') {
-        $where .= ' AND renewal_owner = ?';
+        $where .= ' AND ' . renewal_owner_sql() . ' = ?';
         $args[] = $owner;
     }
     if ($extra !== '') {
         $where .= ' AND ' . $extra;
+        foreach ($extraArgs as $a) {
+            $args[] = $a;
+        }
     }
     $st = $pdo->prepare('SELECT ' . $select . ", $days AS d FROM policyholders WHERE " . $where . ' ORDER BY expiration_date ASC, id ASC LIMIT ' . (int)$limit);
     $st->execute($args);
     return $st->fetchAll();
 }
 
-function render_tab_renewals(PDO $pdo): void
+/** Board columns follow the renewal cadence: one column per touchpoint, the last one also holds 30 days of overdue renewals. */
+function renewal_stage_columns(): array
+{
+    $cad = array_values(renewal_cadence());
+    $n = count($cad);
+    $names = [
+        ['Bind', 'Confirm, bind and update records'],
+        ['Present to client', 'Recommendation and coverage gaps'],
+        ['Compare quotes', 'Incumbent against alternatives'],
+        ['Remarket decision', 'Remarket if the rise is 10–15% or more'],
+        ['Update exposures', 'Ask the client what changed'],
+        ['Flag & prioritise', 'Pull the list; rank by premium and risk'],
+    ];
+    $cols = [];
+    for ($i = 0; $i < $n; $i++) {
+        $hi = $cad[$i];
+        $last = $i === $n - 1;
+        $lo = $last ? -30 : $cad[$i + 1] + 1;
+        [$title, $desc] = $names[$n - 1 - $i] ?? ['Early review', 'Check the file and the client’s situation'];
+        $cols[] = ['key' => 't' . $hi, 'title' => $title, 'desc' => $desc, 'min' => $lo, 'max' => $hi, 'window' => $last ? '≤ ' . $hi . ' days' : $hi . '–' . $lo . ' days', 'hot' => $last];
+    }
+    return $cols;
+}
+
+function owner_initials(string $owner): string
+{
+    $o = trim($owner);
+    if (strpos($o, '@') !== false) {
+        $o = (string)strstr($o, '@', true);
+    }
+    $parts = preg_split('/[\s._-]+/u', $o, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    if (!$parts) {
+        return '?';
+    }
+    $ini = mb_substr($parts[0], 0, 1) . (count($parts) > 1 ? mb_substr($parts[count($parts) - 1], 0, 1) : '');
+    return mb_strtoupper($ini);
+}
+
+function owner_avatar(string $owner, bool $assigned = true): string
+{
+    if (trim($owner) === '') {
+        return '<span class="avatar avatarNone" title="Unassigned">—</span>';
+    }
+    $tone = ['a', 'b', 'c', 'd'][crc32($owner) % 4];
+    return '<span class="avatar avatar-' . $tone . ($assigned ? '' : ' avatarSoft') . '" title="' . h(($assigned ? 'Owner: ' : 'Producer (no owner yet): ') . $owner) . '">' . h(owner_initials($owner)) . '</span>';
+}
+
+function premium_change_html($premium, $prior): string
+{
+    if ($premium === null || $premium === '' || $prior === null || $prior === '' || (float)$prior <= 0) {
+        return '';
+    }
+    $pct = ((float)$premium - (float)$prior) / (float)$prior * 100;
+    $cls = $pct >= 10 ? 'chgUp' : ($pct >= 5 ? 'chgMid' : ($pct < 0 ? 'chgDown' : ''));
+    return ' <b class="chg ' . $cls . '" title="Renewal premium vs prior term">' . h(($pct > 0 ? '+' : ($pct < 0 ? '−' : '')) . number_format(abs($pct), 1) . '%') . '</b>';
+}
+
+function renewals_subtitle(PDO $pdo): string
+{
+    $cad = renewal_cadence();
+    $max = max($cad);
+    $days = sql_days_to_expiry();
+    $st = $pdo->prepare("SELECT COUNT(*) AS n, COALESCE(SUM(premium_amount),0) AS p FROM policyholders WHERE expiration_date IS NOT NULL AND expiration_date <> '' AND $days BETWEEN 0 AND ? AND COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND " . sql_in_force());
+    $st->execute([$max]);
+    $r = $st->fetch() ?: ['n' => 0, 'p' => 0];
+    $annual = setting('premium_period', 'monthly') === 'annual' ? (float)$r['p'] : (float)$r['p'] * 12;
+    return (int)$r['n'] . ' ' . ((int)$r['n'] === 1 ? 'policy expires' : 'policies expire') . ' in the next ' . $max . ' days · ' . money_whole($annual) . ' annual premium · stages follow a ' . implode('/', $cad) . '-day cadence';
+}
+
+function renewal_filter_hidden(array $keep = ['owner', 'line', 'risk', 'chg']): string
 {
     [$win, $owner] = renewal_filters();
-    $rows = renewal_window_query($pdo, $win, $owner, 'id, policy_number, name, policy_type, line_of_business, carrier, expiration_date, premium_amount, prior_premium, risk_tier, renewal_status, renewal_owner, last_contacted_at, consent_phone, consent_email, consent_sms, opt_out_at, phone, email');
-    $statuses = renewal_statuses();
-    $byStatus = array_fill_keys(array_keys($statuses), []);
-    $premByStatus = array_fill_keys(array_keys($statuses), 0.0);
-    foreach ($rows as $r) {
-        $s = (string)($r['renewal_status'] ?? '') !== '' ? (string)$r['renewal_status'] : 'not_started';
-        if (!isset($byStatus[$s])) {
-            $s = 'not_started';
+    $f = renewal_extra_filters();
+    $vals = ['win' => (string)$win, 'owner' => $owner, 'line' => $f['line'], 'risk' => $f['risk'] ? '1' : '', 'chg' => $f['chg'] ? '1' : ''];
+    $out = '';
+    foreach ($vals as $k => $v) {
+        if ($v !== '' && ($k === 'win' || in_array($k, $keep, true))) {
+            $out .= '<input type="hidden" name="' . h($k) . '" value="' . h($v) . '">';
         }
-        $byStatus[$s][] = $r;
-        $premByStatus[$s] += (float)($r['premium_amount'] ?? 0);
     }
-    $owners = $pdo->query("SELECT DISTINCT renewal_owner FROM policyholders WHERE renewal_owner IS NOT NULL AND renewal_owner <> '' ORDER BY renewal_owner LIMIT 50")->fetchAll(PDO::FETCH_COLUMN);
-    $producers = $pdo->query("SELECT DISTINCT producer FROM policyholders WHERE producer IS NOT NULL AND producer <> '' ORDER BY producer LIMIT 50")->fetchAll(PDO::FETCH_COLUMN);
-    $users = $pdo->query('SELECT email FROM users ORDER BY email LIMIT 50')->fetchAll(PDO::FETCH_COLUMN);
-    $ownerOptions = array_values(array_unique(array_merge(array_map('strval', $owners), array_map('strval', $producers), array_map('strval', $users))));
+    return $out;
+}
 
-    echo '<div class="card"><div class="cardHead"><div><div class="h2">Renewal board</div><div class="muted">' . h((string)count($rows)) . ' policies expiring in the next ' . h((string)$win) . ' days (plus 30 days overdue). Change a stage and it saves.</div></div>';
-    echo '<div class="chips">';
-    foreach ([30, 60, 90, 120] as $w) {
-        echo chip_link($w . 'd', ['tab' => 'renewals', 'win' => (string)$w], $w === $win);
+function page_actions(string $tab): string
+{
+    if ($tab !== 'renewals') {
+        return '';
     }
-    echo '</div></div>';
-    echo '<form method="get" class="filterBar"><input type="hidden" name="tab" value="renewals"><input type="hidden" name="win" value="' . h((string)$win) . '">';
-    echo '<label class="label" for="ownerFilter">Owner</label><select class="select selectSm" id="ownerFilter" name="owner" data-autosubmit><option value="">Everyone</option><option value="__none__"' . ($owner === '__none__' ? ' selected' : '') . '>Unassigned</option>';
+    return '<div class="topActions">'
+        . '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="renewal_export_ics">' . renewal_filter_hidden() . '<button class="btnSecondary btnLg" type="submit">Calendar feed (.ics)</button></form>'
+        . '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="renewal_export_calls">' . renewal_filter_hidden() . '<button class="btn btnLg" type="submit" title="Only call-consented, not opted-out ' . h(strtolower(lbl('clients'))) . ' with open renewals">Export call list</button></form>'
+        . '</div>';
+}
+
+function render_tab_renewals(PDO $pdo): void
+{
+    [, $owner] = renewal_filters();
+    $f = renewal_extra_filters();
+    $columns = renewal_stage_columns();
+    $max = max(renewal_cadence());
+    $rows = renewal_window_query($pdo, $max, $owner, 'id, policy_number, name, policy_type, line_of_business, carrier, producer, expiration_date, premium_amount, prior_premium, risk_tier, renewal_status, renewal_owner', $f['sql'], 2000, $f['args']);
+    $rank = ['High' => 0, 'Review' => 1, 'Medium' => 2, 'Low' => 3];
+    usort($rows, static function (array $a, array $b) use ($rank): int {
+        return ((int)$a['d'] <=> (int)$b['d']) ?: (($rank[(string)$a['risk_tier']] ?? 4) <=> ($rank[(string)$b['risk_tier']] ?? 4)) ?: ((int)$a['id'] <=> (int)$b['id']);
+    });
+    $statuses = renewal_statuses();
+    $owners = $pdo->query('SELECT DISTINCT ' . renewal_owner_sql() . ' AS o FROM policyholders WHERE ' . renewal_owner_sql() . ' IS NOT NULL ORDER BY o LIMIT 80')->fetchAll(PDO::FETCH_COLUMN);
+    $lines = $pdo->query("SELECT DISTINCT COALESCE(NULLIF(line_of_business,''), policy_type) AS l FROM policyholders WHERE COALESCE(NULLIF(line_of_business,''), policy_type) IS NOT NULL AND COALESCE(NULLIF(line_of_business,''), policy_type) <> '' ORDER BY l LIMIT 80")->fetchAll(PDO::FETCH_COLUMN);
+    $more = (string)($_GET['more'] ?? '');
+    $clear = ['id' => null, 'q' => null, 'view' => null, 'edit' => null, 'more' => null];
+
+    echo '<form method="get" class="boardFilters" aria-label="Filter the renewal board"><input type="hidden" name="tab" value="renewals">' . ($f['risk'] ? '<input type="hidden" name="risk" value="1">' : '');
+    echo '<select class="pillSelect" name="owner" aria-label="Owner" data-autosubmit><option value="">Owner: Anyone</option><option value="__none__"' . ($owner === '__none__' ? ' selected' : '') . '>Owner: Unassigned</option>';
     foreach ($owners as $o) {
-        echo '<option value="' . h((string)$o) . '"' . ($owner === (string)$o ? ' selected' : '') . '>' . h((string)$o) . '</option>';
+        echo '<option value="' . h((string)$o) . '"' . ($owner === (string)$o ? ' selected' : '') . '>Owner: ' . h((string)$o) . '</option>';
     }
-    echo '</select><noscript><button class="btnSecondary btnSm" type="submit">Apply</button></noscript></form>';
-    echo '<div class="exportBar">';
-    echo '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="renewal_export_calls"><input type="hidden" name="win" value="' . h((string)$win) . '"><input type="hidden" name="owner" value="' . h($owner) . '"><button class="btnSecondary btnSm" type="submit">Call list CSV</button></form>';
-    echo '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="renewal_export_ics"><input type="hidden" name="win" value="' . h((string)$win) . '"><input type="hidden" name="owner" value="' . h($owner) . '"><button class="btnSecondary btnSm" type="submit">Calendar (.ics)</button></form>';
-    echo '<span class="muted tiny">Call list includes only call-consented, not-opted-out ' . h(strtolower(lbl('clients'))) . ' with open renewals.</span></div>';
-    echo '</div>';
+    echo '</select><select class="pillSelect" name="line" aria-label="Line" data-autosubmit><option value="">Line: All lines</option>';
+    foreach ($lines as $l) {
+        echo '<option value="' . h((string)$l) . '"' . ($f['line'] === (string)$l ? ' selected' : '') . '>Line: ' . h((string)$l) . '</option>';
+    }
+    echo '</select>';
+    echo '<a class="pillToggle' . ($f['risk'] ? ' pillOn' : '') . '" href="' . h(self_url(['tab' => 'renewals', 'risk' => $f['risk'] ? null : '1'] + $clear)) . '" aria-pressed="' . ($f['risk'] ? 'true' : 'false') . '">Risk: High, Review</a>';
+    echo '<label class="switch"><input type="checkbox" name="chg" value="1"' . ($f['chg'] ? ' checked' : '') . ' data-autosubmit><i aria-hidden="true"></i>Only premium change ≥ 10%</label>';
+    echo '<noscript><button class="btnSecondary btnSm" type="submit">Apply</button></noscript>';
+    echo '<span class="boardHint">' . h((string)count($rows)) . ' on the board · stage follows the expiry date</span>';
+    echo '</form>';
 
-    echo '<datalist id="ownerList">';
-    foreach ($ownerOptions as $o) {
-        echo '<option value="' . h($o) . '"></option>';
+    if (!$rows) {
+        $any = (int)$pdo->query("SELECT COUNT(*) FROM policyholders WHERE expiration_date IS NOT NULL AND expiration_date <> ''")->fetchColumn();
+        echo '<div class="card"><div class="h2">Nothing to renew here</div><div class="muted">' . ($any ? 'No policies match these filters in the next ' . h((string)$max) . ' days.' : 'Import a CSV with an expiration (X-date) or effective date column and renewals appear here.') . '</div></div>';
     }
-    echo '</datalist>';
 
     echo '<div class="board">';
-    foreach ($statuses as $key => $label) {
-        $items = $byStatus[$key];
-        echo '<section class="boardCol" aria-label="' . h($label) . '"><div class="boardHead">' . renewal_status_pill($key) . '<span class="boardCount">' . h((string)count($items)) . '</span><span class="muted tiny">' . h(money_whole($premByStatus[$key])) . '</span></div>';
-        foreach (array_slice($items, 0, 12) as $r) {
+    foreach ($columns as $col) {
+        $items = array_values(array_filter($rows, static fn(array $r): bool => (int)$r['d'] >= $col['min'] && (int)$r['d'] <= $col['max']));
+        $limit = $more === $col['key'] ? count($items) : 3;
+        echo '<section class="boardCol' . ($col['hot'] ? ' boardHot' : '') . '" aria-label="' . h($col['title']) . '">';
+        echo '<div class="boardHead"><h3>' . h($col['title']) . '<b>' . h((string)count($items)) . '</b></h3><div class="boardWin">' . h($col['window']) . '</div><p>' . h($col['desc']) . '</p></div>';
+        foreach (array_slice($items, 0, $limit) as $r) {
             $d = (int)$r['d'];
-            $touch = next_touch($d, (string)$r['expiration_date']);
-            $reach = [];
-            if (trim((string)($r['opt_out_at'] ?? '')) !== '') {
-                $reach[] = 'opted out';
-            } else {
-                if ((int)$r['consent_phone'] === 1 && (string)$r['phone'] !== '') {
-                    $reach[] = 'call';
-                }
-                if ((int)$r['consent_sms'] === 1 && (string)$r['phone'] !== '') {
-                    $reach[] = 'sms';
-                }
-                if ((int)$r['consent_email'] === 1 && (string)$r['email'] !== '') {
-                    $reach[] = 'email';
-                }
+            $key = (string)($r['renewal_status'] ?? '') !== '' ? (string)$r['renewal_status'] : 'not_started';
+            if (!isset($statuses[$key])) {
+                $key = 'not_started';
             }
-            echo '<article class="rcard' . ($d <= 15 && !in_array($key, ['renewed', 'lost'], true) ? ' rcardDue' : '') . '">';
-            echo '<div class="rcardTop"><a class="mono link" href="' . h(self_url(['tab' => 'profiles', 'id' => (string)$r['id'], 'win' => null, 'owner' => null])) . '">' . h((string)$r['policy_number']) . '</a>' . tier_badge((string)($r['risk_tier'] ?? '')) . '</div>';
-            echo '<div class="rcardName">' . h(mask_name((string)$r['name'])) . '</div>';
-            echo '<div class="rcardMeta"><span>' . h((string)($r['line_of_business'] ?: $r['policy_type'] ?: '—')) . '</span><span>' . h(money_or_blank($r['premium_amount'] ?? null)) . '</span></div>';
+            $assigned = trim((string)($r['renewal_owner'] ?? '')) !== '';
+            $ownerName = $assigned ? (string)$r['renewal_owner'] : (string)($r['producer'] ?? '');
+            $line = (string)($r['line_of_business'] ?: $r['policy_type'] ?: '—');
             $expTs = strtotime(substr((string)$r['expiration_date'], 0, 10) . ' UTC');
-            echo '<div class="rcardMeta"><span class="' . ($d <= 15 ? 'due' : '') . '">' . h(($expTs ? gmdate('M j', $expTs) : '—') . ' · ' . days_label($d)) . '</span></div>';
-            if (!in_array($key, ['renewed', 'lost'], true)) {
-                echo '<div class="rcardMeta"><span class="' . ($touch['due'] ? 'due' : 'muted') . '">' . h($d < 0 ? 'Log outcome' : $touch['label']) . '</span><span class="muted tiny">' . h($reach ? implode(' · ', $reach) : 'no consent') . '</span></div>';
-            }
-            echo '<form method="post" class="rcardForm">' . csrf_field() . '<input type="hidden" name="action" value="renewal_update"><input type="hidden" name="id" value="' . h((string)$r['id']) . '">';
-            echo '<select class="select selectSm" name="renewal_status" aria-label="Stage for ' . h((string)$r['policy_number']) . '" data-autosubmit>';
+            $touch = next_touch($d, (string)$r['expiration_date']);
+            echo '<article class="rcard" title="Next touch: ' . h($touch['label']) . '">';
+            echo '<div class="rcardTop"><a class="rcardName" href="' . h(self_url(['tab' => 'profiles', 'id' => (string)$r['id'], 'win' => null, 'owner' => null, 'line' => null, 'risk' => null, 'chg' => null, 'more' => null])) . '">' . h(mask_name((string)$r['name']) ?: (string)$r['policy_number']) . '</a>' . owner_avatar($ownerName, $assigned) . '</div>';
+            echo '<div class="rcardPol">' . h((string)$r['policy_number']) . ' · ' . h($line) . '</div>';
+            echo '<div class="rcardDate' . ($d < 0 ? ' due' : '') . '">' . h($expTs ? gmdate('j M Y', $expTs) : '—') . ($d < 0 ? ' · ' . h(abs($d) . ($d === -1 ? ' day' : ' days')) . ' overdue' : '') . '</div>';
+            echo '<div class="rcardPrem">' . h(money_or_blank($r['premium_amount'] ?? null)) . premium_change_html($r['premium_amount'] ?? null, $r['prior_premium'] ?? null) . '</div>';
+            echo '<div class="rcardPills">' . tier_badge((string)($r['risk_tier'] ?? '')) . '</div>';
+            echo '<form method="post" class="rcardForm">' . csrf_field() . '<input type="hidden" name="action" value="renewal_update"><input type="hidden" name="id" value="' . h((string)$r['id']) . '"><input type="hidden" name="renewal_owner" value="' . h((string)($r['renewal_owner'] ?? '')) . '">';
+            echo '<span class="stPick stp-' . h($key) . '"><select name="renewal_status" aria-label="Renewal status for ' . h((string)$r['policy_number']) . '" data-autosubmit>';
             foreach ($statuses as $sk => $sl) {
                 echo '<option value="' . h($sk) . '"' . ($sk === $key ? ' selected' : '') . '>' . h($sl) . '</option>';
             }
-            echo '</select><input class="input inputSm" name="renewal_owner" list="ownerList" placeholder="Owner" aria-label="Owner for ' . h((string)$r['policy_number']) . '" value="' . h((string)($r['renewal_owner'] ?? '')) . '" maxlength="120"><button class="btnSecondary btnSm" type="submit">Save</button></form>';
+            echo '</select></span><noscript><button class="btnSecondary btnSm" type="submit">Save</button></noscript></form>';
             echo '</article>';
         }
-        if (count($items) > 12) {
-            echo '<div class="boardMore">+' . h((string)(count($items) - 12)) . ' more · <a class="link" href="' . h(self_url(['tab' => 'profiles', 'view' => 'renewing', 'win' => null, 'owner' => null])) . '">see all in Book</a> or narrow the window</div>';
+        if (count($items) > $limit) {
+            echo '<a class="boardMore" href="' . h(self_url(['tab' => 'renewals', 'more' => $col['key']])) . '">+ ' . h((string)(count($items) - $limit)) . ' more</a>';
+        } elseif ($more === $col['key'] && count($items) > 3) {
+            echo '<a class="boardMore" href="' . h(self_url(['tab' => 'renewals', 'more' => null])) . '">Show fewer</a>';
         }
         if (!$items) {
-            echo '<div class="boardEmpty">Nothing here.</div>';
+            echo '<div class="boardEmpty">Nothing in this window.</div>';
         }
         echo '</section>';
     }
     echo '</div>';
+    echo '<p class="muted tiny boardNote">Open a card to assign an owner, log a call or see why it was scored. Owner shows the assigned renewal owner, or the producer (faded) until someone is assigned.</p>';
 }
 
 function handle_renewal_update(PDO $pdo, array $user): void
@@ -4851,7 +5005,8 @@ function handle_renewal_update(PDO $pdo, array $user): void
 function handle_renewal_export_calls(PDO $pdo, array $user): void
 {
     [$win, $owner] = renewal_filters();
-    $rows = renewal_window_query($pdo, $win, $owner, '*', "COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND consent_phone = 1 AND phone IS NOT NULL AND phone <> '' AND " . sql_not_opted_out(), 5000);
+    $f = renewal_extra_filters();
+    $rows = renewal_window_query($pdo, $win, $owner, '*', "COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost') AND consent_phone = 1 AND phone IS NOT NULL AND phone <> '' AND " . sql_not_opted_out() . ($f['sql'] !== '' ? ' AND ' . $f['sql'] : ''), 5000, $f['args']);
     audit($pdo, (int)$user['id'], 'renewals.export_calls', ['window' => $win, 'owner' => $owner, 'rows' => count($rows)]);
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="renewal_call_list_' . gmdate('Ymd') . '.csv"');
@@ -4872,7 +5027,8 @@ function ics_escape(string $s): string
 function handle_renewal_export_ics(PDO $pdo, array $user): void
 {
     [$win, $owner] = renewal_filters();
-    $rows = renewal_window_query($pdo, $win, $owner, 'id, policy_number, name, policy_type, line_of_business, carrier, expiration_date, premium_amount, risk_tier, renewal_status, renewal_owner', "COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost')", 5000);
+    $f = renewal_extra_filters();
+    $rows = renewal_window_query($pdo, $win, $owner, 'id, policy_number, name, policy_type, line_of_business, carrier, expiration_date, premium_amount, risk_tier, renewal_status, renewal_owner', "COALESCE(renewal_status,'not_started') NOT IN ('renewed','lost')" . ($f['sql'] !== '' ? ' AND ' . $f['sql'] : ''), 5000, $f['args']);
     audit($pdo, (int)$user['id'], 'renewals.export_ics', ['window' => $win, 'owner' => $owner, 'rows' => count($rows)]);
     $host = preg_replace('/[^a-z0-9.-]/i', '', (string)($_SERVER['HTTP_HOST'] ?? 'liteinsurance.local')) ?: 'liteinsurance.local';
     $lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//LiteInsurance//Renewals//EN', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:Renewals'];

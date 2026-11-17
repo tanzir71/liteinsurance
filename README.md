@@ -25,7 +25,7 @@ v1.1 added the day-to-day agency workflow; v1.2 adds two-step sign-in, user mana
 | Area | Capability |
 |---|---|
 | Import | CSV upload, Record ID mapping, AMS header recognition, custom CSV fields, preview, staged commit, re-import updates in place |
-| Renewals | Expiration worklist, stage board, owners, 120/90/75/45/30/15-day touchpoints, contact log, call list CSV, calendar (.ics) |
+| Renewals | Expiration worklist, a board with one column per 120/90/75/45/30/15-day touchpoint, status and owners on each card, contact log, call list CSV, calendar (.ics) |
 | Consent | Per-channel consent and opt-outs, suppression paste, consent-filtered exports and campaign reach |
 | Data quality | Mean/mode imputation, imputed flags, confidence score |
 | LTV | Premium, remaining term, policy multiplier, retention adjustment |
