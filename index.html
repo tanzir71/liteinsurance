@@ -14,10 +14,8 @@
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="LiteInsurance -- Insurance LTV and Risk Segmentation">
   <meta name="twitter:description" content="A portable PHP + SQLite dashboard for insurance CSVs, custom fields, risk rules, LTV, segments, and campaign simulation.">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"%3E%3Cpath d="M8 3.5h11.5L26 10v9.8c0 4.6-4.1 7.8-10 9.7-5.9-1.9-10-5.1-10-9.7V5.5a2 2 0 012-2z" fill="%230B0D12"/%3E%3Cpath d="M19.5 3.5V8a2 2 0 002 2H26z" fill="%232540FF"/%3E%3Crect x="10.5" y="14" width="9" height="2.6" rx="1.3" fill="%23fff"/%3E%3Crect x="10.5" y="19" width="6" height="2.6" rx="1.3" fill="%23fff" fill-opacity=".55"/%3E%3C/svg%3E">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2032%2032%22%3E%3Cpath%20d=%22M8%203.5h11.5L26%2010v9.8c0%204.6-4.1%207.8-10%209.7-5.9-1.9-10-5.1-10-9.7V5.5a2%202%200%20012-2z%22%20fill=%22%230B0D12%22/%3E%3Cpath%20d=%22M19.5%203.5V8a2%202%200%20002%202H26z%22%20fill=%22%232540FF%22/%3E%3Crect%20x=%2210.5%22%20y=%2214%22%20width=%229%22%20height=%222.6%22%20rx=%221.3%22%20fill=%22%23fff%22/%3E%3Crect%20x=%2210.5%22%20y=%2219%22%20width=%226%22%20height=%222.6%22%20rx=%221.3%22%20fill=%22%23fff%22%20fill-opacity=%22.55%22/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./fonts/fonts.css">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -27,7 +25,8 @@
     "applicationCategory": "BusinessApplication",
     "description": "Self-hosted PHP and SQLite insurance operations dashboard for policyholder CSV import, custom field preservation, missing-field imputation, LTV scoring, visual or JSON risk rules, segment exports, and campaign simulation.",
     "url": "https://tanzir71.github.io/liteinsurance/",
-    "softwareVersion": "1.0.0",
+    "softwareVersion": "1.2.0",
+    "license": "https://opensource.org/licenses/MIT",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
     "author": { "@type": "Person", "name": "Tanzir", "url": "https://tanziro.com" }
   }
@@ -453,7 +452,7 @@ td.ref{font-family:var(--mono);font-size:12.5px;color:var(--acc)}
       <a class="brand" href="./index.html" aria-label="LiteInsurance home">
         <svg class="mark" width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><path d="M8 3.5h11.5L26 10v9.8c0 4.6-4.1 7.8-10 9.7-5.9-1.9-10-5.1-10-9.7V5.5a2 2 0 012-2z" fill="#0B0D12"/><path d="M19.5 3.5V8a2 2 0 002 2H26z" fill="#2540FF"/><rect x="10.5" y="14" width="9" height="2.6" rx="1.3" fill="#fff"/><rect x="10.5" y="19" width="6" height="2.6" rx="1.3" fill="#fff" fill-opacity=".55"/></svg>
         <span class="brand-name">LiteInsurance</span>
-        <span class="brand-tag">v1.1 · self-hosted</span>
+        <span class="brand-tag">v1.2 · self-hosted</span>
       </a>
       <nav class="nav" aria-label="Primary">
         <a class="nl on" href="./index.html">Home</a>
@@ -777,8 +776,8 @@ open http://127.0.0.1:8000/liteinsurance.php</pre>
       </div>
       <div class="sec-grid">
         <div class="dcell"><span class="ic"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="10" cy="5" rx="6" ry="2.5"/><path d="M4 5v10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V5M4 10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5"/></svg></span><h3>No vendor data loop</h3><p>Production data stays in your SQLite database and upload directory.</p><span class="k">DB_PATH / UPLOAD_DIR</span></div>
-        <div class="dcell"><span class="ic"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 2.5l6 2.5v4.5c0 3.8-2.6 6.4-6 8-3.4-1.6-6-4.2-6-8V5z"/><path d="M7.5 10l2 2 3.5-4"/></svg></span><h3>Guarded web surface</h3><p>CSRF checks, nonce-based CSP, rate limits, upload hardening, and security headers.</p><span class="k">csrf_token</span></div>
-        <div class="dcell"><span class="ic"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="M6.5 8.5l2 1.5-2 1.5M10.5 12h3"/></svg></span><h3>Operationally boring</h3><p>Back up one SQLite file, rotate one cron token, and keep uploads out of webroot when possible.</p><span class="k">CRON_TOKEN</span></div>
+        <div class="dcell"><span class="ic"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 2.5l6 2.5v4.5c0 3.8-2.6 6.4-6 8-3.4-1.6-6-4.2-6-8V5z"/><path d="M7.5 10l2 2 3.5-4"/></svg></span><h3>Guarded web surface</h3><p>CSRF checks, nonce-based CSP, rate limits, optional two-step sign-in, invite-only registration, upload hardening, and security headers.</p><span class="k">csrf_token</span></div>
+        <div class="dcell"><span class="ic"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="M6.5 8.5l2 1.5-2 1.5M10.5 12h3"/></svg></span><h3>Operationally boring</h3><p>Back up one SQLite file, rotate one cron token, and let the daily cron apply your retention rules. Staged uploads are deleted after import.</p><span class="k">CRON_TOKEN</span></div>
       </div>
       <div class="controls">
         <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>CSRF verified on every POST</div>
@@ -787,7 +786,10 @@ open http://127.0.0.1:8000/liteinsurance.php</pre>
         <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>SQLite-backed login &amp; upload rate limits</div>
         <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>.csv + MIME checks, randomized filenames</div>
         <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>Segment filters compiled to placeholders</div>
-        <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>Names masked in list views</div>
+        <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>Names masked in list views; reveals audited</div>
+        <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>Optional two-step sign-in (TOTP) with recovery codes</div>
+        <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>Retention rules, erase-a-person and full wipe</div>
+        <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>Self-hosted fonts: zero third-party requests</div>
         <div class="ctrl"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3 3 7-8"/></svg>Audit log of imports, rules &amp; campaigns</div>
       </div>
     </div>
@@ -866,9 +868,9 @@ open http://127.0.0.1:8000/liteinsurance.php</pre>
       </div>
       <div class="fcol"><h5>Product</h5><a href="./demo.html">Demo</a><a href="./docs.html">Docs</a><a href="./compare.html">Compare</a></div>
       <div class="fcol"><h5>Resources</h5><a href="./SETUP.md">Setup</a><a href="./SECURITY.md">Security</a><a href="https://github.com/tanzir71/liteinsurance">GitHub</a></div>
-      <div class="fcol"><h5>Stack</h5><a>PHP 8.1+ · PDO SQLite</a><a>No build step</a><a href="https://github.com/tanzir71/liteinsurance">Source on GitHub</a></div>
+      <div class="fcol"><h5>Stack</h5><a>PHP 8.1+ · PDO SQLite</a><a>No build step</a><a href="https://github.com/tanzir71/liteinsurance">Source on GitHub</a><a href="https://github.com/tanzir71/liteinsurance/blob/main/LICENSE">MIT license</a></div>
     </div>
-    <div class="fbot"><div class="wrap"><span>© 2026 LiteInsurance</span><span>No affiliation with any CRM, AMS, BI, or insurance software vendor.</span></div></div>
+    <div class="fbot"><div class="wrap"><span>© 2026 Tanzir Rahman · MIT licensed</span><span>No affiliation with any CRM, AMS, BI, or insurance software vendor.</span></div></div>
   </footer>
 
 </div>

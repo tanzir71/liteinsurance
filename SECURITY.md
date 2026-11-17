@@ -14,6 +14,9 @@
 - v1.1: POST actions take precedence over query-string actions (fixes the register/login loop) and every state change is POST + CSRF; JSON endpoints (`segment_count`, `policy_cell_update`, `rule_test`) are admin-only.
 - v1.1: inline event handlers removed so the nonce CSP no longer has to be loosened; confirmations use `data-confirm`.
 - v1.1 privacy: names, emails and phones are masked in list views; revealing them on a policy is recorded as `pii.reveal` in the audit log. Exports (list CSV, call list, .ics, audit CSV) are audited and list exports are filtered by channel consent; opt-outs are always excluded from outreach exports.
+- v1.2 sign-in: optional TOTP two-step verification (RFC 6238, SHA-1, 6 digits, ±1 step, replay-protected), 8 one-time recovery codes stored as SHA-256 hashes, rate-limited verification, admin "require for everyone" switch and per-user reset. Self-registration is closed by default after the first admin.
+- v1.2 privacy: retention rules (staged uploads, audit log, contact history, expired/inactive policies) run with cron; erase-a-person deletes matching policies and their contact history and audits only a hash of the identifier; staged CSVs are deleted after import.
+- v1.2 CSP: fonts are self-hosted, so the policy is `'self'` only (no Google Fonts allowances).
 - v1.1 roles: non-admin users can work renewals (stage, owner, contact log, consent) and read the Book; import, rules, lists, campaigns, settings and inline edits stay admin-only.
 
 ## Rotating secrets / keys
@@ -26,7 +29,7 @@
 
 ## Production hardening checklist (recommended)
 - Enforce HTTPS (TLS) at the hosting layer; ensure HSTS is enabled only on HTTPS.
-- Restrict admin registration: keep the admin as the first user only and disable public registration if needed (code change).
+- Keep self-registration closed (default) and require two-step verification for everyone in Settings -> Users & access.
 - Add WAF / bot protection for `/liteinsurance.php` on the domain (Cloudflare, ModSecurity).
 - Move uploads/DB outside webroot when possible (`UPLOAD_DIR`, `DB_PATH` in `.env`).
 - Consider upgrading persistence to Postgres/MySQL for multi-user concurrency at scale.

@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 /*
 LiteInsurance — single-file PHP + SQLite (PDO) app for shared hosting
+Copyright (c) 2026 Tanzir Rahman. MIT License — see LICENSE (https://github.com/tanzir71/liteinsurance).
 
 Deploy:
 1) Upload `liteinsurance.php` into `public_html/`.
@@ -108,7 +109,14 @@ if ($action === '' && PHP_SAPI === 'cli') {
 }
 
 if ($action === 'download_sample_csv') {
+    if (PHP_SAPI === 'cli' && (string)($_GET['today'] ?? '') !== '') {
+        $GLOBALS['LI_SAMPLE_TODAY'] = (string)$_GET['today'];
+    }
     download_text('liteinsurance_sample.csv', sample_csv(), 'text/csv; charset=utf-8');
+    exit;
+}
+if ($action === 'parity_vectors' && PHP_SAPI === 'cli') {
+    echo json_encode(parity_vectors((string)($_GET['today'] ?? '')), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
     exit;
 }
 
@@ -291,6 +299,7 @@ function migrate(PDO $pdo): void
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_custom_field_defs_enabled ON custom_field_defs(enabled, field_key)');
     migrate_v11($pdo);
+    migrate_v12($pdo);
 }
 
 function route_web(PDO $pdo): void
@@ -318,7 +327,12 @@ function route_web(PDO $pdo): void
 
     $user = current_user($pdo);
     if (!$user) {
+        $regOpen = registration_open($pdo);
         if ($action === 'register') {
+            if (!$regOpen) {
+                flash('error', 'Registration is closed. Ask an admin to open it in Settings.');
+                redirect_to(['action' => 'login_form']);
+            }
             handle_register($pdo);
             return;
         }
@@ -326,13 +340,49 @@ function route_web(PDO $pdo): void
             handle_login($pdo);
             return;
         }
-        $mode = ($action === 'register_form') ? 'register' : 'login';
+        if ($action === 'totp_verify') {
+            handle_totp_verify($pdo);
+            return;
+        }
+        if ($action === 'totp_form' && is_array($_SESSION['pending_2fa'] ?? null)) {
+            render_auth_page('totp', $hasUsers);
+            return;
+        }
+        $mode = ($action === 'register_form' && $regOpen) ? 'register' : 'login';
         render_auth_page($mode, $hasUsers);
         return;
     }
 
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         require_csrf();
+    }
+
+    $accountActions = ['totp_begin', 'totp_enable', 'totp_cancel', 'totp_disable', 'totp_recovery_regen', 'password_change'];
+    if (in_array($action, $accountActions, true)) {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect_to(['action' => null, 'tab' => 'account']);
+        }
+        handle_account_action($pdo, $user, $action);
+        return;
+    }
+    if (totp_required_for($user)) {
+        if ($action !== '') {
+            redirect_to(['action' => null, 'tab' => 'account']);
+        }
+        render_app($pdo, $user, 'account');
+        return;
+    }
+    if (in_array($action, ['user_update', 'retention_run', 'privacy_erase', 'data_wipe'], true)) {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect_to(['action' => null]);
+        }
+        require_admin($user);
+        if ($action === 'user_update') {
+            handle_user_update($pdo, $user);
+        } else {
+            handle_retention_action($pdo, $user, $action);
+        }
+        return;
     }
 
     if ($action === 'load_sample') {
@@ -469,8 +519,11 @@ function route_web(PDO $pdo): void
 function render_auth_page(string $mode, bool $hasUsers): void
 {
     $isRegister = $mode === 'register';
-    $title = $isRegister ? 'Create account' : 'Sign in';
-    $subtitle = $isRegister ? ($hasUsers ? 'Create a new user.' : 'Create the first user (Admin).') : 'Sign in to access the dashboard.';
+    $isTotp = $mode === 'totp';
+    $title = $isRegister ? 'Create account' : ($isTotp ? 'Two-step verification' : 'Sign in');
+    $subtitle = $isRegister ? ($hasUsers ? 'Create a new user.' : 'Create the first user (Admin).') : ($isTotp ? 'Enter the 6-digit code from your authenticator app, or a recovery code.' : 'Sign in to access the dashboard.');
+    $pdoForAuth = $GLOBALS['LI_PDO'] ?? null;
+    $regOpen = $pdoForAuth instanceof PDO ? registration_open($pdoForAuth) : !$hasUsers;
     $flash = consume_flash();
     $csrf = csrf_token();
 
@@ -489,6 +542,16 @@ function render_auth_page(string $mode, bool $hasUsers): void
     }
     echo '<form method="post" class="form" autocomplete="on" action="' . h(self_url(['action' => null])) . '">';
     echo '<input type="hidden" name="csrf_token" value="' . h($csrf) . '">';
+    if ($isTotp) {
+        echo '<input type="hidden" name="action" value="totp_verify">';
+        echo '<label class="label" for="totpCode">Code</label><input class="input inputCode" id="totpCode" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="11" required autofocus>';
+        echo '<button class="btn" type="submit">Verify</button>';
+        echo '</form><div class="authFooter"><a class="link" href="' . h(self_url(['action' => 'login_form'])) . '">Start over</a><div class="tiny muted">Lost your phone? Use a recovery code, or ask an admin to reset two-step verification.</div></div>';
+        echo '</div></main>';
+        echo app_js();
+        echo '</body></html>';
+        return;
+    }
     echo '<input type="hidden" name="action" value="' . h($isRegister ? 'register' : 'login') . '">';
     echo '<label class="label">Email</label><input class="input" type="email" name="email" required maxlength="190">';
     echo '<label class="label">Password</label><input class="input" type="password" name="password" required minlength="8" maxlength="200">';
@@ -500,8 +563,10 @@ function render_auth_page(string $mode, bool $hasUsers): void
     echo '<div class="authFooter">';
     if ($isRegister) {
         echo '<a class="link" href="' . h(self_url(['action' => 'login_form'])) . '">Have an account? Sign in</a>';
-    } else {
+    } elseif ($regOpen) {
         echo '<a class="link" href="' . h(self_url(['action' => 'register_form'])) . '">Create an account</a>';
+    } else {
+        echo '<div class="tiny muted">New here? Ask an admin to invite you.</div>';
     }
     echo '<div class="tiny muted">Session secured, CSRF protected.</div>';
     echo '<div class="tiny muted"><a class="link" href="SETUP.md" target="_blank" rel="noopener">Docs</a> · <a class="link" href="SECURITY.md" target="_blank" rel="noopener">Security</a></div>';
@@ -579,11 +644,13 @@ function handle_login(PDO $pdo): void
         flash('error', 'Invalid credentials.');
         redirect_self();
     }
-    $_SESSION['user_id'] = (int)$u['id'];
-    session_regenerate_id(true);
-    audit($pdo, (int)$u['id'], 'auth.login', ['email' => $email, 'role' => (string)$u['role'], 'ip' => client_ip()]);
-    flash('success', 'Signed in.');
-    redirect_to(['tab' => 'dashboard']);
+    $full = user_row($pdo, (int)$u['id']) ?? $u;
+    if ((int)($full['totp_enabled'] ?? 0) === 1) {
+        session_regenerate_id(true);
+        $_SESSION['pending_2fa'] = ['uid' => (int)$u['id'], 'ts' => time()];
+        redirect_to(['action' => 'totp_form']);
+    }
+    complete_login($pdo, $full, 'password');
 }
 
 function current_user(PDO $pdo): ?array
@@ -592,7 +659,7 @@ function current_user(PDO $pdo): ?array
     if ($uid <= 0) {
         return null;
     }
-    $st = $pdo->prepare('SELECT id, email, role, created_at FROM users WHERE id = ?');
+    $st = $pdo->prepare('SELECT id, email, role, created_at, totp_enabled FROM users WHERE id = ?');
     $st->execute([$uid]);
     $u = $st->fetch();
     return $u ?: null;
@@ -819,6 +886,8 @@ function setup_doctor_report(?Throwable $bootError = null): array
 
     $add('PHP version', PHP_VERSION_ID >= 80100 ? 'ok' : (PHP_VERSION_ID >= 80000 ? 'warn' : 'fail'), PHP_VERSION, 'Use PHP 8.1 or newer (8.3 recommended). PHP 8.0 is end-of-life.');
     $add('PDO SQLite', extension_loaded('pdo_sqlite') ? 'ok' : 'fail', extension_loaded('pdo_sqlite') ? 'Enabled' : 'Missing', 'Enable the pdo_sqlite extension in your hosting control panel.');
+    $fontsOk = is_file(__DIR__ . DIRECTORY_SEPARATOR . 'fonts' . DIRECTORY_SEPARATOR . 'inter-400.woff');
+    $add('Fonts', $fontsOk ? 'ok' : 'warn', $fontsOk ? 'Self-hosted Inter found in fonts/.' : 'fonts/ folder not found; the system font stack is used.', 'Optional: upload the fonts/ folder next to liteinsurance.php for the designed typeface. No third-party font requests are made either way.');
 
     $db = db_path();
     $dbDir = dirname($db);
@@ -945,7 +1014,8 @@ function run_cron_jobs(PDO $pdo): void
             li_log('cron.segment_error', ['id' => (int)$seg['id'], 'message' => $e->getMessage()]);
         }
     }
-    echo 'OK. Updated policyholders: ' . $updated . '. Lists refreshed: ' . $lists;
+    $ret = run_retention($pdo, true);
+    echo 'OK. Updated policyholders: ' . $updated . '. Lists refreshed: ' . $lists . '. Retention removed: ' . $ret['uploads'] . ' uploads, ' . $ret['audit'] . ' audit events, ' . $ret['contacts'] . ' contact entries, ' . $ret['policies'] . ' policies.';
 }
 
 function audit(PDO $pdo, int $userId, string $action, array $payload): void
@@ -1006,9 +1076,20 @@ function download_text(string $filename, string $contents, string $contentType):
 
 function inter_font_css(): string
 {
-    return '<link rel="preconnect" href="https://fonts.googleapis.com">'
-        . '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
-        . '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">';
+    // Self-hosted fonts: no third-party requests. If the optional fonts/ folder (Inter + JetBrains Mono, SIL OFL)
+    // sits next to this file it is used; otherwise the system font stack takes over.
+    return '';
+}
+
+function app_font_faces(): string
+{
+    $base = 'fonts/';
+    $faces = [['Inter', 400, 'inter-400.woff', 'Inter Regular'], ['Inter', 500, 'inter-500.woff', 'Inter Medium'], ['Inter', 600, 'inter-600.woff', 'Inter SemiBold'], ['JetBrains Mono', 400, 'jetbrains-mono-400.woff', 'JetBrains Mono Regular']];
+    $css = '';
+    foreach ($faces as [$family, $weight, $file, $local]) {
+        $css .= '@font-face{font-family:"' . $family . '";font-style:normal;font-weight:' . $weight . ';font-display:swap;src:local("' . $local . '"),url("' . $base . $file . '") format("woff");}';
+    }
+    return $css;
 }
 
 function app_css(): string
@@ -1229,10 +1310,19 @@ a{color:inherit;}code{font-family:var(--mono);font-size:.92em;background:var(--l
 .authBrand{display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:-.02em;margin-bottom:18px;font-size:15px;}
 .authCard .h1{margin-bottom:4px;}
 .authFooter{margin-top:16px;display:flex;flex-direction:column;gap:8px;}
+.userPill{text-decoration:none;border-radius:var(--r);padding:6px 4px;}
+a.userPill:hover,.userPillOn{background:var(--nav2);color:var(--navInk);}
+.secretKey{font-size:16px;letter-spacing:.08em;background:var(--paper);border:1px dashed var(--line);border-radius:var(--r);padding:10px 12px;margin:8px 0;word-break:break-all;user-select:all;}
+.inputCode{max-width:180px;font-family:var(--mono);font-size:18px;letter-spacing:.2em;}
+.setupSteps{margin:10px 0;padding-left:18px;display:flex;flex-direction:column;gap:12px;font-size:13.5px;}
+.recoveryCodes{font-size:14px;letter-spacing:.06em;columns:2;}
+.dangerBtn{color:var(--red);border-color:#F3C4BE;}
+.dangerBtn:hover{background:var(--red50);}
+.btnSecondary:disabled{opacity:.5;cursor:not-allowed;}
 @media (max-width:1200px){.kpiGrid.kpi5{grid-template-columns:repeat(3,minmax(0,1fr));}.gridMap{grid-template-columns:repeat(2,minmax(0,1fr));}.whyGrid{grid-template-columns:1fr;}.steps{grid-template-columns:1fr 1fr;}}
 @media (max-width:900px){.appShell{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto 1fr auto;background:var(--paper);}.sideNav{grid-row:auto;grid-column:1;position:static;height:auto;flex-direction:row;align-items:center;overflow-x:auto;padding:8px;gap:4px;}.brand{padding:4px 8px;}.brand span{display:none;}.navGroup{display:none;}.navItem{white-space:nowrap;}.sideFoot{margin:0 0 0 auto;border:0;padding:0;flex-direction:row;}.userPill{display:none;}.topBar,.main,.footer{grid-column:1;}.topBar{position:static;flex-wrap:wrap;padding:12px 16px;}.topSearch{flex:1 1 100%;}.main{padding:16px 12px 36px;}.grid2,.gridWide,.grid3,.panelGrid{grid-template-columns:1fr;}.kpiGrid,.kpiGrid.kpi5{grid-template-columns:1fr 1fr;}.gridMap{grid-template-columns:1fr;}.checkGrid{grid-template-columns:1fr;}.ruleConditionRow{grid-template-columns:1fr;}.ruleActionGrid{grid-template-columns:1fr 1fr;}.lbRow{grid-template-columns:1fr 1fr;}.steps{grid-template-columns:1fr;}.statRow{grid-template-columns:repeat(3,minmax(0,1fr));}.fnRow{grid-template-columns:110px minmax(0,1fr) 70px;}.fnTotals{grid-template-columns:repeat(2,minmax(0,1fr));}}
 CSS;
-    return '<style nonce="' . $nonce . '">' . str_replace('__ACCENT__', $accent, $css) . '</style>';
+    return '<style nonce="' . $nonce . '">' . app_font_faces() . str_replace('__ACCENT__', $accent, $css) . '</style>';
 }
 
 function app_js(): string
@@ -1452,7 +1542,7 @@ function send_security_headers(string $nonce): void
 {
     /*
     Customize CSP allowlists here if you add external CDNs.
-    - The default policy permits only self + Google Fonts (Inter), and uses a nonce for inline <style>/<script>.
+    - The default policy permits only self (fonts are self-hosted in fonts/), and uses a nonce for inline <style>/<script>.
     */
     header('X-Frame-Options: DENY');
     header('X-Content-Type-Options: nosniff');
@@ -1468,13 +1558,13 @@ function send_security_headers(string $nonce): void
     $nonce = preg_replace('/[^a-zA-Z0-9+\/=]/', '', $nonce);
     $csp = "default-src 'self'; "
         . "base-uri 'self'; "
-        . "connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; "
+        . "connect-src 'self'; "
         . "object-src 'none'; "
         . "frame-ancestors 'none'; "
         . "form-action 'self'; "
         . "img-src 'self' data:; "
-        . "font-src 'self' https://fonts.gstatic.com data:; "
-        . "style-src 'self' 'nonce-{$nonce}' https://fonts.googleapis.com; "
+        . "font-src 'self' data:; "
+        . "style-src 'self' 'nonce-{$nonce}'; "
         . "script-src 'self' 'nonce-{$nonce}';";
     header('Content-Security-Policy: ' . $csp);
 }
@@ -1904,8 +1994,8 @@ function age_from_dob(string $dob): ?int
         return null;
     }
     try {
-        $d = new DateTimeImmutable($dob);
-        $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $d = new DateTimeImmutable($dob, new DateTimeZone('UTC'));
+        $now = new DateTimeImmutable(li_today() . ' 12:00:00', new DateTimeZone('UTC'));
         $diff = $now->diff($d);
         if ($diff->invert !== 1) {
             return null;
@@ -2259,6 +2349,7 @@ function handle_load_sample(PDO $pdo, array $user): void
 
 function sample_csv(): string
 {
+    $today = is_string($GLOBALS['LI_SAMPLE_TODAY'] ?? null) ? (string)$GLOBALS['LI_SAMPLE_TODAY'] : null; // CLI parity checks pin the date
     $firstNames = ['Asha', 'Noah', 'Maria', 'Li', 'Sam', 'Nadia', 'Omar', 'Priya', 'Ethan', 'Mina', 'Jon', 'Sara', 'Imran', 'Elena', 'Grace', 'Kenji'];
     $lastNames = ['Rahman', 'Kim', 'Silva', 'Wei', 'Patel', 'Chowdhury', 'Hassan', 'Mitra', 'Brooks', 'Sato', 'Reed', 'Stone', 'Khan', 'Garcia', 'Miller', 'Tan'];
     $types = ['term', 'term', 'health', 'health', 'auto', 'life', 'life'];
@@ -2283,11 +2374,12 @@ function sample_csv(): string
     if (!$fh) {
         return '';
     }
-    fputcsv($fh, ['policy_number', 'name', 'dob', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'effective_date', 'expiration_date', 'status', 'line_of_business', 'carrier', 'producer', 'household_id', 'email', 'phone', 'email_opt_in', 'sms_opt_in', 'phone_opt_in']);
+    fputcsv($fh, ['policy_number', 'name', 'dob', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'effective_date', 'expiration_date', 'status', 'line_of_business', 'carrier', 'producer', 'household_id', 'email', 'phone', 'email_opt_in', 'sms_opt_in', 'phone_opt_in', 'agent_code', 'renewal_probability', 'source_channel']);
     $lobByType = ['term' => 'Term Life', 'life' => 'Whole Life', 'health' => 'Health', 'auto' => 'Personal Auto'];
     $carriersByType = ['term' => ['Harbor Life', 'Northwind Mutual'], 'life' => ['Harbor Life', 'Northwind Mutual'], 'health' => ['Bluefield Health', 'Bluefield Health'], 'auto' => ['Summit Casualty', 'Northwind Mutual']];
     $producers = ['A. Rahman', 'J. Reed', 'M. Silva'];
-    $today = (int)strtotime(gmdate('Y-m-d') . ' 00:00:00 UTC');
+    $today = (int)strtotime(($today !== null && preg_match('/^\d{4}-\d{2}-\d{2}$/', $today) ? $today : gmdate('Y-m-d')) . ' 00:00:00 UTC');
+    $channels = ['broker', 'web', 'referral', 'branch'];
     for ($i = 1; $i <= SAMPLE_POLICY_COUNT; $i++) {
         $type = (string)$pick($types);
         $region = (string)$pick($regions);
@@ -2320,6 +2412,9 @@ function sample_csv(): string
             $hasEmail ? ($u('ce') < 0.65 ? 'Yes' : 'No') : '',
             $hasPhone ? ($u('cs') < 0.35 ? 'Yes' : 'No') : '',
             $hasPhone ? ($u('cp') < 0.55 ? 'Yes' : 'No') : '',
+            'AG-' . str_pad((string)(10 + ($i % 18)), 2, '0', STR_PAD_LEFT),
+            number_format(0.42 + floor($u('rp') * 49) / 100, 2, '.', ''),
+            $channels[(int)floor($u('sc') * 4)],
         ];
         fputcsv($fh, array_merge([
             'P-' . str_pad((string)(3000 + $i), 4, '0', STR_PAD_LEFT),
@@ -3425,6 +3520,12 @@ function settings_defaults(): array
         'consent_required_for_exports' => '1',
         'renewal_cadence' => '120,90,75,45,30,15',
         'checklist_dismissed' => '0',
+        'allow_registration' => '0',
+        'require_totp' => '0',
+        'retention_uploads_days' => '7',
+        'retention_audit_days' => '0',
+        'retention_contact_days' => '0',
+        'retention_inactive_policy_days' => '0',
     ];
 }
 
@@ -3533,6 +3634,13 @@ function parse_date_any(string $s): ?string
     return sprintf('%04d-%02d-%02d', $y, $mo, $d);
 }
 
+function li_today(): string
+{
+    // "Today" in UTC. CLI parity checks may pin it (LI_SAMPLE_TODAY) so the PHP app and the demo can be compared on any date.
+    $pin = PHP_SAPI === 'cli' && is_string($GLOBALS['LI_SAMPLE_TODAY'] ?? null) ? (string)$GLOBALS['LI_SAMPLE_TODAY'] : '';
+    return preg_match('/^\d{4}-\d{2}-\d{2}$/', $pin) ? $pin : gmdate('Y-m-d');
+}
+
 function days_until(?string $date): ?int
 {
     $date = trim((string)$date);
@@ -3543,7 +3651,7 @@ function days_until(?string $date): ?int
     if ($ts === false) {
         return null;
     }
-    $today = (int)strtotime(gmdate('Y-m-d') . ' 00:00:00 UTC');
+    $today = (int)strtotime(li_today() . ' 00:00:00 UTC');
     return (int)round(($ts - $today) / 86400);
 }
 
@@ -4327,7 +4435,8 @@ function page_meta(string $tab): array
         'campaigns' => ['Campaigns', 'Size outreach before you spend: reachable, conversions, net and break-even.'],
         'import' => ['Import & health', 'Bring in AMS or spreadsheet exports, re-import to update, and fix data gaps.'],
         'rules' => ['Scoring rules', 'Readable rules that set risk tiers and tags. Highest priority runs first.'],
-        'settings' => ['Settings', 'Currency, terminology, LTV assumptions, consent policy and audit.'],
+        'settings' => ['Settings', 'Currency, terminology, LTV assumptions, consent, users, retention and audit.'],
+        'account' => ['Account', 'Your password and two-step verification.'],
     ];
     return $meta[$tab] ?? [ucfirst($tab), ''];
 }
@@ -4370,7 +4479,7 @@ function render_app(PDO $pdo, array $user, string $tab): void
         echo nav_item('Scoring rules', 'rules', $tab);
         echo nav_item('Settings', 'settings', $tab);
     }
-    echo '<div class="sideFoot"><div class="userPill" title="' . h((string)$user['email']) . '"><span class="userEmail">' . h((string)$user['email']) . '</span><span class="pillRole">' . h((string)$user['role']) . '</span></div>';
+    echo '<div class="sideFoot"><a class="userPill' . ($tab === 'account' ? ' userPillOn' : '') . '" href="' . h(self_url(['tab' => 'account', 'id' => null, 'q' => null, 'view' => null, 'edit' => null])) . '" title="Account: ' . h((string)$user['email']) . '"><span class="userEmail">' . h((string)$user['email']) . '</span><span class="pillRole">' . h((string)$user['role']) . '</span>' . ((int)($user['totp_enabled'] ?? 0) === 1 ? '<span class="pillRole" title="Two-step verification on">2FA</span>' : '') . '</a>';
     echo '<form method="post" action="' . h(self_url(['action' => null])) . '">' . csrf_field() . '<input type="hidden" name="action" value="logout"><button class="navLogout" type="submit">Sign out</button></form></div>';
     echo '</aside>';
 
@@ -4386,7 +4495,9 @@ function render_app(PDO $pdo, array $user, string $tab): void
     if (!$isAdmin && in_array($tab, ['import', 'rules', 'segments', 'campaigns', 'settings'], true)) {
         echo '<div class="card"><div class="h2">Admin required</div><div class="muted">This tab is available to admins only.</div></div>';
     } else {
-        if ($tab === 'dashboard') {
+        if ($tab === 'account') {
+            render_tab_account($pdo, $user);
+        } elseif ($tab === 'dashboard') {
             render_tab_dashboard($pdo);
         } elseif ($tab === 'renewals') {
             render_tab_renewals($pdo);
@@ -5674,6 +5785,11 @@ function render_tab_settings(PDO $pdo): void
     echo '</div>';
 
     echo '<div class="grid2">';
+    render_users_card($pdo, (array)($GLOBALS['LI_USER'] ?? []));
+    render_retention_card($pdo);
+    echo '</div>';
+
+    echo '<div class="grid2">';
     echo '<div class="card"><div class="cardHead"><div class="h2">Audit log</div><form method="post">' . csrf_field() . '<input type="hidden" name="action" value="audit_export"><button class="btnSecondary btnSm" type="submit">Export CSV</button></form></div>';
     $audit = $pdo->query('SELECT a.ts, a.action, u.email AS user_email FROM audit_log a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.ts DESC, a.id DESC LIMIT 12')->fetchAll();
     echo '<table class="table compact"><thead><tr><th>Time</th><th>Action</th><th>User</th></tr></thead><tbody>';
@@ -5739,6 +5855,15 @@ function handle_settings_save(PDO $pdo, array $user): void
         setting_set($pdo, 'ltv_retention', (string)$ret);
         setting_set($pdo, 'ltv_cross_sell_default', (string)$mult);
         $changed = ['ltv_term_months', 'ltv_retention', 'ltv_cross_sell_default'];
+    } elseif ($section === 'access') {
+        setting_set($pdo, 'allow_registration', (string)($_POST['allow_registration'] ?? '') === '1' ? '1' : '0');
+        setting_set($pdo, 'require_totp', (string)($_POST['require_totp'] ?? '') === '1' ? '1' : '0');
+        $changed = ['allow_registration', 'require_totp'];
+    } elseif ($section === 'retention') {
+        foreach (['retention_uploads_days', 'retention_audit_days', 'retention_contact_days', 'retention_inactive_policy_days'] as $k) {
+            setting_set($pdo, $k, (string)max(0, min(3650, (int)($_POST[$k] ?? 0))));
+            $changed[] = $k;
+        }
     } elseif ($section === 'consent') {
         setting_set($pdo, 'consent_required_for_exports', (string)($_POST['consent_required_for_exports'] ?? '') === '1' ? '1' : '0');
         $cad = [];
@@ -6159,6 +6284,9 @@ function handle_import_commit(PDO $pdo, array $user): void
     }
     audit($pdo, (int)$user['id'], 'import.commit', ['filename' => $filename, 'rows_total' => $rowsTotal, 'rows_new' => $rowsNew, 'rows_updated' => $rowsUpdated, 'import_id' => $importId]);
     $_SESSION['import_stage'] = null;
+    if (str_starts_with(realpath($path) ?: '', realpath(upload_dir()) ?: "\0")) {
+        @unlink($path); // staged copy is no longer needed once rows are in SQLite
+    }
     flash('success', 'Import completed: ' . $rowsNew . ' new, ' . $rowsUpdated . ' updated' . ($errors ? (', ' . count($errors) . ' skipped') : '') . '.');
     redirect_to(['tab' => 'import']);
 }
@@ -6375,12 +6503,590 @@ function compute_ltv(array $r): ?float
     return $b === null ? null : (float)$b['ltv'];
 }
 
+/* ==========================================================================
+   v1.2 — two-step sign-in (TOTP), user management, retention and erasure
+   ========================================================================== */
+
+function migrate_v12(PDO $pdo): void
+{
+    $version = (int)$pdo->query('PRAGMA user_version')->fetchColumn();
+    if ($version >= 12) {
+        return;
+    }
+    $cols = table_columns($pdo, 'users');
+    $add = [
+        'totp_secret' => 'TEXT',
+        'totp_enabled' => 'INTEGER NOT NULL DEFAULT 0',
+        'totp_enabled_at' => 'TEXT',
+        'totp_last_step' => 'INTEGER NOT NULL DEFAULT 0',
+        'recovery_codes' => "TEXT NOT NULL DEFAULT '[]'",
+        'password_changed_at' => 'TEXT',
+    ];
+    foreach ($add as $col => $ddl) {
+        if (!isset($cols[$col])) {
+            $pdo->exec('ALTER TABLE users ADD COLUMN ' . $col . ' ' . $ddl);
+        }
+    }
+    $pdo->exec('PRAGMA user_version = 12');
+}
+
+/* ---------- TOTP (RFC 6238, SHA-1, 6 digits, 30 s) ---------- */
+
+function base32_encode(string $data): string
+{
+    $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    if ($data === '') {
+        return '';
+    }
+    $bits = '';
+    foreach (str_split($data) as $c) {
+        $bits .= str_pad(decbin(ord($c)), 8, '0', STR_PAD_LEFT);
+    }
+    $out = '';
+    foreach (str_split($bits, 5) as $chunk) {
+        $out .= $alphabet[bindec(str_pad($chunk, 5, '0', STR_PAD_RIGHT))];
+    }
+    return $out;
+}
+
+function base32_decode(string $b32): string
+{
+    $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    $b32 = strtoupper(preg_replace('/[^A-Za-z2-7]/', '', $b32) ?? '');
+    if ($b32 === '') {
+        return '';
+    }
+    $bits = '';
+    foreach (str_split($b32) as $c) {
+        $v = strpos($alphabet, $c);
+        if ($v === false) {
+            return '';
+        }
+        $bits .= str_pad(decbin($v), 5, '0', STR_PAD_LEFT);
+    }
+    $out = '';
+    foreach (str_split($bits, 8) as $byte) {
+        if (strlen($byte) === 8) {
+            $out .= chr((int)bindec($byte));
+        }
+    }
+    return $out;
+}
+
+function totp_new_secret(): string
+{
+    return base32_encode(random_bytes(20));
+}
+
+function totp_at(string $secretB32, int $step, int $digits = 6): string
+{
+    $key = base32_decode($secretB32);
+    $msg = pack('N', ($step >> 32) & 0xFFFFFFFF) . pack('N', $step & 0xFFFFFFFF);
+    $hash = hash_hmac('sha1', $msg, $key, true);
+    $off = ord($hash[19]) & 0x0F;
+    $bin = ((ord($hash[$off]) & 0x7F) << 24) | (ord($hash[$off + 1]) << 16) | (ord($hash[$off + 2]) << 8) | ord($hash[$off + 3]);
+    return str_pad((string)($bin % (10 ** $digits)), $digits, '0', STR_PAD_LEFT);
+}
+
+function totp_match(string $secretB32, string $code, int $lastStep, ?int $now = null): ?int
+{
+    $code = preg_replace('/\D+/', '', $code) ?? '';
+    if (strlen($code) !== 6 || $secretB32 === '') {
+        return null;
+    }
+    $step = intdiv($now ?? time(), 30);
+    foreach ([0, -1, 1] as $drift) {
+        $s = $step + $drift;
+        if ($s <= $lastStep) {
+            continue;
+        }
+        if (hash_equals(totp_at($secretB32, $s), $code)) {
+            return $s;
+        }
+    }
+    return null;
+}
+
+function totp_uri(string $secretB32, string $email): string
+{
+    $label = rawurlencode(APP_NAME . ':' . $email);
+    return 'otpauth://totp/' . $label . '?secret=' . $secretB32 . '&issuer=' . rawurlencode(APP_NAME) . '&algorithm=SHA1&digits=6&period=30';
+}
+
+function recovery_codes_generate(): array
+{
+    $plain = [];
+    for ($i = 0; $i < 8; $i++) {
+        $hex = strtoupper(bin2hex(random_bytes(5)));
+        $plain[] = substr($hex, 0, 5) . '-' . substr($hex, 5, 5);
+    }
+    return $plain;
+}
+
+function recovery_code_hash(string $code): string
+{
+    return hash('sha256', strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $code) ?? ''));
+}
+
+function user_row(PDO $pdo, int $id): ?array
+{
+    $st = $pdo->prepare('SELECT * FROM users WHERE id = ?');
+    $st->execute([$id]);
+    $u = $st->fetch();
+    return $u ?: null;
+}
+
+function registration_open(PDO $pdo): bool
+{
+    $hasUsers = (int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn() > 0;
+    return !$hasUsers || setting('allow_registration', '0') === '1';
+}
+
+function totp_required_for(array $user): bool
+{
+    return setting('require_totp', '0') === '1' && (int)($user['totp_enabled'] ?? 0) !== 1;
+}
+
+function complete_login(PDO $pdo, array $u, string $method): void
+{
+    unset($_SESSION['pending_2fa']);
+    $_SESSION['user_id'] = (int)$u['id'];
+    session_regenerate_id(true);
+    audit($pdo, (int)$u['id'], 'auth.login', ['email' => (string)$u['email'], 'role' => (string)$u['role'], 'ip' => client_ip(), 'mfa' => $method]);
+    flash('success', 'Signed in.');
+    redirect_to(['action' => null, 'tab' => 'dashboard']);
+}
+
+function handle_totp_verify(PDO $pdo): void
+{
+    require_csrf();
+    $pending = $_SESSION['pending_2fa'] ?? null;
+    if (!is_array($pending) || (time() - (int)($pending['ts'] ?? 0)) > 300) {
+        unset($_SESSION['pending_2fa']);
+        flash('error', 'That sign-in expired. Enter your password again.');
+        redirect_to(['action' => 'login_form']);
+    }
+    if (!rate_limit_allow($pdo, 'auth.totp', client_ip() . '|' . (int)$pending['uid'], 8, 15 * 60)) {
+        http_response_code(429);
+        flash('error', 'Too many codes tried. Wait a few minutes and sign in again.');
+        unset($_SESSION['pending_2fa']);
+        redirect_to(['action' => 'login_form']);
+    }
+    $u = user_row($pdo, (int)$pending['uid']);
+    if (!$u || (int)$u['totp_enabled'] !== 1) {
+        unset($_SESSION['pending_2fa']);
+        redirect_to(['action' => 'login_form']);
+    }
+    $code = trim((string)($_POST['code'] ?? ''));
+    $step = totp_match((string)$u['totp_secret'], $code, (int)$u['totp_last_step']);
+    if ($step !== null) {
+        $pdo->prepare('UPDATE users SET totp_last_step = ? WHERE id = ?')->execute([$step, (int)$u['id']]);
+        complete_login($pdo, $u, 'totp');
+    }
+    $hashes = safe_json((string)($u['recovery_codes'] ?? '[]'));
+    $hashes = is_array($hashes) ? array_values(array_map('strval', $hashes)) : [];
+    $h = recovery_code_hash($code);
+    $idx = array_search($h, $hashes, true);
+    if (strlen(preg_replace('/[^A-Za-z0-9]/', '', $code) ?? '') === 10 && $idx !== false) {
+        array_splice($hashes, (int)$idx, 1);
+        $pdo->prepare('UPDATE users SET recovery_codes = ? WHERE id = ?')->execute([json_encode($hashes), (int)$u['id']]);
+        audit($pdo, (int)$u['id'], 'auth.recovery_code_used', ['remaining' => count($hashes)]);
+        flash('info', 'Signed in with a recovery code. ' . count($hashes) . ' left — regenerate them under Account.');
+        complete_login($pdo, $u, 'recovery_code');
+    }
+    audit($pdo, (int)$u['id'], 'auth.totp_failed', ['ip' => client_ip()]);
+    flash('error', 'That code did not match. Use the current 6-digit code or a recovery code.');
+    redirect_to(['action' => 'totp_form']);
+}
+
+/* ---------- account page ---------- */
+
+function render_tab_account(PDO $pdo, array $user): void
+{
+    $u = user_row($pdo, (int)$user['id']) ?? $user;
+    $enabled = (int)($u['totp_enabled'] ?? 0) === 1;
+    $required = setting('require_totp', '0') === '1';
+    if ($required && !$enabled) {
+        echo '<div class="flash">Your workspace requires two-step verification. Set it up below to continue.</div>';
+    }
+    $codes = $_SESSION['recovery_show'] ?? null;
+    unset($_SESSION['recovery_show']);
+
+    echo '<div class="grid2">';
+    echo '<div class="card"><div class="cardHead"><div><div class="h2">Two-step verification</div><div class="muted">A 6-digit code from an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy…) after your password.</div></div>' . ($enabled ? '<span class="pill st-renewed">On</span>' : '<span class="pill">Off</span>') . '</div>';
+    if (is_array($codes)) {
+        echo '<div class="flash flashOk"><strong>Save these recovery codes now.</strong> Each works once if you lose your phone. They will not be shown again.</div><pre class="codeBlock recoveryCodes">' . h(implode("\n", array_map('strval', $codes))) . '</pre>';
+    }
+    $setup = is_string($_SESSION['totp_setup'] ?? null) ? (string)$_SESSION['totp_setup'] : '';
+    if ($enabled) {
+        $left = safe_json((string)($u['recovery_codes'] ?? '[]'));
+        $left = is_array($left) ? count($left) : 0;
+        echo '<dl class="kv"><dt>Turned on</dt><dd>' . h(fmt_date((string)($u['totp_enabled_at'] ?? ''))) . '</dd><dt>Recovery codes left</dt><dd>' . h((string)$left) . '</dd></dl>';
+        echo '<form method="post" class="form formTight">' . csrf_field() . '<input type="hidden" name="action" value="totp_recovery_regen"><label class="label" for="rcCode">Current code</label><input class="input" id="rcCode" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required><button class="btnSecondary btnSm" type="submit">New recovery codes</button></form>';
+        if (!$required) {
+            echo '<div class="divider"></div><form method="post" class="form formTight" data-confirm="Turn off two-step verification?">' . csrf_field() . '<input type="hidden" name="action" value="totp_disable"><label class="label" for="offPw">Password</label><input class="input" id="offPw" type="password" name="password" autocomplete="current-password" required><label class="label" for="offCode">Current code</label><input class="input" id="offCode" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required><button class="btnGhost btnSm" type="submit">Turn off</button></form>';
+        } else {
+            echo '<div class="muted tiny">Required by your workspace, so it can’t be turned off here. An admin can reset it if you lose your device.</div>';
+        }
+    } elseif ($setup !== '') {
+        $grouped = trim(chunk_split($setup, 4, ' '));
+        echo '<ol class="setupSteps"><li>In your authenticator app, add an account and enter this key (time-based):<div class="secretKey mono">' . h($grouped) . '</div><a class="link" href="' . h(totp_uri($setup, (string)$u['email'])) . '">On this phone? Open in your authenticator</a></li>';
+        echo '<li>Type the 6-digit code it shows:';
+        echo '<form method="post" class="actionsRow">' . csrf_field() . '<input type="hidden" name="action" value="totp_enable"><input class="input inputCode" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required aria-label="6-digit code"><button class="btn" type="submit">Turn on</button></form></li></ol>';
+        echo '<form method="post">' . csrf_field() . '<input type="hidden" name="action" value="totp_cancel"><button class="btnGhost btnSm" type="submit">Cancel setup</button></form>';
+    } else {
+        echo '<form method="post" class="actionsRow">' . csrf_field() . '<input type="hidden" name="action" value="totp_begin"><button class="btn" type="submit">Set up two-step verification</button></form>';
+    }
+    echo '</div>';
+
+    echo '<div class="card"><div class="h2">Password</div><div class="muted">Signed in as ' . h((string)$u['email']) . ' (' . h((string)$u['role']) . ').</div>';
+    echo '<form method="post" class="form">' . csrf_field() . '<input type="hidden" name="action" value="password_change">';
+    echo '<label class="label" for="pwCur">Current password</label><input class="input" id="pwCur" type="password" name="current" autocomplete="current-password" required>';
+    echo '<label class="label" for="pwNew">New password</label><input class="input" id="pwNew" type="password" name="password" minlength="10" maxlength="200" autocomplete="new-password" required>';
+    echo '<label class="label" for="pwNew2">Confirm new password</label><input class="input" id="pwNew2" type="password" name="password2" minlength="10" maxlength="200" autocomplete="new-password" required>';
+    echo '<button class="btnSecondary" type="submit">Change password</button></form></div>';
+    echo '</div>';
+}
+
+function handle_account_action(PDO $pdo, array $user, string $action): void
+{
+    $u = user_row($pdo, (int)$user['id']);
+    if (!$u) {
+        redirect_to(['tab' => 'account']);
+    }
+    $uid = (int)$u['id'];
+    if ($action === 'totp_begin') {
+        $_SESSION['totp_setup'] = totp_new_secret();
+    } elseif ($action === 'totp_cancel') {
+        unset($_SESSION['totp_setup']);
+    } elseif ($action === 'totp_enable') {
+        $secret = is_string($_SESSION['totp_setup'] ?? null) ? (string)$_SESSION['totp_setup'] : '';
+        $step = totp_match($secret, (string)($_POST['code'] ?? ''), 0);
+        if ($step === null) {
+            flash('error', 'That code did not match. Check the phone clock and try the newest code.');
+            redirect_to(['tab' => 'account']);
+        }
+        $codes = recovery_codes_generate();
+        $pdo->prepare('UPDATE users SET totp_secret = ?, totp_enabled = 1, totp_enabled_at = ?, totp_last_step = ?, recovery_codes = ? WHERE id = ?')
+            ->execute([$secret, now_iso(), $step, json_encode(array_map('recovery_code_hash', $codes)), $uid]);
+        unset($_SESSION['totp_setup']);
+        $_SESSION['recovery_show'] = $codes;
+        audit($pdo, $uid, 'auth.totp_enabled', []);
+        flash('success', 'Two-step verification is on.');
+    } elseif ($action === 'totp_recovery_regen') {
+        $step = totp_match((string)$u['totp_secret'], (string)($_POST['code'] ?? ''), (int)$u['totp_last_step']);
+        if ((int)$u['totp_enabled'] !== 1 || $step === null) {
+            flash('error', 'That code did not match.');
+            redirect_to(['tab' => 'account']);
+        }
+        $codes = recovery_codes_generate();
+        $pdo->prepare('UPDATE users SET recovery_codes = ?, totp_last_step = ? WHERE id = ?')->execute([json_encode(array_map('recovery_code_hash', $codes)), $step, $uid]);
+        $_SESSION['recovery_show'] = $codes;
+        audit($pdo, $uid, 'auth.recovery_codes_regenerated', []);
+        flash('success', 'New recovery codes created; the old ones no longer work.');
+    } elseif ($action === 'totp_disable') {
+        if (setting('require_totp', '0') === '1') {
+            flash('error', 'Two-step verification is required in this workspace.');
+            redirect_to(['tab' => 'account']);
+        }
+        $step = totp_match((string)$u['totp_secret'], (string)($_POST['code'] ?? ''), (int)$u['totp_last_step']);
+        if (!password_verify((string)($_POST['password'] ?? ''), (string)$u['password_hash']) || $step === null) {
+            flash('error', 'Password or code did not match.');
+            redirect_to(['tab' => 'account']);
+        }
+        $pdo->prepare("UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_enabled_at = NULL, totp_last_step = 0, recovery_codes = '[]' WHERE id = ?")->execute([$uid]);
+        audit($pdo, $uid, 'auth.totp_disabled', []);
+        flash('success', 'Two-step verification is off.');
+    } elseif ($action === 'password_change') {
+        $new = (string)($_POST['password'] ?? '');
+        if (!password_verify((string)($_POST['current'] ?? ''), (string)$u['password_hash'])) {
+            flash('error', 'Current password is wrong.');
+        } elseif (strlen($new) < 10) {
+            flash('error', 'Use at least 10 characters.');
+        } elseif (!hash_equals($new, (string)($_POST['password2'] ?? ''))) {
+            flash('error', 'New passwords do not match.');
+        } else {
+            $pdo->prepare('UPDATE users SET password_hash = ?, password_changed_at = ? WHERE id = ?')->execute([password_hash($new, PASSWORD_DEFAULT), now_iso(), $uid]);
+            session_regenerate_id(true);
+            audit($pdo, $uid, 'auth.password_changed', []);
+            flash('success', 'Password changed.');
+        }
+    }
+    redirect_to(['tab' => 'account']);
+}
+
+/* ---------- users & access (admin) ---------- */
+
+function render_users_card(PDO $pdo, array $me): void
+{
+    $users = $pdo->query('SELECT id, email, role, created_at, totp_enabled FROM users ORDER BY id ASC')->fetchAll();
+    echo '<div class="card"><div class="cardHead"><div><div class="h2">Users &amp; access</div><div class="muted">Who can sign in, what they can do, and how.</div></div></div>';
+    echo '<form method="post" class="form formTight">' . csrf_field() . '<input type="hidden" name="action" value="settings_save"><input type="hidden" name="section" value="access">';
+    echo '<label class="check"><input type="checkbox" name="allow_registration" value="1"' . (setting('allow_registration', '0') === '1' ? ' checked' : '') . '> Anyone with the link can create a (non-admin) account</label>';
+    echo '<label class="check"><input type="checkbox" name="require_totp" value="1"' . (setting('require_totp', '0') === '1' ? ' checked' : '') . '> Require two-step verification for everyone</label>';
+    echo '<div><button class="btnSecondary btnSm" type="submit">Save access policy</button></div></form>';
+    echo '<table class="table compact"><thead><tr><th>User</th><th>Role</th><th>Two-step</th><th></th></tr></thead><tbody>';
+    foreach ($users as $u) {
+        $isMe = (int)$u['id'] === (int)$me['id'];
+        echo '<tr><td>' . h((string)$u['email']) . ($isMe ? ' <span class="muted tiny">(you)</span>' : '') . '<div class="muted tiny">since ' . h(substr((string)$u['created_at'], 0, 10)) . '</div></td><td>' . h((string)$u['role']) . '</td><td>' . ((int)$u['totp_enabled'] === 1 ? '<span class="pill st-renewed">On</span>' : '<span class="pill">Off</span>') . '</td><td class="nowrap">';
+        if (!$isMe) {
+            $ops = [((string)$u['role'] === 'admin' ? 'make_user' : 'make_admin') => ((string)$u['role'] === 'admin' ? 'Make user' : 'Make admin')];
+            if ((int)$u['totp_enabled'] === 1) {
+                $ops['reset_2fa'] = 'Reset two-step';
+            }
+            $ops['delete'] = 'Remove';
+            foreach ($ops as $op => $label) {
+                echo '<form method="post" class="inline"' . ($op === 'delete' || $op === 'reset_2fa' ? ' data-confirm="' . h($label . ' for ' . (string)$u['email'] . '?') . '"' : '') . '>' . csrf_field() . '<input type="hidden" name="action" value="user_update"><input type="hidden" name="id" value="' . h((string)$u['id']) . '"><input type="hidden" name="op" value="' . h($op) . '"><button class="linkBtn" type="submit">' . h($label) . '</button></form> ';
+            }
+        }
+        echo '</td></tr>';
+    }
+    echo '</tbody></table></div>';
+}
+
+function handle_user_update(PDO $pdo, array $me): void
+{
+    $id = (int)($_POST['id'] ?? 0);
+    $op = (string)($_POST['op'] ?? '');
+    $u = $id > 0 ? user_row($pdo, $id) : null;
+    if (!$u || $id === (int)$me['id']) {
+        flash('error', 'You can’t change your own account here.');
+        redirect_to(['tab' => 'settings']);
+    }
+    if ($op === 'make_admin' || $op === 'make_user') {
+        $pdo->prepare('UPDATE users SET role = ? WHERE id = ?')->execute([$op === 'make_admin' ? 'admin' : 'user', $id]);
+        flash('success', (string)$u['email'] . ' is now ' . ($op === 'make_admin' ? 'an admin' : 'a user') . '.');
+    } elseif ($op === 'reset_2fa') {
+        $pdo->prepare("UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_enabled_at = NULL, totp_last_step = 0, recovery_codes = '[]' WHERE id = ?")->execute([$id]);
+        flash('success', 'Two-step verification reset for ' . (string)$u['email'] . '.');
+    } elseif ($op === 'delete') {
+        $pdo->prepare('DELETE FROM users WHERE id = ?')->execute([$id]);
+        flash('success', (string)$u['email'] . ' removed.');
+    } else {
+        redirect_to(['tab' => 'settings']);
+    }
+    audit($pdo, (int)$me['id'], 'users.' . $op, ['id' => $id]);
+    redirect_to(['tab' => 'settings']);
+}
+
+/* ---------- retention, erasure, wipe ---------- */
+
+function retention_settings(): array
+{
+    return [
+        'uploads' => max(0, (int)setting('retention_uploads_days', '7')),
+        'audit' => max(0, (int)setting('retention_audit_days', '0')),
+        'contacts' => max(0, (int)setting('retention_contact_days', '0')),
+        'policies' => max(0, (int)setting('retention_inactive_policy_days', '0')),
+    ];
+}
+
+function stale_upload_files(int $days): array
+{
+    if ($days <= 0 || !is_dir(upload_dir())) {
+        return [];
+    }
+    $cutoff = time() - $days * 86400;
+    $out = [];
+    foreach (glob(upload_dir() . DIRECTORY_SEPARATOR . '*.csv') ?: [] as $f) {
+        if (is_file($f) && (int)filemtime($f) < $cutoff) {
+            $out[] = $f;
+        }
+    }
+    return $out;
+}
+
+function retention_policy_where(int $days): string
+{
+    $d = (int)$days;
+    return "((COALESCE(status,'') IN ('cancelled','expired','lapsed','non-renewed') AND COALESCE(updated_at, created_at) < datetime('now', '-$d days'))"
+        . " OR (expiration_date IS NOT NULL AND expiration_date <> '' AND expiration_date < date('now', '-$d days')))";
+}
+
+function run_retention(PDO $pdo, bool $apply): array
+{
+    $r = retention_settings();
+    $out = ['uploads' => 0, 'audit' => 0, 'contacts' => 0, 'policies' => 0];
+    $files = stale_upload_files($r['uploads']);
+    $out['uploads'] = count($files);
+    if ($r['audit'] > 0) {
+        $out['audit'] = (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE ts < datetime('now', '-" . $r['audit'] . " days')")->fetchColumn();
+    }
+    if ($r['contacts'] > 0) {
+        $out['contacts'] = (int)$pdo->query("SELECT COUNT(*) FROM contact_log WHERE ts < datetime('now', '-" . $r['contacts'] . " days')")->fetchColumn();
+    }
+    if ($r['policies'] > 0) {
+        $out['policies'] = (int)$pdo->query('SELECT COUNT(*) FROM policyholders WHERE ' . retention_policy_where($r['policies']))->fetchColumn();
+    }
+    if (!$apply) {
+        return $out;
+    }
+    foreach ($files as $f) {
+        @unlink($f);
+    }
+    $pdo->beginTransaction();
+    if ($r['audit'] > 0) {
+        $pdo->exec("DELETE FROM audit_log WHERE ts < datetime('now', '-" . $r['audit'] . " days')");
+    }
+    if ($r['contacts'] > 0) {
+        $pdo->exec("DELETE FROM contact_log WHERE ts < datetime('now', '-" . $r['contacts'] . " days')");
+    }
+    if ($r['policies'] > 0) {
+        $where = retention_policy_where($r['policies']);
+        $pdo->exec('DELETE FROM contact_log WHERE policyholder_id IN (SELECT id FROM policyholders WHERE ' . $where . ')');
+        $pdo->exec('DELETE FROM policyholders WHERE ' . $where);
+    }
+    $pdo->commit();
+    if (array_sum($out) > 0) {
+        audit($pdo, 0, 'retention.run', $out);
+    }
+    return $out;
+}
+
+function render_retention_card(PDO $pdo): void
+{
+    $r = retention_settings();
+    $preview = run_retention($pdo, false);
+    echo '<div class="card"><div class="h2">Data retention</div><div class="muted">Delete what you no longer need. Runs with the daily cron, or now. 0 keeps data forever.</div>';
+    echo '<form method="post" class="form">' . csrf_field() . '<input type="hidden" name="action" value="settings_save"><input type="hidden" name="section" value="retention"><div class="grid2">';
+    foreach ([['retention_uploads_days', 'Staged CSV uploads (days)', $r['uploads'], $preview['uploads'], 'files'], ['retention_audit_days', 'Audit log (days)', $r['audit'], $preview['audit'], 'events'], ['retention_contact_days', 'Contact history (days)', $r['contacts'], $preview['contacts'], 'entries'], ['retention_inactive_policy_days', 'Inactive or long-expired policies (days)', $r['policies'], $preview['policies'], 'policies']] as [$key, $label, $val, $due, $unit]) {
+        echo '<div><label class="label" for="' . h($key) . '">' . h($label) . '</label><input class="input" id="' . h($key) . '" name="' . h($key) . '" type="number" min="0" max="3650" value="' . h((string)$val) . '"><div class="muted tiny">' . h($val > 0 ? number_format($due) . ' ' . $unit . ' due for deletion' : 'Kept forever') . '</div></div>';
+    }
+    echo '</div><div class="actionsRow"><button class="btnSecondary" type="submit">Save retention</button></div></form>';
+    echo '<form method="post" data-confirm="Delete everything listed as due now?">' . csrf_field() . '<input type="hidden" name="action" value="retention_run"><button class="btnSecondary btnSm" type="submit"' . (array_sum($preview) === 0 ? ' disabled' : '') . '>Run retention now</button></form>';
+    echo '<div class="divider"></div><div class="h3">Erase a person</div><div class="muted">For deletion requests. Removes every policy matching a policy number, email, phone or household ID, plus its contact history. The audit log records that an erasure happened, not who.</div>';
+    echo '<form method="post" class="actionsRow" data-confirm="Permanently erase every matching record?">' . csrf_field() . '<input type="hidden" name="action" value="privacy_erase"><input class="input" name="identifier" maxlength="190" required placeholder="P-3017, jane@example.com, +1 555…" aria-label="Identifier"><button class="btnSecondary btnSm" type="submit">Erase</button></form>';
+    echo '<div class="divider"></div><div class="h3">Delete all policy data</div><div class="muted">Removes every policy, contact log, import record, scenario and custom field definition. Users, rules, lists and settings stay.</div>';
+    echo '<form method="post" class="actionsRow">' . csrf_field() . '<input type="hidden" name="action" value="data_wipe"><input class="input" name="confirm" maxlength="10" placeholder="Type DELETE" aria-label="Type DELETE to confirm" autocomplete="off"><button class="btnGhost btnSm dangerBtn" type="submit">Delete all policy data</button></form>';
+    echo '</div>';
+}
+
+function handle_retention_action(PDO $pdo, array $user, string $action): void
+{
+    if ($action === 'retention_run') {
+        $out = run_retention($pdo, true);
+        audit($pdo, (int)$user['id'], 'retention.manual', $out);
+        flash('success', 'Retention ran: ' . $out['uploads'] . ' upload(s), ' . $out['audit'] . ' audit event(s), ' . $out['contacts'] . ' contact entr' . ($out['contacts'] === 1 ? 'y' : 'ies') . ', ' . $out['policies'] . ' polic' . ($out['policies'] === 1 ? 'y' : 'ies') . ' deleted.');
+    } elseif ($action === 'privacy_erase') {
+        $id = trim((string)($_POST['identifier'] ?? ''));
+        if ($id === '') {
+            redirect_to(['tab' => 'settings']);
+        }
+        $email = normalize_email($id);
+        $phone = strlen(phone_key($id)) >= 7 && preg_match('/^[\d\s()+.\-]+$/', $id) ? phone_key($id) : '';
+        $ids = [];
+        $offset = 0;
+        while (true) {
+            $st = $pdo->prepare('SELECT id, policy_number, email, phone, household_id FROM policyholders WHERE id > ? ORDER BY id ASC LIMIT 1000');
+            $st->execute([$offset]);
+            $rows = $st->fetchAll();
+            if (!$rows) {
+                break;
+            }
+            foreach ($rows as $r) {
+                $offset = (int)$r['id'];
+                if ((string)$r['policy_number'] === $id || (string)($r['household_id'] ?? '') === $id
+                    || ($email !== '' && strtolower((string)($r['email'] ?? '')) === $email)
+                    || ($phone !== '' && (string)($r['phone'] ?? '') !== '' && phone_key((string)$r['phone']) === $phone)) {
+                    $ids[] = (int)$r['id'];
+                }
+            }
+        }
+        if ($ids) {
+            $pdo->beginTransaction();
+            foreach (array_chunk($ids, 400) as $chunk) {
+                $in = implode(',', array_fill(0, count($chunk), '?'));
+                $pdo->prepare('DELETE FROM contact_log WHERE policyholder_id IN (' . $in . ')')->execute($chunk);
+                $pdo->prepare('DELETE FROM policyholders WHERE id IN (' . $in . ')')->execute($chunk);
+            }
+            $pdo->commit();
+            foreach ($ids as $pid) {
+                unset($_SESSION['revealed'][$pid]);
+            }
+        }
+        audit($pdo, (int)$user['id'], 'privacy.erase', ['records' => count($ids), 'identifier_sha256' => substr(hash('sha256', strtolower($id)), 0, 16)]);
+        flash($ids ? 'success' : 'info', $ids ? ('Erased ' . count($ids) . ' record(s) and their contact history.') : 'No records matched.');
+    } elseif ($action === 'data_wipe') {
+        if (trim((string)($_POST['confirm'] ?? '')) !== 'DELETE') {
+            flash('error', 'Type DELETE to confirm.');
+            redirect_to(['tab' => 'settings']);
+        }
+        $n = (int)$pdo->query('SELECT COUNT(*) FROM policyholders')->fetchColumn();
+        $pdo->beginTransaction();
+        foreach (['contact_log', 'policyholders', 'imports', 'campaigns', 'custom_field_defs'] as $t) {
+            $pdo->exec('DELETE FROM ' . $t);
+        }
+        foreach ($pdo->query('SELECT id, rule_ids FROM segments')->fetchAll() as $seg) {
+            $c = safe_json((string)$seg['rule_ids']);
+            if (is_array($c)) {
+                unset($c['stats']);
+                $pdo->prepare('UPDATE segments SET rule_ids = ? WHERE id = ?')->execute([json_encode($c, JSON_UNESCAPED_SLASHES), (int)$seg['id']]);
+            }
+        }
+        $pdo->commit();
+        foreach (glob(upload_dir() . DIRECTORY_SEPARATOR . '*.csv') ?: [] as $f) {
+            @unlink($f);
+        }
+        $_SESSION['import_stage'] = null;
+        $_SESSION['revealed'] = [];
+        audit($pdo, (int)$user['id'], 'privacy.wipe_all', ['policies' => $n]);
+        flash('success', 'All policy data deleted (' . $n . ' policies).');
+    }
+    redirect_to(['tab' => 'settings']);
+}
+
+/* ---------- demo parity: score the sample book exactly as an import would (CLI only, no database) ---------- */
+
+function parity_vectors(string $today = ''): array
+{
+    if ($today !== '') {
+        $GLOBALS['LI_SAMPLE_TODAY'] = $today;
+    }
+    $csv = sample_csv();
+    $tmp = tempnam(sys_get_temp_dir(), 'li_parity_');
+    file_put_contents($tmp, $csv);
+    $fh = fopen($tmp, 'rb');
+    $headers = array_map(fn($x) => trim(strip_bom((string)$x)), (array)fgetcsv($fh));
+    fclose($fh);
+    $mapping = guess_import_mapping($headers);
+    $analysis = analyze_csv($tmp, $headers, $mapping);
+    $customDefs = (array)($analysis['custom_fields'] ?? []);
+    $households = csv_household_counts($tmp, $mapping);
+    $rules = [];
+    foreach (sample_rules_seed() as $i => $r) {
+        $def = (array)$r['definition'];
+        $rules[] = ['id' => $i + 1, 'name' => (string)$r['name'], 'priority' => (int)$r['priority'], 'conditions' => ['logic' => (string)($def['logic'] ?? 'AND'), 'conditions' => (array)($def['conditions'] ?? [])], 'actions' => (array)($def['actions'] ?? [])];
+    }
+    usort($rules, fn($a, $b) => [$b['priority'], $b['id']] <=> [$a['priority'], $a['id']]);
+    $out = [];
+    $fh = fopen($tmp, 'rb');
+    fgetcsv($fh);
+    $n = 0;
+    while (($row = fgetcsv($fh)) !== false) {
+        $n++;
+        $imputed = [];
+        $v = normalize_and_impute(map_row($headers, $row, $mapping), [], $analysis, $imputed, $n, 'liteinsurance_sample.csv');
+        $v['custom'] = extract_custom_fields($headers, $row, $customDefs);
+        if ((string)$v['household_id'] !== '') {
+            $v['policies_in_household'] = (int)($households[(string)$v['household_id']] ?? 1);
+        }
+        $s = score_policy_record($v, $imputed, $rules);
+        $out[] = ['policy_number' => $v['policy_number'], 'risk_tier' => $s['risk_tier'], 'ltv_estimate' => $s['ltv'], 'confidence_score' => $s['confidence'], 'rule_hits' => $s['rule_hits'], 'tags' => $s['tags'], 'imputed_fields' => array_values($imputed), 'expiration_date' => $v['expiration_date'], 'policy_type' => $v['policy_type'], 'region' => $v['region'], 'premium_amount' => $v['premium_amount']];
+    }
+    fclose($fh);
+    @unlink($tmp);
+    return ['today' => $today !== '' ? $today : gmdate('Y-m-d'), 'mapping' => $mapping, 'policies' => $out];
+}
+
 /*
 Summary:
 - Risk tiers: rules run highest priority first; the first match that sets a tier wins, tags/score deltas accumulate, `stop` ends evaluation. Hits are stored so the Book panel can explain every tier.
 - Renewals: expiration dates drive Today/Renewals; cadence 120/90/75/45/30/15 days (Settings). Stage, owner and contact log live on each policy.
 - Consent: per-channel consent + opt-out; list exports and campaign reach only count consented, not-opted-out records.
 - Re-import: matching Record IDs are updated in place (premium change kept as prior_premium); workflow fields are preserved.
+- Access: optional TOTP two-step sign-in with recovery codes; admins can require it, reset it, and open/close self-registration (closed by default).
+- Privacy: retention rules run with cron (uploads, audit log, contact history, expired policies); erase-a-person; full wipe; fonts self-hosted so the CSP is 'self' only.
+- Demo parity: parity_vectors (CLI) scores the sample book without a database; demo.html's engine must match it (test/demo-parity.test.mjs).
 - Missing data: numeric mean + categorical mode imputation; imputed fields tracked in metadata.
 - Confidence score: starts at 100, reduced for imputed/missing optional fields, boosted by rule hits.
 - LTV: premium * remaining_months * cross_sell_multiplier(policy_type) * retention_adjustment.

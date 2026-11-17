@@ -1,0 +1,9 @@
+/* LiteInsurance self-hosted fonts — no third-party requests.
+   Inter (c) The Inter Project Authors, JetBrains Mono (c) The JetBrains Mono Project Authors.
+   Both SIL Open Font License 1.1: see OFL.txt and JetBrainsMono-OFL.txt. Subset to Latin + common symbols. */
+@font-face{font-family:"Inter";font-style:normal;font-weight:400;font-display:swap;src:local("Inter Regular"),local("Inter-Regular"),url("inter-400.woff") format("woff")}
+@font-face{font-family:"Inter";font-style:normal;font-weight:500;font-display:swap;src:local("Inter Medium"),local("Inter-Medium"),url("inter-500.woff") format("woff")}
+@font-face{font-family:"Inter";font-style:normal;font-weight:600;font-display:swap;src:local("Inter SemiBold"),local("Inter-SemiBold"),url("inter-600.woff") format("woff")}
+@font-face{font-family:"Inter";font-style:normal;font-weight:700;font-display:swap;src:local("Inter Bold"),local("Inter-Bold"),url("inter-700.woff") format("woff")}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:400;font-display:swap;src:local("JetBrains Mono Regular"),local("JetBrainsMono-Regular"),url("jetbrains-mono-400.woff") format("woff")}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:600 700;font-display:swap;src:local("JetBrains Mono Bold"),local("JetBrainsMono-Bold"),url("jetbrains-mono-700.woff") format("woff")}

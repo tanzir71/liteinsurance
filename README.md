@@ -4,7 +4,7 @@ Self-hosted insurance operations dashboard for turning policyholder CSV exports 
 
 LiteInsurance is intentionally small: one PHP file (8.1+, 8.3 recommended), SQLite persistence, no build step, and no vendor cloud by default.
 
-v1.1 adds the day-to-day agency workflow on top: a renewal worklist and board, per-channel consent and opt-outs, re-imports that update in place, a plain-language list builder, and a "why" panel that explains every score.
+v1.1 added the day-to-day agency workflow; v1.2 adds two-step sign-in, user management, data retention and a demo that scores exactly like the app. Together: a renewal worklist and board, per-channel consent and opt-outs, re-imports that update in place, a plain-language list builder, and a "why" panel that explains every score.
 
 ## Try It
 
@@ -33,7 +33,8 @@ v1.1 adds the day-to-day agency workflow on top: a renewal worklist and board, p
 | Lists | Plain-language builder over validated WHERE-style filters, including `days_to_expiry`, `policies_in_household` and `custom.field_key` |
 | Campaigns | Channel reach, conversions, gross/net, ROI, break-even rate, saved scenarios |
 | Ops | Audit log + CSV export, data inventory, setup doctor, cron recompute, SQLite backup path |
-| Security | CSRF, CSP, sessions, rate limits, upload hardening, PII masking |
+| Security | CSRF, `'self'`-only CSP, sessions, rate limits, optional TOTP two-step sign-in, invite-only registration, upload hardening, PII masking with audited reveal |
+| Privacy | Retention rules (uploads, audit log, contact history, expired policies), erase-a-person, full wipe, data inventory |
 
 ## Files
 
@@ -46,6 +47,8 @@ v1.1 adds the day-to-day agency workflow on top: a renewal worklist and board, p
 | `compare.html` | Honest comparison guide |
 | `SETUP.md` | cPanel/shared-hosting setup notes |
 | `SECURITY.md` | Security controls and hardening checklist |
+| `fonts/` | Optional self-hosted Inter + JetBrains Mono (SIL OFL); upload next to the PHP file |
+| `LICENSE` | MIT |
 
 ## Configuration
 
@@ -71,10 +74,15 @@ php /home/USER/public_html/liteinsurance.php action=cron_jobs cron_token=YOUR_TO
 ```sh
 node test/commercial-readiness.test.mjs
 node test/hotfix-regression.test.mjs
+node test/demo-parity.test.mjs
 ```
 
-Both need `php` on PATH; the regression test also boots `php -S` against a throwaway database.
+All need `php` on PATH. The regression test boots `php -S` against a throwaway database (register, import, re-import, two-step sign-in, erasure, cron); the parity test checks the browser demo against `php liteinsurance.php action=parity_vectors`.
 
 ## Privacy
 
 By default, UI lists mask names, revealing personal details is audited, and the app keeps data in SQLite on your own server. Treat `liteinsurance.db`, `.env`, and staged uploads as sensitive files and back them up securely.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Bundled Inter font files are under the SIL Open Font License 1.1 (`fonts/OFL.txt`).

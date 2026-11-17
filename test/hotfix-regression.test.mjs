@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createHmac } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,7 +22,9 @@ assert.match(php, /PRAGMA user_version = 11/, 'v1.1 migration should be versione
 for (const col of ['expiration_date', 'household_id', 'consent_email', 'opt_out_at', 'renewal_status', 'prior_premium']) {
   assert.match(php, new RegExp(`'${col}' => '`), `migration should add ${col}`);
 }
-for (const fn of ['render_tab_renewals', 'render_policy_panel', 'handle_renewal_export_ics', 'handle_suppression_apply', 'segment_stats', 'ltv_breakdown', 'confidence_breakdown', 'guess_import_mapping']) {
+assert.doesNotMatch(php, /fonts\.googleapis|fonts\.gstatic/, 'fonts should be self-hosted (no third-party requests)');
+assert.match(php, /PRAGMA user_version = 12/, 'v1.2 migration should be versioned');
+for (const fn of ['totp_match', 'handle_totp_verify', 'render_tab_account', 'run_retention', 'handle_retention_action', 'parity_vectors', 'render_tab_renewals', 'render_policy_panel', 'handle_renewal_export_ics', 'handle_suppression_apply', 'segment_stats', 'ltv_breakdown', 'confidence_breakdown', 'guess_import_mapping']) {
   assert.match(php, new RegExp(`function ${fn}\\(`), `${fn} should exist`);
 }
 
@@ -38,6 +41,21 @@ const port = 18000 + Math.floor(Math.random() * 2000);
 const server = spawn('php', ['-S', `127.0.0.1:${port}`], { cwd: dir, stdio: 'ignore' });
 const base = `http://127.0.0.1:${port}/liteinsurance.php`;
 let cookie = '';
+
+function totp(secretB32, stepOffset = 0) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const c of secretB32.replace(/[^A-Z2-7]/g, '')) bits += alphabet.indexOf(c).toString(2).padStart(5, '0');
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  const step = Math.floor(Date.now() / 30000) + stepOffset;
+  const msg = Buffer.alloc(8);
+  msg.writeUInt32BE(Math.floor(step / 2 ** 32), 0);
+  msg.writeUInt32BE(step % 2 ** 32, 4);
+  const h = createHmac('sha1', Buffer.from(bytes)).update(msg).digest();
+  const o = h[19] & 15;
+  return String((h.readUInt32BE(o) & 0x7fffffff) % 1000000).padStart(6, '0');
+}
 
 async function request(url, opts = {}) {
   for (let i = 0; i < 6; i++) {
@@ -107,8 +125,36 @@ try {
   page = await request(`${base}?tab=import`, { method: 'POST', body: form({ csrf_token: token(page.text), action: 'import_commit' }) });
   assert.match(flash(page.text), /0 new, 200 updated/, 're-import should update existing records');
 
+  // Registration is closed once an admin exists (unless an admin opens it).
+  const adminCookie = cookie;
+  cookie = '';
+  let anon = await request(`${base}?action=register_form`);
+  assert.doesNotMatch(anon.text, /name="password2"/, 'register form should be hidden when registration is closed');
+  anon = await request(`${base}?action=register_form`, { method: 'POST', body: form({ csrf_token: token(anon.text), action: 'register', email: 'x@example.com', password: 'password123', password2: 'password123' }) });
+  assert.match(flash(anon.text), /Registration is closed/, 'closed registration should be enforced server-side');
+  cookie = adminCookie;
+
+  // Two-step verification: enrol, sign out, sign back in with a TOTP code.
+  page = await request(`${base}?tab=account`, { method: 'POST', body: form({ csrf_token: token(page.text), action: 'totp_begin' }) });
+  const secret = (page.text.match(/class="secretKey mono">([^<]+)</) || [])[1]?.replace(/\s+/g, '');
+  assert.ok(secret && secret.length === 32, 'TOTP setup should show a 160-bit base32 key');
+  page = await request(`${base}?tab=account`, { method: 'POST', body: form({ csrf_token: token(page.text), action: 'totp_enable', code: totp(secret) }) });
+  assert.match(flash(page.text), /Two-step verification is on/, 'valid TOTP should enable two-step verification');
+  assert.match(page.text, /class="codeBlock recoveryCodes">[0-9A-F]{5}-[0-9A-F]{5}/, 'recovery codes should be shown once');
+  page = await request(base, { method: 'POST', body: form({ csrf_token: token(page.text), action: 'logout' }) });
+  page = await request(base, { method: 'POST', body: form({ csrf_token: token(page.text), action: 'login', email: 'admin@example.com', password: 'password123' }) });
+  assert.match(page.text, /Two-step verification/, 'password alone should lead to the TOTP challenge');
+  assert.doesNotMatch(page.text, /Renewal worklist/, 'no app access before the second factor');
+  page = await request(`${base}?action=totp_form`, { method: 'POST', body: form({ csrf_token: token(page.text), action: 'totp_verify', code: totp(secret, 1) }) });
+  assert.match(flash(page.text), /Signed in/, 'next-step TOTP code should complete sign-in (enrolment code cannot be replayed)');
+
+  // Erasure request.
+  page = await request(`${base}?tab=settings`, { method: 'POST', body: form({ csrf_token: token(page.text), action: 'privacy_erase', identifier: 'P-3003' }) });
+  assert.match(flash(page.text), /Erased 1 record/, 'erase should remove the matching policy');
+
   const cron = spawnSync('php', ['liteinsurance.php', 'action=cron_jobs'], { cwd: dir, encoding: 'utf8' });
-  assert.match(cron.stdout, /Updated policyholders: 200/, 'CLI cron should recompute every policy');
+  assert.match(cron.stdout, /Updated policyholders: 199/, 'CLI cron should recompute every remaining policy');
+  assert.match(cron.stdout, /Retention removed:/, 'cron should run retention');
 
   console.log('hotfix regression checks passed');
 } finally {

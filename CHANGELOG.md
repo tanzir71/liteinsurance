@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 2026-11-17 — v1.2
+Added
+- Two-step sign-in (TOTP, RFC 6238) with one-time recovery codes, an Account page (password change, enrol/disable), and an admin switch to require it for everyone.
+- Users & access in Settings: make admin/user, reset two-step, remove users, and open or close self-registration. **Registration is now invite-only by default** once the first admin exists; existing installs keep working, but new staff need an admin to open registration.
+- Data retention (staged uploads, audit log, contact history, long-expired or inactive policies) applied by the daily cron or on demand, plus "Erase a person" and "Delete all policy data". Staged CSVs are deleted as soon as an import commits.
+- Demo parity: `demo.html` now runs a shared scoring engine (`<script id="li-engine">`) that mirrors the PHP import pipeline, with the v1.1 screens (Today worklist, Renewals board, Book, Lists, Campaigns with consent reach). `test/demo-parity.test.mjs` proves the demo's sample CSV is byte-identical to the app's and that all 200 policies get the same tier, confidence, rule hits and LTV on three dates.
+- Self-hosted fonts in `fonts/` (Inter and JetBrains Mono, SIL OFL 1.1). Google Fonts removed from the app and every page; the app's CSP is now `'self'` only.
+- MIT `LICENSE`.
+- Sample book gains `agent_code`, `renewal_probability` and `source_channel` custom columns (also used by the demo).
+
+
 ## 2026-11-17 — v1.1
 Fixes
 - Registration and sign-in no longer loop on a fresh install: POST actions now take precedence over the query string, and auth forms post to an explicit URL.

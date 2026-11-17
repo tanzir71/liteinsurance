@@ -3,22 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LiteInsurance Demo -- Browser-Only Policy Segmentation</title>
-  <meta name="description" content="Try LiteInsurance with seed data, local CSV upload, editable custom fields, visual or JSON risk rules, segments, LTV scoring, and campaign simulation.">
+  <title>LiteInsurance Demo -- Browser-Only Renewals, Scoring and Segmentation</title>
+  <meta name="description" content="Try LiteInsurance in the browser: renewal worklist and board, editable custom fields, visual or JSON risk rules, lists, LTV scoring and campaign math.">
   <meta name="robots" content="index, follow">
   <link rel="canonical" href="https://tanzir71.github.io/liteinsurance/demo.html">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%230a0a0a'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='32' font-family='monospace' fill='%23f4f3ee'%3ELI%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./fonts/fonts.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2032%2032%22%3E%3Cpath%20d=%22M8%203.5h11.5L26%2010v9.8c0%204.6-4.1%207.8-10%209.7-5.9-1.9-10-5.1-10-9.7V5.5a2%202%200%20012-2z%22%20fill=%22%230B0D12%22/%3E%3Cpath%20d=%22M19.5%203.5V8a2%202%200%20002%202H26z%22%20fill=%22%232540FF%22/%3E%3C/svg%3E">
   <style>
     :root {
-      --bg: #f4f3ee;
-      --bg-alt: #ebe9e1;
-      --fg: #0a0a0a;
-      --muted: #6b6b66;
-      --muted-2: #8a877e;
-      --faint: #a8a59c;
-      --border: #cfcdc4;
-      --border-soft: #e3e1d8;
-      --panel: #fbfaf6;
+      --bg: #f6f5f0;
+      --bg-alt: #eeece6;
+      --fg: #0b0d12;
+      --muted: #6b7280;
+      --muted-2: #4b5262;
+      --faint: #9aa0ab;
+      --border: #e4e2da;
+      --border-soft: #eeece6;
+      --panel: #ffffff;
+      --red: #b42318; --red-50: #fcebe9; --amber: #b45309; --amber-50: #fdf2e4; --green: #157f3b; --green-50: #e7f4ec; --acc-50: #eef1ff;
       --acc: #2540ff;
       --dk-bg: #0c0d0e;
       --dk-bg-2: #131416;
@@ -73,9 +75,27 @@
     .demo-card { min-width: 0; border: 1px solid var(--border); background: var(--panel); padding: 18px; }
     .demo-card .label { font: 11px/1.4 var(--f-mono); color: var(--muted-2); letter-spacing: .14em; text-transform: uppercase; }
     .demo-card .big { margin-top: 10px; font-size: 28px; font-weight: 650; letter-spacing: -.03em; }
-    .tabbar { display: flex; gap: 1px; background: var(--border); border: 1px solid var(--border); overflow-x: auto; }
-    .tab { flex: 1 0 auto; min-height: 44px; border: 0; background: var(--panel); color: var(--muted); cursor: pointer; padding: 0 16px; font: 12px/1 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; }
-    .tab[aria-selected="true"] { color: var(--fg); background: var(--bg); box-shadow: inset 0 -3px 0 var(--acc); }
+    .tabbar { display: flex; gap: 2px; padding: 4px; background: #0a0e1a; border-radius: 4px; overflow-x: auto; }
+    .tab { flex: 1 0 auto; min-height: 40px; border: 0; border-radius: 4px; background: transparent; color: #c9cdd8; cursor: pointer; padding: 0 14px; font: 500 13.5px/1 var(--f-sans); }
+    .tab:hover { background: #111729; color: #fff; }
+    .tab .tab-count { margin-left: 6px; padding: 1px 6px; border-radius: 4px; background: var(--acc); color: #fff; font: 11px/16px var(--f-mono); }
+    .tab[aria-selected="true"] { color: #fff; background: #111729; box-shadow: inset 0 -3px 0 var(--acc); }
+    .logo-mark { display: block; flex: none; }
+    .tier, .pill { display: inline-block; padding: 1px 8px; border-radius: 4px; font: 600 11.5px/1.6 var(--f-sans); background: var(--bg-alt); color: var(--muted-2); white-space: nowrap; }
+    .tier-high { background: var(--red-50); color: var(--red); } .tier-review { background: var(--amber-50); color: var(--amber); } .tier-medium { background: var(--acc-50); color: #1a2fd6; } .tier-low { background: var(--green-50); color: var(--green); }
+    .st-contacted { background: var(--acc-50); color: #1a2fd6; } .st-quoted { background: #f1ecfe; color: #5b34c7; } .st-remarketing { background: var(--amber-50); color: var(--amber); } .st-renewed { background: var(--green-50); color: var(--green); } .st-lost { background: var(--red-50); color: var(--red); }
+    .due { color: var(--red); font-weight: 600; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+    .chip { min-height: 30px; padding: 0 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--muted-2); cursor: pointer; font: 500 12.5px var(--f-sans); }
+    .chip[aria-pressed="true"] { background: var(--fg); border-color: var(--fg); color: #fff; }
+    .board { display: grid; grid-template-columns: repeat(6, minmax(170px, 1fr)); gap: 10px; overflow-x: auto; align-items: start; }
+    .board-col { background: var(--bg-alt); border-radius: 4px; padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 120px; }
+    .board-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted-2); }
+    .rcard { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 9px; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
+    .rcard.is-due { box-shadow: inset 3px 0 0 var(--red); }
+    .rcard-top, .rcard-meta { display: flex; justify-content: space-between; gap: 6px; }
+    .rcard select { margin-top: 6px; width: 100%; min-height: 30px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); font-size: 12.5px; }
+    .board-empty { color: var(--muted); font-size: 12px; padding: 6px; }
     .view { display: none; border: 1px solid var(--border); border-top: 0; background: var(--panel); padding: 22px; }
     .view.active { display: block; }
     .grid { display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); }
@@ -192,7 +212,7 @@
   <header>
     <div class="container header-inner">
       <a class="brand" href="./index.html">
-        <span class="logo">LI</span>
+        <svg class="logo-mark" viewBox="0 0 32 32" width="30" height="30" aria-hidden="true"><path d="M8 3.5h11.5L26 10v9.8c0 4.6-4.1 7.8-10 9.7-5.9-1.9-10-5.1-10-9.7V5.5a2 2 0 012-2z" fill="#0B0D12"/><path d="M19.5 3.5V8a2 2 0 002 2H26z" fill="#2540FF"/><rect x="10.5" y="14" width="9" height="2.6" rx="1.3" fill="#fff"/><rect x="10.5" y="19" width="6" height="2.6" rx="1.3" fill="#fff" fill-opacity=".55"/></svg>
         <span class="brand-name">LiteInsurance</span>
       </a>
       <input type="checkbox" id="navToggle" class="nav-toggle" hidden>
@@ -222,34 +242,41 @@
         <div>
           <span class="eyebrow">No-install evaluation</span>
           <h1>Run the insurance workflow with seed data or your own local file.</h1>
-          <p class="lead">This demo mirrors the production app's core mechanics: CSV import, editable custom fields, missing-field imputation, LTV scoring, visual or JSON risk rules, segments, CSV export, and campaign simulation.</p>
+          <p class="lead">This demo runs the same scoring engine as the production app (v1.1): CSV import with renewal and consent columns, editable custom fields, missing-field imputation, LTV scoring, visual or JSON risk rules, a renewal worklist and board, consent-aware lists, CSV export, and campaign simulation.</p>
         </div>
         <div class="demo-card">
           <div class="label">Evaluation flow</div>
           <div class="big">Real data replaces the seed sample.</div>
-          <p class="muted">Upload a policyholder CSV in Data, edit custom field cells like a small sheet, then switch between the visual rule builder and the Rules JSON editor. CSV rows hold people; rules JSON holds conditions and actions. The browser saves demo state locally until you reset it.</p>
+          <p class="muted">Upload a policyholder CSV in Import &amp; health, work the renewal board, edit custom field cells like a small sheet, then switch between the visual rule builder and the Rules JSON editor. CSV rows hold people; rules JSON holds conditions and actions. The browser saves demo state locally until you reset it.</p>
         </div>
       </div>
 
       <div class="tabbar" role="tablist" aria-label="Demo views">
-        <button class="tab" role="tab" aria-selected="true" data-tab="dashboard">Dashboard</button>
-        <button class="tab" role="tab" aria-selected="false" data-tab="profiles">Profiles</button>
-        <button class="tab" role="tab" aria-selected="false" data-tab="data">Data</button>
-        <button class="tab" role="tab" aria-selected="false" data-tab="rules">Rules</button>
-        <button class="tab" role="tab" aria-selected="false" data-tab="segments">Segments</button>
-        <button class="tab" role="tab" aria-selected="false" data-tab="simulator">Simulator</button>
+        <button class="tab" role="tab" aria-selected="true" data-tab="dashboard">Today</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="renewals">Renewals<span class="tab-count" id="renewalTabCount" hidden></span></button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="profiles">Book</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="segments">Lists</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="simulator">Campaigns</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="data">Import &amp; health</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="rules">Scoring rules</button>
       </div>
       <div class="history-bar">
-        <span class="history-hint">Inline editing is live in Profiles, Data, and segment previews. Every change is one undo step.</span>
+        <span class="history-hint">Inline editing is live in Book, Import &amp; health, and list previews. Every change is one undo step.</span>
         <span class="history-actions">
           <button class="btn" id="undoBtn" type="button" title="Undo (Ctrl+Z)" disabled>Undo</button>
           <button class="btn" id="redoBtn" type="button" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
         </span>
       </div>
-      <p class="status" id="inlineEditStatus">Inline editing is active in Profiles, Data, and segment previews. Change a cell and it recomputes local state.</p>
+      <p class="status" id="inlineEditStatus">Inline editing is active in Book, Import &amp; health, and list previews. Change a cell and it recomputes local state.</p>
 
       <section class="view active" id="dashboard" role="tabpanel">
         <div class="grid grid-4" id="kpis"></div>
+        <div class="cell" style="margin-top:18px;">
+          <h2 class="section-title">Renewal worklist</h2>
+          <div class="chips" id="worklistWindows" role="group" aria-label="Window"></div>
+          <div class="scroll"><table><thead><tr><th>Policy</th><th>Client</th><th>Line</th><th>Expires</th><th>Next touch</th><th class="right">Premium</th><th>Tier</th><th>Stage</th></tr></thead><tbody id="worklistRows"></tbody></table></div>
+          <p class="note" id="worklistNote"></p>
+        </div>
         <div class="grid grid-2" style="margin-top:18px;">
           <div class="cell">
             <h2 class="section-title">Risk tier distribution</h2>
@@ -266,10 +293,17 @@
             <div class="chart" id="qualityChart"></div>
           </div>
           <div class="cell">
-            <h2 class="section-title">Priority score bands</h2>
-            <div class="chart" id="priorityChart"></div>
+            <h2 class="section-title">Renewals due by window</h2>
+            <div class="chart" id="renewalChart"></div>
           </div>
         </div>
+      </section>
+
+      <section class="view" id="renewals" role="tabpanel">
+        <div class="chips" id="boardWindows" role="group" aria-label="Window"></div>
+        <p class="note" id="boardNote"></p>
+        <div class="board" id="renewalBoard"></div>
+        <p class="note">Stages are saved in this browser. In the PHP app the board also tracks owners, a contact log, consent-aware call lists and a calendar export.</p>
       </section>
 
       <section class="view" id="profiles" role="tabpanel">
@@ -395,8 +429,9 @@
       <section class="view" id="simulator" role="tabpanel">
         <h2 class="section-title">Campaign simulator</h2>
         <div class="range-grid">
-          <label>Segment <select id="simSegment"></select></label>
-          <label>Cross-sell rate <input id="simRate" type="range" min="1" max="18" value="6"><output id="simRateOut"></output></label>
+          <label>List <select id="simSegment"></select></label>
+          <label>Channel <select id="simChannel"><option value="email">Email (consented)</option><option value="sms">SMS (consented)</option><option value="phone">Calls (consented)</option><option value="mail">Direct mail</option></select></label>
+          <label>Conversion rate <input id="simRate" type="range" min="1" max="18" value="6"><output id="simRateOut"></output></label>
           <label>Offer value <input id="simValue" type="range" min="250" max="2500" step="50" value="1200"><output id="simValueOut"></output></label>
           <label>Contact cost <input id="simCost" type="range" min="1" max="12" step="0.5" value="2.5"><output id="simCostOut"></output></label>
         </div>
@@ -409,21 +444,507 @@
   <datalist id="dl-region"></datalist>
   <datalist id="dl-gender"></datalist>
 
+  <script id="li-engine">
+/* LiteEngine — the demo's scoring engine. It mirrors liteinsurance.php (sample_csv, guess_import_mapping,
+   analyze_csv, normalize_and_impute, evaluate_rules_for_record, compute_confidence, compute_ltv) so the browser
+   demo and the PHP app produce the same tiers, LTV and confidence for the same rows.
+   test/demo-parity.test.mjs runs this block in Node and compares it with `php liteinsurance.php action=parity_vectors`. */
+(function (root) {
+  'use strict';
+  var SAMPLE_POLICY_COUNT = 200;
+  var MULTIPLIER_BY_TYPE = { term: 1.06, health: 1.10, auto: 1.04, life: 1.08 };
+  var SETTINGS = { term_months: 120, retention: 0.85, default_multiplier: 1.05, premium_period: 'monthly', cadence: [120, 90, 75, 45, 30, 15] };
+  var INACTIVE = ['cancelled', 'expired', 'lapsed', 'non-renewed'];
+  var DAY = 86400000;
+
+  var CRC_TABLE = (function () {
+    var t = [];
+    for (var n = 0; n < 256; n++) {
+      var c = n;
+      for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  function crc32(str) {
+    var crc = 0xFFFFFFFF;
+    for (var i = 0; i < str.length; i++) crc = CRC_TABLE[(crc ^ str.charCodeAt(i)) & 0xFF] ^ (crc >>> 8);
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+  function pad(n, w) { return String(n).padStart(w, '0'); }
+  function isoFromMs(ms) { var d = new Date(ms); return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1, 2) + '-' + pad(d.getUTCDate(), 2); }
+  function todayISO(now) { return isoFromMs(now ? Number(now) : Date.now()); }
+  function msFromIso(iso) { var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || '')); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : null; }
+  function addMonthsIso(iso, months) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+    if (!m) return '';
+    return isoFromMs(Date.UTC(+m[1], +m[2] - 1 + months, +m[3]));
+  }
+  function csvField(v) {
+    var s = String(v);
+    return /[",\n\r\t ]/.test(s) || s === '' && false ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  /* ---------- sample book: same LCG stream + crc32 hash as PHP sample_csv() ---------- */
+  var SAMPLE_HEADERS = ['policy_number', 'name', 'dob', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'effective_date', 'expiration_date', 'status', 'line_of_business', 'carrier', 'producer', 'household_id', 'email', 'phone', 'email_opt_in', 'sms_opt_in', 'phone_opt_in', 'agent_code', 'renewal_probability', 'source_channel'];
+  function sampleRows(today) {
+    var firstNames = ['Asha', 'Noah', 'Maria', 'Li', 'Sam', 'Nadia', 'Omar', 'Priya', 'Ethan', 'Mina', 'Jon', 'Sara', 'Imran', 'Elena', 'Grace', 'Kenji'];
+    var lastNames = ['Rahman', 'Kim', 'Silva', 'Wei', 'Patel', 'Chowdhury', 'Hassan', 'Mitra', 'Brooks', 'Sato', 'Reed', 'Stone', 'Khan', 'Garcia', 'Miller', 'Tan'];
+    var types = ['term', 'term', 'health', 'health', 'auto', 'life', 'life'];
+    var regions = ['West', 'West', 'North', 'South', 'South', 'East', 'Central'];
+    var genders = ['F', 'M', 'F', 'M', ''];
+    var basePremium = { term: 118.0, health: 104.0, auto: 82.0, life: 150.0 };
+    var baseAssured = { term: 72000, health: 34000, auto: 21000, life: 98000 };
+    var lobByType = { term: 'Term Life', life: 'Whole Life', health: 'Health', auto: 'Personal Auto' };
+    var carriersByType = { term: ['Harbor Life', 'Northwind Mutual'], life: ['Harbor Life', 'Northwind Mutual'], health: ['Bluefield Health', 'Bluefield Health'], auto: ['Summit Casualty', 'Northwind Mutual'] };
+    var producers = ['A. Rahman', 'J. Reed', 'M. Silva'];
+    var channels = ['broker', 'web', 'referral', 'branch'];
+    var todayMs = msFromIso(today || todayISO());
+    var seed = 71371n;
+    function rand() { seed = (seed * 1103515245n + 12345n) % 2147483648n; return Number(seed) / 2147483648; }
+    function pick(items) { return items[Math.floor(rand() * items.length)]; }
+    function chance(p) { return rand() < p; }
+    var rows = [];
+    for (var i = 1; i <= SAMPLE_POLICY_COUNT; i++) {
+      var type = pick(types);
+      var region = pick(regions);
+      var age = 22 + Math.floor(Math.min(rand(), rand()) * 55);
+      var tenure = Math.floor(Math.min(rand(), rand()) * 96);
+      var premium = Math.max(38.0, basePremium[type] + ((age - 42) * 0.9) + (tenure * 0.45) + Math.floor(rand() * 42) - 18);
+      var sumAssured = baseAssured[type] + Math.floor(rand() * 36000);
+      var dob = pad(2026 - age, 4) + '-' + pad((i % 12) + 1, 2) + '-' + pad((i % 27) + 1, 2);
+      var fullName = pick(firstNames) + ' ' + pick(lastNames);
+      var u = (function (ii) { return function (k) { return (crc32('li-sample-' + k + '-' + ii) % 1000003) / 1000003; }; })(i);
+      var termMonths = type === 'auto' ? 6 : 12;
+      var expiration = isoFromMs(todayMs + (Math.floor(u('exp') * (termMonths === 6 ? 183 : 365)) - 20) * DAY);
+      var effective = addMonthsIso(expiration, -termMonths);
+      var parts = fullName.split(' ');
+      var hasEmail = u('em') < 0.88;
+      var hasPhone = u('ph') < 0.80;
+      var row = [
+        'P-' + pad(3000 + i, 4),
+        fullName,
+        chance(0.08) ? '' : dob,
+        chance(0.10) ? '' : pick(genders),
+        chance(0.08) ? '' : type,
+        chance(0.11) ? '' : region,
+        chance(0.09) ? '' : (Math.round(premium * 100) / 100).toFixed(2),
+        chance(0.08) ? '' : String(tenure),
+        chance(0.06) ? '' : String(sumAssured)
+      ];
+      row.push(
+        effective,
+        u('noexp') < 0.05 ? '' : expiration,
+        u('st') < 0.03 ? 'Cancelled' : 'Active',
+        lobByType[type] || (type.charAt(0).toUpperCase() + type.slice(1)),
+        (carriersByType[type] || [])[Math.floor(u('car') * 2)] || 'Northwind Mutual',
+        producers[Math.floor(u('pr') * 3)],
+        'H-' + (1000 + Math.floor(u('hh') * 150)),
+        hasEmail ? (parts[0] + '.' + (parts[1] || 'client') + i).toLowerCase() + '@example.com' : '',
+        hasPhone ? '(' + pad(201 + Math.floor(u('ac') * 700), 3) + ') 555-01' + pad(Math.floor(u('ln') * 100), 2) : '',
+        hasEmail ? (u('ce') < 0.65 ? 'Yes' : 'No') : '',
+        hasPhone ? (u('cs') < 0.35 ? 'Yes' : 'No') : '',
+        hasPhone ? (u('cp') < 0.55 ? 'Yes' : 'No') : '',
+        'AG-' + pad(10 + (i % 18), 2),
+        (Math.round((0.42 + Math.floor(u('rp') * 49) / 100) * 100) / 100).toFixed(2),
+        channels[Math.floor(u('sc') * 4)]
+      );
+      rows.push(row);
+    }
+    return { headers: SAMPLE_HEADERS.slice(), rows: rows };
+  }
+  function sampleCsv(today) {
+    var s = sampleRows(today);
+    var quote = function (v) { var t = String(v); return /[\s",]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    return [s.headers.join(',')].concat(s.rows.map(function (r) { return r.map(quote).join(','); })).join('\n') + '\n';
+  }
+
+  /* ---------- PHP-compatible scalar helpers ---------- */
+  function isNumericStr(v) {
+    if (typeof v === 'number') return Number.isFinite(v);
+    if (typeof v !== 'string') return false;
+    return /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/.test(v);
+  }
+  function phpFloat(v) {
+    if (v === null || v === undefined) return 0;
+    if (typeof v === 'boolean') return v ? 1 : 0;
+    if (typeof v === 'number') return v;
+    var m = /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/.exec(String(v));
+    return m ? parseFloat(m[0]) : 0;
+  }
+  function phpString(v) {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'boolean') return v ? '1' : '';
+    return String(v);
+  }
+  function parseNumber(s) {
+    s = phpString(s).trim();
+    if (s === '') return null;
+    s = s.replace(/[,$€£ ]/g, '');
+    return isNumericStr(s) ? parseFloat(s) : null;
+  }
+  function parseIntStrict(s) {
+    s = phpString(s).trim();
+    return /^-?\d+$/.test(s) ? parseInt(s, 10) : null;
+  }
+  function normalizeGender(s) {
+    s = phpString(s).trim().toLowerCase();
+    if (s === 'm' || s === 'male') return 'M';
+    if (s === 'f' || s === 'female') return 'F';
+    if (s === 'other' || s === 'x') return 'X';
+    return '';
+  }
+  function parseDateAny(s) {
+    s = phpString(s).trim();
+    if (s === '') return null;
+    var m, y, mo, d;
+    if ((m = /^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/.exec(s))) { y = +m[1]; mo = +m[2]; d = +m[3]; }
+    else if ((m = /^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})$/.exec(s))) {
+      var a = +m[1], b = +m[2]; y = +m[3]; if (y < 100) y += 2000;
+      if (a > 12 && b <= 12) { d = a; mo = b; } else { mo = a; d = b; }
+    } else {
+      var t = Date.parse(s + ' UTC');
+      return Number.isFinite(t) ? isoFromMs(t) : null;
+    }
+    var dt = new Date(Date.UTC(y, mo - 1, d));
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+    return pad(y, 4) + '-' + pad(mo, 2) + '-' + pad(d, 2);
+  }
+  function ageFromDob(dob, today) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dob || '').trim());
+    if (!m) return null;
+    var t = /^(\d{4})-(\d{2})-(\d{2})/.exec(today);
+    var by = +m[1], bm = +m[2], bd = +m[3], ty = +t[1], tm = +t[2], td = +t[3];
+    if (by > ty || (by === ty && (bm > tm || (bm === tm && bd > td)))) return null;
+    var age = ty - by;
+    if (tm < bm || (tm === bm && td < bd)) age--;
+    return age;
+  }
+  function daysUntil(date, today) {
+    var a = msFromIso(date), b = msFromIso(today);
+    return a === null || b === null ? null : Math.round((a - b) / DAY);
+  }
+  function normalizePolicyStatus(s) {
+    var k = phpString(s).replace(/\s+/g, ' ').trim().toLowerCase();
+    if (k === '') return '';
+    var map = { active: 'active', a: 'active', 'in force': 'active', inforce: 'active', 'in-force': 'active', current: 'active', renewed: 'active', renewal: 'active', 'new': 'active', 'new business': 'active', pending: 'pending', quote: 'pending', quoted: 'pending', p: 'pending', cancelled: 'cancelled', canceled: 'cancelled', cancel: 'cancelled', c: 'cancelled', cxl: 'cancelled', expired: 'expired', e: 'expired', lapsed: 'lapsed', lapse: 'lapsed', 'non-renewed': 'non-renewed', nonrenewed: 'non-renewed', 'non renewed': 'non-renewed', 'non-renewal': 'non-renewed' };
+    return map[k] || k;
+  }
+  function ucwords(s) { return s.replace(/(^|[\s\t\r\n\f\v])([a-z])/g, function (_, p1, p2) { return p1 + p2.toUpperCase(); }); }
+  function normalizeLabelCase(s) {
+    s = phpString(s).replace(/\s+/g, ' ').trim();
+    if (s === '') return '';
+    if (s.length <= 3 && /^[A-Za-z]+$/.test(s)) return s.toUpperCase();
+    if (s === s.toUpperCase() || s === s.toLowerCase()) return ucwords(s.toLowerCase());
+    return s;
+  }
+  function normalizePolicyType(s) { return phpString(s).replace(/\s+/g, ' ').trim().toLowerCase(); }
+  function policyTypeFromLob(lob) {
+    var k = String(lob).toLowerCase();
+    if (k === '') return '';
+    var pairs = [['auto', 'auto'], ['vehicle', 'auto'], ['motor', 'auto'], ['term', 'term'], ['life', 'life'], ['health', 'health'], ['medical', 'health'], ['dental', 'health'], ['home', 'home'], ['dwelling', 'home'], ['property', 'home'], ['condo', 'home'], ['renter', 'home'], ['umbrella', 'umbrella'], ['commercial', 'commercial'], ['business', 'commercial'], ['bop', 'commercial']];
+    for (var i = 0; i < pairs.length; i++) if (k.indexOf(pairs[i][0]) !== -1) return pairs[i][1];
+    return normalizePolicyType(lob);
+  }
+  function normalizeEmail(s) {
+    s = phpString(s).trim().toLowerCase();
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : '';
+  }
+  function normalizePhone(s) {
+    s = phpString(s).trim();
+    if (s === '') return '';
+    var plus = s.charAt(0) === '+';
+    var digits = s.replace(/\D+/g, '');
+    if (digits.length < 7 || digits.length > 15) return '';
+    return (plus ? '+' : '') + digits;
+  }
+  function parseBoolLoose(s) {
+    var k = phpString(s).trim().toLowerCase();
+    if (k === '') return null;
+    if (['1', 'y', 'yes', 'true', 't', 'x', 'opt-in', 'opt in', 'opted in', 'optin', 'subscribed', 'ok', 'allowed', 'consent', 'granted'].indexOf(k) !== -1) return 1;
+    if (['0', 'n', 'no', 'false', 'f', 'opt-out', 'opt out', 'opted out', 'optout', 'unsubscribed', 'denied', 'dnc', 'do not contact'].indexOf(k) !== -1) return 0;
+    return null;
+  }
+
+  /* ---------- import analysis + normalisation (analyze_csv / normalize_and_impute) ---------- */
+  // records: array of objects keyed by storage field (policy_number, name, premium_amount, …) holding raw values.
+  // mapped: set of storage fields present in the source file.
+  function analyze(records, mapped) {
+    var numFields = ['premium_amount', 'tenure_months', 'sum_assured', 'age'];
+    var catFields = ['policy_type', 'region', 'gender'];
+    var sums = {}, counts = {}, freq = {};
+    numFields.forEach(function (f) { sums[f] = 0; counts[f] = 0; });
+    catFields.forEach(function (f) { freq[f] = new Map(); });
+    records.forEach(function (rec) {
+      numFields.forEach(function (f) {
+        if (!mapped[f]) return;
+        var v = parseNumber(rec[f]);
+        if (v !== null) { sums[f] += v; counts[f] += 1; }
+      });
+      catFields.forEach(function (f) {
+        if (!mapped[f]) return;
+        var v = phpString(rec[f]).trim();
+        if (v !== '') { var k = v.toLowerCase(); freq[f].set(k, (freq[f].get(k) || 0) + 1); }
+      });
+    });
+    var means = {}, modes = {};
+    numFields.forEach(function (f) { means[f] = counts[f] > 0 ? sums[f] / counts[f] : 0; });
+    catFields.forEach(function (f) {
+      var best = '', bestV = 0;
+      freq[f].forEach(function (v, k) { if (v > bestV) { bestV = v; best = k; } });
+      modes[f] = best;
+    });
+    return { means: means, modes: modes, mapped: mapped, rows_total: records.length };
+  }
+  function phpRound(x, dp) {
+    var f = Math.pow(10, dp || 0);
+    var v = Math.abs(x) * f;
+    var r = Math.floor(v + 0.5 + 1e-9);
+    return Math.sign(x) * r / f;
+  }
+  function normalizeAndImpute(rec, analysis, imputed, rowNumber, today) {
+    var mapped = analysis.mapped || {};
+    var out = {};
+    out.policy_number = phpString(rec.policy_number).trim();
+    if (out.policy_number === '') { out.policy_number = 'AUTO-DEMO-' + pad(Math.max(1, rowNumber || 1), 6); imputed.push('record_id'); }
+    out.name = phpString(rec.name).replace(/\s+/g, ' ').trim();
+    if (out.name === '') { out.name = out.policy_number; imputed.push('display_name'); }
+    var dobRaw = phpString(rec.dob).trim();
+    out.dob = dobRaw !== '' ? (parseDateAny(dobRaw) || dobRaw) : '';
+    out.gender = normalizeGender(rec.gender);
+    out.age = parseIntStrict(rec.age);
+    if (out.age === null && out.dob !== '') { var a = ageFromDob(out.dob, today); if (a !== null) out.age = a; }
+    out.premium_amount = parseNumber(rec.premium_amount);
+    out.tenure_months = parseIntStrict(rec.tenure_months);
+    out.sum_assured = parseNumber(rec.sum_assured);
+    out.line_of_business = normalizeLabelCase(rec.line_of_business);
+    out.policy_type = normalizePolicyType(rec.policy_type);
+    if (out.policy_type === '' && out.line_of_business !== '') out.policy_type = policyTypeFromLob(out.line_of_business);
+    out.region = normalizeLabelCase(rec.region);
+    out.status = normalizePolicyStatus(rec.status);
+    out.carrier = normalizeLabelCase(rec.carrier);
+    out.producer = phpString(rec.producer).replace(/\s+/g, ' ').trim();
+    out.household_id = phpString(rec.household_id).trim();
+    out.email = normalizeEmail(rec.email);
+    out.phone = normalizePhone(rec.phone);
+    out.consent_email = parseBoolLoose(rec.consent_email);
+    out.consent_sms = parseBoolLoose(rec.consent_sms);
+    out.consent_phone = parseBoolLoose(rec.consent_phone);
+    out.effective_date = parseDateAny(rec.effective_date) || '';
+    out.expiration_date = parseDateAny(rec.expiration_date) || '';
+    if (out.expiration_date === '' && out.effective_date !== '') {
+      out.expiration_date = addMonthsIso(out.effective_date, out.policy_type === 'auto' ? 6 : 12);
+      if (out.expiration_date !== '') imputed.push('expiration_date');
+    }
+    if (out.premium_amount === null && mapped.premium_amount) { out.premium_amount = phpRound(analysis.means.premium_amount || 0, 2); imputed.push('premium_amount'); }
+    if (out.tenure_months === null && mapped.tenure_months) { out.tenure_months = phpRound(analysis.means.tenure_months || 0, 0); imputed.push('tenure_months'); }
+    if (out.sum_assured === null && mapped.sum_assured && (analysis.means.sum_assured || 0) > 0) { out.sum_assured = phpRound(analysis.means.sum_assured, 0); imputed.push('sum_assured'); }
+    if (out.policy_type === '' && mapped.policy_type) { out.policy_type = normalizePolicyType(analysis.modes.policy_type || 'term'); imputed.push('policy_type'); }
+    if (out.region === '' && mapped.region) { out.region = normalizeLabelCase(analysis.modes.region || 'Unknown'); imputed.push('region'); }
+    if (out.gender === '' && mapped.gender) { var mg = analysis.modes.gender || ''; if (mg !== '') { out.gender = normalizeGender(mg); imputed.push('gender'); } }
+    return out;
+  }
+
+  /* ---------- rules (evaluate_rules_for_record) ---------- */
+  function compareScalar(a, b) {
+    if (isNumericStr(a) && isNumericStr(b)) { var x = phpFloat(a), y = phpFloat(b); return x === y ? 0 : (x < y ? -1 : 1); }
+    var s = phpString(a).toLowerCase(), t = phpString(b).toLowerCase();
+    return s === t ? 0 : (s < t ? -1 : 1);
+  }
+  function valueForField(record, field, today) {
+    field = String(field || '').trim();
+    if (field.indexOf('custom.') === 0) {
+      var c = record.custom || record.custom_fields || {};
+      var v = c[field.slice(7)];
+      return v === undefined ? null : v;
+    }
+    if (Object.prototype.hasOwnProperty.call(record, field)) return record[field];
+    if (field === 'days_to_expiry') return daysUntil(record.expiration_date, today || todayISO());
+    if (field === 'policies_in_household') return 1;
+    if (field === 'opted_out') return 0;
+    if (field === 'renewal_status') return 'not_started';
+    return null;
+  }
+  function evalConditionLeaf(record, c, today) {
+    var field = String(c.field || ''), op = String(c.op || '').trim().toLowerCase(), value = c.value;
+    if (field === '' || op === '') return false;
+    var left = valueForField(record, field, today);
+    var leftStr = typeof left === 'string' ? left.trim() : left;
+    if (['>', '<', '>=', '<='].indexOf(op) !== -1 && (leftStr === null || leftStr === undefined || leftStr === '')) return false;
+    if (op === '=' || op === '==') return compareScalar(leftStr, value) === 0;
+    if (op === '!=') return compareScalar(leftStr, value) !== 0;
+    if (op === '>') return phpFloat(leftStr) > phpFloat(value);
+    if (op === '<') return phpFloat(leftStr) < phpFloat(value);
+    if (op === '>=') return phpFloat(leftStr) >= phpFloat(value);
+    if (op === '<=') return phpFloat(leftStr) <= phpFloat(value);
+    if (op === 'in') {
+      if (!Array.isArray(value)) return false;
+      var needle = phpString(leftStr).toLowerCase();
+      return value.some(function (v) { return phpString(v).toLowerCase() === needle; });
+    }
+    if (op === 'contains') return typeof leftStr === 'string' && typeof value === 'string' && leftStr.toLowerCase().indexOf(value.toLowerCase()) !== -1;
+    if (op === 'regex') {
+      if (typeof leftStr !== 'string' || typeof value !== 'string' || value === '') return false;
+      try { var m = /^\/(.*)\/([a-z]*)$/i.exec(value); return (m ? new RegExp(m[1], m[2].replace(/[^gimsuy]/g, '')) : new RegExp(value, 'i')).test(leftStr); } catch (e) { return false; }
+    }
+    return false;
+  }
+  function evalConditions(record, conds, today) {
+    if (!conds || typeof conds !== 'object') return false;
+    var logic = typeof conds.logic === 'string' ? conds.logic.toUpperCase() : 'AND';
+    var items = Array.isArray(conds.conditions) ? conds.conditions : (Array.isArray(conds) ? conds : []);
+    var results = items.map(function (c) {
+      if (c && Array.isArray(c.all)) return evalConditions(record, { logic: 'AND', conditions: c.all }, today);
+      if (c && Array.isArray(c.any)) return evalConditions(record, { logic: 'OR', conditions: c.any }, today);
+      return evalConditionLeaf(record, c || {}, today);
+    });
+    return logic === 'OR' ? results.some(Boolean) : results.every(Boolean);
+  }
+  function sortRules(rules) {
+    return rules.slice().sort(function (a, b) { return (Number(b.priority) || 0) - (Number(a.priority) || 0) || (Number(b.id) || 0) - (Number(a.id) || 0); });
+  }
+  function evaluateRules(record, rules, today) {
+    var tier = 'Unknown', tierRule = 0, tierSet = false, tags = [], hits = [], scoreDelta = 0, stoppedAt = 0;
+    var ordered = sortRules(rules.filter(function (r) { return r.enabled !== false && r.enabled !== 0; }));
+    for (var i = 0; i < ordered.length; i++) {
+      var rule = ordered[i];
+      var conds = rule.conditions && !Array.isArray(rule.conditions) ? rule.conditions : { logic: rule.logic || 'AND', conditions: rule.conditions || [] };
+      var actions = rule.actions || {};
+      if (!evalConditions(record, conds, today)) continue;
+      hits.push(Number(rule.id) || 0);
+      if (!tierSet && typeof actions.set_risk_tier === 'string' && actions.set_risk_tier !== '') { tier = actions.set_risk_tier; tierRule = Number(rule.id) || 0; tierSet = true; }
+      if (actions.score_delta !== undefined) scoreDelta += parseInt(actions.score_delta, 10) || 0;
+      if (typeof actions.add_tag === 'string' && actions.add_tag !== '') tags.push(actions.add_tag);
+      if (actions.stop) { stoppedAt = Number(rule.id) || 0; break; }
+    }
+    return { risk_tier: tier, score_delta: scoreDelta, tags: Array.from(new Set(tags)), rule_hits: hits, tier_rule_id: tierRule, stopped_at: stoppedAt };
+  }
+  function computeConfidence(r, imputed) {
+    var base = 100 - Math.min(45, imputed.length * 10);
+    ['age', 'gender', 'sum_assured'].forEach(function (k) { var v = r[k]; if (v === null || v === undefined || (typeof v === 'string' && v.trim() === '')) base -= 5; });
+    return Math.max(0, Math.min(100, base));
+  }
+  function computeLtv(r, settings) {
+    settings = settings || SETTINGS;
+    if (r.premium_amount === null || r.premium_amount === undefined || r.tenure_months === null || r.tenure_months === undefined || String(r.policy_type || '').trim() === '') return null;
+    var premium = Number(r.premium_amount);
+    var monthly = settings.premium_period === 'annual' ? premium / 12 : premium;
+    var remaining = Math.max(0, settings.term_months - Number(r.tenure_months));
+    var type = String(r.policy_type).trim().toLowerCase();
+    var mult = Object.prototype.hasOwnProperty.call(MULTIPLIER_BY_TYPE, type) ? MULTIPLIER_BY_TYPE[type] : settings.default_multiplier;
+    return phpRound(monthly * remaining * mult * settings.retention, 2);
+  }
+  function scoreRecord(rec, imputed, rules, today) {
+    var conf = computeConfidence(rec, imputed);
+    var out = evaluateRules(rec, rules, today);
+    conf = Math.min(100, Math.round(conf + Math.min(20, out.rule_hits.length * 4)));
+    return { ltv: computeLtv(rec), risk_tier: out.risk_tier, confidence: conf, rule_hits: out.rule_hits, tags: out.tags, tier_rule_id: out.tier_rule_id };
+  }
+  function nextTouch(days, expiration) {
+    if (days === null || days === undefined) return { label: '—', due: false };
+    if (days < 0) return { label: 'Log outcome', due: true };
+    var cad = SETTINGS.cadence;
+    for (var i = 0; i < cad.length; i++) {
+      if (days >= cad[i]) {
+        var when = days - cad[i];
+        var ms = msFromIso(expiration) - cad[i] * DAY;
+        var d = new Date(ms);
+        var label = 'T-' + cad[i] + ' · ' + (when === 0 ? 'today' : ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()] + ' ' + d.getUTCDate());
+        return { label: label, due: when <= 3 };
+      }
+    }
+    return { label: 'Final call now', due: true };
+  }
+
+  /* ---------- sample rules (sample_rules_seed, same ids/order as a fresh install) ---------- */
+  var SAMPLE_RULES = [
+    { id: 1, name: 'Senior + short tenure = High', priority: 120, enabled: true, logic: 'AND', conditions: [{ field: 'age', op: '>=', value: 58 }, { field: 'tenure_months', op: '<', value: 24 }, { field: 'policy_type', op: 'in', value: ['term', 'health'] }], actions: { set_risk_tier: 'High', score_delta: 20, add_tag: 'senior_short_tenure' } },
+    { id: 2, name: 'High premium + long tenure = Low', priority: 50, enabled: true, logic: 'AND', conditions: [{ field: 'premium_amount', op: '>=', value: 140 }, { field: 'tenure_months', op: '>=', value: 36 }], actions: { set_risk_tier: 'Low', score_delta: -10, add_tag: 'high_value_loyal' } },
+    { id: 3, name: 'Low premium + short tenure = Review', priority: 70, enabled: true, logic: 'AND', conditions: [{ field: 'premium_amount', op: '<', value: 75 }, { field: 'tenure_months', op: '<', value: 8 }], actions: { set_risk_tier: 'Review', score_delta: -15, add_tag: 'thin_file_review' } },
+    { id: 4, name: 'Large exposure term/life = Medium', priority: 90, enabled: true, logic: 'AND', conditions: [{ field: 'sum_assured', op: '>=', value: 90000 }, { field: 'policy_type', op: 'in', value: ['term', 'life'] }], actions: { set_risk_tier: 'Medium', score_delta: 5, add_tag: 'large_exposure' } },
+    { id: 5, name: 'Inactive policy = skip scoring', priority: 200, enabled: true, logic: 'AND', conditions: [{ field: 'status', op: 'in', value: ['cancelled', 'expired', 'lapsed', 'non-renewed'] }], actions: { add_tag: 'inactive', stop: true } },
+    { id: 6, name: 'Renewing within 45 days + high premium', priority: 40, enabled: true, logic: 'AND', conditions: [{ field: 'days_to_expiry', op: '>=', value: 0 }, { field: 'days_to_expiry', op: '<=', value: 45 }, { field: 'premium_amount', op: '>=', value: 130 }], actions: { score_delta: 5, add_tag: 'priority_renewal' } }
+  ];
+
+  /* ---------- whole-book scoring ---------- */
+  var SAMPLE_MAPPING = { policy_number: 'policy_number', name: 'name', dob: 'dob', gender: 'gender', policy_type: 'policy_type', region: 'region', premium_amount: 'premium_amount', tenure_months: 'tenure_months', sum_assured: 'sum_assured', effective_date: 'effective_date', expiration_date: 'expiration_date', status: 'status', line_of_business: 'line_of_business', carrier: 'carrier', producer: 'producer', household_id: 'household_id', email: 'email', phone: 'phone', consent_email: 'email_opt_in', consent_sms: 'sms_opt_in', consent_phone: 'phone_opt_in' };
+  function sampleRecords(today) {
+    var s = sampleRows(today);
+    var idx = {};
+    s.headers.forEach(function (h, i) { idx[h] = i; });
+    var mappedHeaders = {};
+    Object.keys(SAMPLE_MAPPING).forEach(function (f) { mappedHeaders[SAMPLE_MAPPING[f]] = true; });
+    return s.rows.map(function (row) {
+      var rec = {};
+      Object.keys(SAMPLE_MAPPING).forEach(function (f) { rec[f] = row[idx[SAMPLE_MAPPING[f]]]; });
+      var custom = {};
+      s.headers.forEach(function (h, i) { if (!mappedHeaders[h] && row[i] !== '') custom[h] = row[i]; });
+      rec.custom_fields = custom;
+      return rec;
+    });
+  }
+  function scoreBook(records, rules, options) {
+    options = options || {};
+    var today = options.today || todayISO();
+    var mapped = options.mapped || {};
+    if (!options.mapped) {
+      ['premium_amount', 'tenure_months', 'sum_assured', 'age', 'policy_type', 'region', 'gender'].forEach(function (f) {
+        mapped[f] = records.some(function (r) { return r[f] !== null && r[f] !== undefined && String(r[f]).trim() !== ''; });
+      });
+    }
+    var analysis = analyze(records, mapped);
+    var households = {};
+    records.forEach(function (r) { var h = phpString(r.household_id).trim(); if (h) households[h] = (households[h] || 0) + 1; });
+    return records.map(function (rec, i) {
+      var imputed = [];
+      var v = normalizeAndImpute(rec, analysis, imputed, i + 1, today);
+      v.custom = rec.custom_fields || {};
+      if (v.household_id !== '') v.policies_in_household = households[v.household_id] || 1;
+      var s = scoreRecord(v, imputed, rules, today);
+      v.imputed_fields = imputed;
+      v.ltv_estimate = s.ltv;
+      v.risk_tier = s.risk_tier;
+      v.confidence_score = s.confidence;
+      v.rule_hits = s.rule_hits;
+      v.tags = s.tags;
+      v.tier_rule_id = s.tier_rule_id;
+      v.days_to_expiry = daysUntil(v.expiration_date, today);
+      if (v.policies_in_household === undefined) v.policies_in_household = 1;
+      return v;
+    });
+  }
+  function scoreSample(today) {
+    today = today || todayISO();
+    var mapped = { premium_amount: true, tenure_months: true, sum_assured: true, age: false, policy_type: true, region: true, gender: true };
+    return scoreBook(sampleRecords(today), SAMPLE_RULES, { today: today, mapped: mapped });
+  }
+
+  root.LiteEngine = {
+    version: '1.2.0',
+    SETTINGS: SETTINGS, INACTIVE: INACTIVE, MULTIPLIER_BY_TYPE: MULTIPLIER_BY_TYPE, SAMPLE_RULES: SAMPLE_RULES, SAMPLE_HEADERS: SAMPLE_HEADERS,
+    crc32: crc32, todayISO: todayISO, addMonthsIso: addMonthsIso, daysUntil: daysUntil, nextTouch: nextTouch,
+    sampleRows: sampleRows, sampleCsv: sampleCsv, sampleRecords: sampleRecords, scoreSample: scoreSample, scoreBook: scoreBook,
+    analyze: analyze, normalizeAndImpute: normalizeAndImpute, evaluateRules: evaluateRules, evalConditions: evalConditions, evalConditionLeaf: evalConditionLeaf,
+    computeConfidence: computeConfidence, computeLtv: computeLtv, compareScalar: compareScalar, valueForField: valueForField, sortRules: sortRules,
+    parseNumber: parseNumber, parseDateAny: parseDateAny, normalizePhone: normalizePhone, normalizeEmail: normalizeEmail, parseBoolLoose: parseBoolLoose
+  };
+})(typeof window !== 'undefined' ? window : globalThis);
+  </script>
   <script>
   (function () {
     'use strict';
+    const Engine = window.LiteEngine;
 
     const POLICY_COUNT = 200;
-    const LOCAL_DEMO_STORAGE_KEY = 'liteinsurance.demo.localData.v1';
-    const LOCAL_RULES_STORAGE_KEY = 'liteinsurance.demo.rules.v1';
-    const LOCAL_SEGMENTS_STORAGE_KEY = 'liteinsurance.demo.segments.v1';
+    const LOCAL_DEMO_STORAGE_KEY = 'liteinsurance.demo.localData.v2';
+    const LOCAL_RULES_STORAGE_KEY = 'liteinsurance.demo.rules.v2';
+    const LOCAL_SEGMENTS_STORAGE_KEY = 'liteinsurance.demo.segments.v2';
     const EXPECTED_POLICY_TERM_MONTHS = 120;
     const RETENTION_ADJUSTMENT = 0.85;
     const MULTIPLIER_BY_TYPE = { term: 1.06, health: 1.10, auto: 1.04, life: 1.08 };
-    const POLICY_FIELDS = ['policy_number', 'name', 'dob', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured'];
+    const POLICY_FIELDS = ['policy_number', 'name', 'dob', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'effective_date', 'expiration_date', 'status', 'line_of_business', 'carrier', 'producer', 'household_id', 'email', 'phone', 'consent_email', 'consent_sms', 'consent_phone', 'renewal_status'];
     const NUMERIC_FIELDS = new Set(['age', 'premium_amount', 'tenure_months', 'sum_assured']);
     const HEADER_ALIASES = {
-      policy: 'policy_number',
       id: 'policy_number',
       customer_id: 'policy_number',
       client_id: 'policy_number',
@@ -451,59 +972,41 @@
       months_active: 'tenure_months',
       sum_insured: 'sum_assured',
       face_amount: 'sum_assured',
-      coverage_amount: 'sum_assured'
+      coverage_amount: 'sum_assured',
+      coverage: 'sum_assured',
+      coverage_limit: 'sum_assured',
+      policy: 'policy_number',
+      named_insured: 'name',
+      insured_name: 'name',
+      effective: 'effective_date',
+      eff_date: 'effective_date',
+      expiration: 'expiration_date',
+      exp_date: 'expiration_date',
+      expiry: 'expiration_date',
+      expiry_date: 'expiration_date',
+      renewal_date: 'expiration_date',
+      x_date: 'expiration_date',
+      policy_status: 'status',
+      lob: 'line_of_business',
+      line: 'line_of_business',
+      company: 'carrier',
+      writing_company: 'carrier',
+      agent: 'producer',
+      agent_name: 'producer',
+      csr: 'producer',
+      household: 'household_id',
+      primary_email: 'email',
+      email_address: 'email',
+      primary_phone: 'phone',
+      phone_number: 'phone',
+      email_opt_in: 'consent_email',
+      sms_opt_in: 'consent_sms',
+      phone_opt_in: 'consent_phone',
+      annual_premium: 'premium_amount',
+      written_premium: 'premium_amount'
     };
-    const DEFAULT_RULES = [
-      {
-        id: 1,
-        name: 'High premium + long tenure = Low',
-        priority: 50,
-        enabled: true,
-        logic: 'AND',
-        conditions: [
-          { field: 'premium_amount', op: '>=', value: 140 },
-          { field: 'tenure_months', op: '>=', value: 36 }
-        ],
-        actions: { set_risk_tier: 'Low', score_delta: -10, add_tag: 'high_value_loyal' }
-      },
-      {
-        id: 2,
-        name: 'Low premium + short tenure = Review',
-        priority: 70,
-        enabled: true,
-        logic: 'AND',
-        conditions: [
-          { field: 'premium_amount', op: '<', value: 75 },
-          { field: 'tenure_months', op: '<', value: 8 }
-        ],
-        actions: { set_risk_tier: 'Review', score_delta: -15, add_tag: 'thin_file_review' }
-      },
-      {
-        id: 3,
-        name: 'Large exposure term/life = Medium',
-        priority: 90,
-        enabled: true,
-        logic: 'AND',
-        conditions: [
-          { field: 'sum_assured', op: '>=', value: 90000 },
-          { field: 'policy_type', op: 'in', value: ['term', 'life'] }
-        ],
-        actions: { set_risk_tier: 'Medium', score_delta: 5, add_tag: 'large_exposure' }
-      },
-      {
-        id: 4,
-        name: 'Senior + short tenure = High',
-        priority: 120,
-        enabled: true,
-        logic: 'AND',
-        conditions: [
-          { field: 'age', op: '>=', value: 58 },
-          { field: 'tenure_months', op: '<', value: 24 },
-          { field: 'policy_type', op: 'in', value: ['term', 'health'] }
-        ],
-        actions: { set_risk_tier: 'High', score_delta: 20, add_tag: 'senior_short_tenure' }
-      }
-    ];
+    // Same rules, ids and priorities a fresh PHP install seeds (sample_rules_seed).
+    const DEFAULT_RULES = JSON.parse(JSON.stringify(Engine.SAMPLE_RULES));
     const CORE_RULE_FIELDS = [
       ['age', 'Age'],
       ['gender', 'Gender'],
@@ -514,7 +1017,11 @@
       ['sum_assured', 'Sum assured'],
       ['ltv_estimate', 'LTV estimate'],
       ['risk_tier', 'Risk tier'],
-      ['priority_score', 'Priority score'],
+      ['days_to_expiry', 'Days to expiry'],
+      ['status', 'Policy status'],
+      ['line_of_business', 'Line of business'],
+      ['policies_in_household', 'Policies in household'],
+      ['consent_email', 'Email consent (1/0)'],
       ['confidence_score', 'Confidence score'],
       ['is_imputed', 'Is imputed']
     ];
@@ -655,17 +1162,31 @@
       });
       const custom_fields = row && typeof row.custom_fields === 'object' && row.custom_fields ? { ...row.custom_fields } : {};
       const policyNumber = String(mapped.policy_number ?? '').trim() || 'LOCAL-' + String(index + 1).padStart(4, '0');
+      const text = (k) => String(mapped[k] ?? '').trim();
       const out = {
         policy_number: policyNumber,
         name: String(mapped.name ?? '').trim() || policyNumber,
-        dob: String(mapped.dob ?? '').trim(),
-        gender: String(mapped.gender ?? '').trim(),
-        policy_type: String(mapped.policy_type ?? '').trim().toLowerCase(),
-        region: String(mapped.region ?? '').trim(),
+        dob: text('dob'),
+        gender: text('gender'),
+        policy_type: text('policy_type').toLowerCase(),
+        region: text('region'),
         age: numberOrNull(mapped.age),
         premium_amount: numberOrNull(mapped.premium_amount),
         tenure_months: numberOrNull(mapped.tenure_months),
         sum_assured: numberOrNull(mapped.sum_assured),
+        effective_date: text('effective_date'),
+        expiration_date: text('expiration_date'),
+        status: text('status'),
+        line_of_business: text('line_of_business'),
+        carrier: text('carrier'),
+        producer: text('producer'),
+        household_id: text('household_id'),
+        email: text('email'),
+        phone: text('phone'),
+        consent_email: text('consent_email'),
+        consent_sms: text('consent_sms'),
+        consent_phone: text('consent_phone'),
+        renewal_status: text('renewal_status') || 'not_started',
         custom_fields
       };
       if (out.age !== null) out.age = Math.round(out.age);
@@ -680,91 +1201,32 @@
     }
 
     function generatePolicies() {
-      seed = 71371n;
-      const first = ['Asha', 'Noah', 'Maria', 'Li', 'Sam', 'Nadia', 'Omar', 'Priya', 'Ethan', 'Mina', 'Jon', 'Sara', 'Imran', 'Elena', 'Grace', 'Kenji'];
-      const last = ['Rahman', 'Kim', 'Silva', 'Wei', 'Patel', 'Chowdhury', 'Hassan', 'Mitra', 'Brooks', 'Sato', 'Reed', 'Stone', 'Khan', 'Garcia', 'Miller', 'Tan'];
-      const types = ['term', 'term', 'health', 'health', 'auto', 'life', 'life'];
-      const regions = ['West', 'West', 'North', 'South', 'South', 'East', 'Central'];
-      const genders = ['F', 'M', 'F', 'M', ''];
-      const rows = [];
-      for (let i = 1; i <= POLICY_COUNT; i++) {
-        const policy_type = pick(types);
-        const region = pick(regions);
-        const age = 22 + Math.floor(Math.min(rand(), rand()) * 55);
-        const tenure = Math.floor(Math.min(rand(), rand()) * 96);
-        const typeBase = { term: 118, health: 104, auto: 82, life: 150 }[policy_type];
-        const premium = Math.max(38, typeBase + (age - 42) * 0.9 + tenure * 0.45 + Math.floor(rand() * 42) - 18);
-        const sumAssured = { term: 72000, health: 34000, auto: 21000, life: 98000 }[policy_type] + Math.floor(rand() * 36000);
-        rows.push({
-          policy_number: 'P-' + String(3000 + i).padStart(4, '0'),
-          name: pick(first) + ' ' + pick(last),
-          dob: chance(0.08) ? '' : dobFromAge(age, i),
-          age: chance(0.07) ? null : age,
-          gender: chance(0.10) ? '' : pick(genders),
-          policy_type: chance(0.08) ? '' : policy_type,
-          region: chance(0.11) ? '' : region,
-          premium_amount: chance(0.09) ? null : Math.round(premium * 100) / 100,
-          tenure_months: chance(0.08) ? null : tenure,
-          sum_assured: chance(0.06) ? null : sumAssured,
-          custom_fields: {
-            agent_code: 'AG-' + String(10 + (i % 18)).padStart(2, '0'),
-            renewal_probability: Math.round((0.42 + rand() * 0.48) * 100) / 100,
-            source_channel: pick(['broker', 'web', 'referral', 'branch'])
-          }
-        });
-      }
-      return rows;
+      // Exactly the rows `php liteinsurance.php action=download_sample_csv` produces today (same LCG + hash).
+      return Engine.sampleRecords(Engine.todayISO()).map((rec, i) => normalizePolicyRow(Object.assign({}, rec, { renewal_status: 'not_started' }), i));
     }
 
     function preparePolicies(raw) {
-      const hasValue = (field) => raw.some((r) => r[field] !== null && r[field] !== undefined && r[field] !== '');
-      const defaults = {
-        premium_amount: hasValue('premium_amount') ? mean(raw.map((r) => r.premium_amount)) : null,
-        tenure_months: hasValue('tenure_months') ? Math.round(mean(raw.map((r) => r.tenure_months))) : null,
-        sum_assured: hasValue('sum_assured') ? mean(raw.map((r) => r.sum_assured)) : null,
-        policy_type: hasValue('policy_type') ? (mode(raw.map((r) => r.policy_type)) || 'term') : '',
-        region: hasValue('region') ? (mode(raw.map((r) => r.region)) || 'Unknown') : '',
-        gender: hasValue('gender') ? (mode(raw.map((r) => r.gender)) || 'F') : ''
-      };
-      const hasAgeSignal = hasValue('age') || hasValue('dob');
-      return raw.map((row) => {
-        const p = { ...row, imputed_fields: [] };
-        if (p.age == null && p.dob) {
-          p.age = 2026 - Number(String(p.dob).slice(0, 4));
-          p.imputed_fields.push('age');
-        }
-        ['premium_amount', 'tenure_months', 'sum_assured', 'policy_type', 'region', 'gender'].forEach((field) => {
-          if ((p[field] == null || p[field] === '') && defaults[field] !== null && defaults[field] !== '') {
-            p[field] = defaults[field];
-            p.imputed_fields.push(field);
-          }
+      // Same pipeline as a PHP import: analyse -> normalise/impute -> rules (highest priority first) -> confidence -> LTV.
+      const today = Engine.todayISO();
+      const scored = Engine.scoreBook(raw, rules, { today });
+      return scored.map((v, i) => {
+        const src = raw[i] || {};
+        const optedOut = String(src.opted_out || '') === '1';
+        return Object.assign(v, {
+          custom_fields: src.custom_fields || {},
+          renewal_status: src.renewal_status || 'not_started',
+          consent_email: v.consent_email === null ? 0 : v.consent_email,
+          consent_sms: v.consent_sms === null ? 0 : v.consent_sms,
+          consent_phone: v.consent_phone === null ? 0 : v.consent_phone,
+          opted_out: optedOut ? 1 : 0,
+          is_imputed: v.imputed_fields.length > 0 ? 1 : 0,
+          masked_name: maskName(v.name)
         });
-        if (p.age == null && hasAgeSignal) {
-          p.age = 44;
-          p.imputed_fields.push('age');
-        }
-        p.premium_amount = p.premium_amount == null || p.premium_amount === '' ? null : Number(p.premium_amount);
-        p.tenure_months = p.tenure_months == null || p.tenure_months === '' ? null : Number(p.tenure_months);
-        p.sum_assured = p.sum_assured == null || p.sum_assured === '' ? null : Number(p.sum_assured);
-        p.confidence_score = Math.max(0, Math.min(100, 100 - p.imputed_fields.length * 10));
-        p.ltv_estimate = computeLtv(p);
-        const riskOut = evaluateRulesForRecord(p);
-        p.risk_tier = riskOut.risk_tier || 'Unknown';
-        p.rule_hits = riskOut.rule_hits;
-        p.tags = riskOut.tags;
-        p.priority_score = riskOut.priority_score;
-        p.confidence_score = Math.max(0, Math.min(100, p.confidence_score + Math.min(20, p.rule_hits.length * 4)));
-        p.is_imputed = p.imputed_fields.length > 0 ? 1 : 0;
-        p.masked_name = maskName(p.name);
-        return p;
       });
     }
 
     function computeLtv(p) {
-      if (p.premium_amount == null || p.tenure_months == null || !p.policy_type) return null;
-      const remaining = Math.max(0, EXPECTED_POLICY_TERM_MONTHS - p.tenure_months);
-      const mult = MULTIPLIER_BY_TYPE[p.policy_type] || 1.05;
-      return Math.round(p.premium_amount * remaining * mult * RETENTION_ADJUSTMENT * 100) / 100;
+      return Engine.computeLtv(p);
     }
 
     const DEFAULT_SEGMENTS = [
@@ -772,7 +1234,8 @@
       { id: 2, name: 'Health cross-sell candidates', code: "policy_type = 'health' AND ltv_estimate > 6000", strict: false, min_confidence: 70 },
       { id: 3, name: 'Data repair queue', code: 'confidence_score < 80 OR is_imputed = 1', strict: false, min_confidence: 70 },
       { id: 4, name: 'High LTV loyalists', code: "ltv_estimate > 9000 AND tenure_months >= 30", strict: false, min_confidence: 70 },
-      { id: 5, name: 'High-priority leads', code: 'priority_score >= 60', strict: false, min_confidence: 70 }
+      { id: 5, name: 'Renewing in 90 days', code: 'days_to_expiry >= 0 AND days_to_expiry <= 90', strict: false, min_confidence: 70 },
+      { id: 6, name: 'Single-line households, email OK', code: 'policies_in_household = 1 AND consent_email = 1 AND opted_out = 0', strict: false, min_confidence: 70 }
     ];
 
     // --- WHERE-grammar parser: compiles "a = 'x' AND (b > 1 OR c in ('p','q'))" to a predicate. ---
@@ -962,7 +1425,7 @@
       return JSON.parse(JSON.stringify(input));
     }
     function sortedRules() {
-      return cloneRules(rules).sort((a, b) => Number(a.priority || 0) - Number(b.priority || 0) || Number(a.id || 0) - Number(b.id || 0));
+      return Engine.sortRules(cloneRules(rules)); // order they run: highest priority first
     }
     function extractRulesFromJson(value) {
       if (Array.isArray(value)) return value;
@@ -1060,93 +1523,22 @@
       return normalized;
     }
     function compareScalar(a, b) {
-      const an = numberOrNull(a);
-      const bn = numberOrNull(b);
-      if (an !== null && bn !== null) return an === bn ? 0 : (an > bn ? 1 : -1);
-      return String(a ?? '').trim().toLowerCase().localeCompare(String(b ?? '').trim().toLowerCase());
+      return Engine.compareScalar(a, b);
     }
     function valueForField(record, field) {
-      if (String(field || '').startsWith('custom.')) {
-        const key = String(field).slice(7);
-        return record.custom_fields ? record.custom_fields[key] : undefined;
-      }
-      return record[field];
+      return Engine.valueForField(record, field, Engine.todayISO());
     }
     function evalConditionLeaf(record, condition) {
-      const field = String(condition.field || '');
-      const op = String(condition.op || '').trim().toLowerCase();
-      const value = condition.value;
-      if (!field || !op) return false;
-      const left = valueForField(record, field);
-      if (op === '=' || op === '==') return compareScalar(left, value) === 0;
-      if (op === '!=') return compareScalar(left, value) !== 0;
-      if (op === '>') return Number(left) > Number(value);
-      if (op === '<') return Number(left) < Number(value);
-      if (op === '>=') return Number(left) >= Number(value);
-      if (op === '<=') return Number(left) <= Number(value);
-      if (op === 'in') return Array.isArray(value) && value.map((v) => String(v).toLowerCase()).includes(String(left ?? '').toLowerCase());
-      if (op === 'contains') return String(left ?? '').toLowerCase().includes(String(value ?? '').toLowerCase());
-      if (op === 'regex') {
-        try {
-          return new RegExp(String(value), 'i').test(String(left ?? ''));
-        } catch (error) {
-          return false;
-        }
-      }
-      return false;
+      return Engine.evalConditionLeaf(record, condition || {}, Engine.todayISO());
     }
     function evalConditions(record, payload) {
-      const logic = String(payload.logic || 'AND').toUpperCase();
-      const items = Array.isArray(payload) ? payload : (Array.isArray(payload.conditions) ? payload.conditions : []);
-      if (!items.length) return false;
-      const results = items.map((condition) => {
-        if (condition && Array.isArray(condition.all)) return evalConditions(record, { logic: 'AND', conditions: condition.all });
-        if (condition && Array.isArray(condition.any)) return evalConditions(record, { logic: 'OR', conditions: condition.any });
-        return evalConditionLeaf(record, condition || {});
-      });
-      return logic === 'OR' ? results.some(Boolean) : results.every(Boolean);
+      const conds = Array.isArray(payload) ? { logic: 'AND', conditions: payload } : payload;
+      return Engine.evalConditions(record, conds, Engine.todayISO());
     }
-    function computeBasePriority(record) {
-      // Weighted signals → 0..100 base lead/renewal priority, before rules run.
-      const premium = Number(record.premium_amount) || 0;
-      const tenure = Number(record.tenure_months) || 0;
-      const sumAssured = Number(record.sum_assured) || 0;
-      const age = Number(record.age) || 0;
-      const premiumSignal = Math.min(1, premium / 220);          // higher premium = more valuable
-      const exposureSignal = Math.min(1, sumAssured / 130000);   // larger exposure = higher stakes
-      const loyaltySignal = Math.min(1, tenure / 96);            // longer tenure = stickier
-      const lifecycleSignal = age >= 55 ? 0.7 : 0.4;             // older books skew higher touch
-      const score = premiumSignal * 34 + exposureSignal * 26 + loyaltySignal * 22 + lifecycleSignal * 18;
-      return Math.round(Math.max(0, Math.min(100, score)));
-    }
-    function ruleScoreDelta(rule) {
-      const actions = rule.actions || {};
-      const delta = numberOrNull(actions.score_delta ?? actions.priority_delta);
-      return delta === null ? 0 : delta;
-    }
+
+
     function evaluateRulesForRecord(record) {
-      let riskTier = 'Medium';
-      const hits = [];
-      const tags = [];
-      let priorityScore = computeBasePriority(record);
-      const ordered = sortedRules();
-      for (const rule of ordered) {
-        if (!rule.enabled) continue;
-        if (!evalConditions(record, { logic: rule.logic, conditions: rule.conditions })) continue;
-        hits.push(rule.id);
-        const actions = rule.actions || {};
-        if (typeof actions.set_risk_tier === 'string' && actions.set_risk_tier) riskTier = actions.set_risk_tier;
-        if (typeof actions.set_priority_score === 'number' || numberOrNull(actions.set_priority_score) !== null) {
-          priorityScore = Math.round(Number(actions.set_priority_score));
-        }
-        priorityScore += ruleScoreDelta(rule);
-        if (typeof actions.add_tag === 'string' && actions.add_tag) tags.push(actions.add_tag);
-        if (Array.isArray(actions.add_tags)) actions.add_tags.forEach((t) => t && tags.push(String(t)));
-        // continue_on_match:false stops the rule chain for this record.
-        if (rule.continue_on_match === false || actions.continue_on_match === false || actions.stop === true) break;
-      }
-      priorityScore = Math.max(0, Math.min(100, Math.round(priorityScore)));
-      return { risk_tier: riskTier, rule_hits: hits, tags: Array.from(new Set(tags)), priority_score: priorityScore };
+      return Engine.evaluateRules(record, rules, Engine.todayISO());
     }
     function conditionToCode(condition) {
       if (condition && Array.isArray(condition.all)) return '(' + condition.all.map(conditionToCode).join(' AND ') + ')';
@@ -1218,7 +1610,7 @@
       recomputePolicies();
       syncRulesEditor();
       renderAll({ preserveFilters: true });
-      setStatus('rulesStatus', 'Rules reset to the production-style sample set.', 'success');
+      setStatus('rulesStatus', 'Rules reset to the sample set a fresh PHP install seeds.', 'success');
     }
     function initState() {
       const savedRules = safeJsonParse(storageGet(LOCAL_RULES_STORAGE_KEY) || '');
@@ -1279,23 +1671,74 @@
     }
 
     function renderKpis() {
-      const scored = policies.filter((p) => p.ltv_estimate != null);
+      const inForce = policies.filter((p) => !Engine.INACTIVE.includes(p.status));
+      const scored = inForce.filter((p) => p.ltv_estimate != null);
       const avgLtv = scored.length ? scored.reduce((sum, p) => sum + p.ltv_estimate, 0) / scored.length : null;
-      const high = policies.filter((p) => p.risk_tier === 'High').length;
-      const imputed = policies.filter((p) => p.imputed_fields.length > 0).length;
-      const avgPriority = policies.length ? Math.round(policies.reduce((sum, p) => sum + (p.priority_score || 0), 0) / policies.length) : 0;
+      const open = (p) => !['renewed', 'lost'].includes(p.renewal_status);
+      const due30 = inForce.filter((p) => p.days_to_expiry !== null && p.days_to_expiry >= 0 && p.days_to_expiry <= 30 && open(p));
+      const atRisk = inForce.filter((p) => p.days_to_expiry !== null && p.days_to_expiry >= 0 && p.days_to_expiry <= 90 && ['High', 'Review'].includes(p.risk_tier) && open(p)).length;
+      const reach = inForce.filter((p) => !p.opted_out && ((p.consent_email === 1 && p.email) || ((p.consent_sms === 1 || p.consent_phone === 1) && p.phone))).length;
       const avgConfidence = policies.length ? Math.round(policies.reduce((sum, p) => sum + p.confidence_score, 0) / policies.length) : 0;
       const html = [
-        ['Policyholders', policies.length.toLocaleString()],
-        ['Avg priority', String(avgPriority)],
+        ['Policies in force', inForce.length.toLocaleString()],
+        ['Renewals ≤ 30 days', due30.length.toLocaleString() + ' · ' + money(due30.reduce((s, p) => s + (Number(p.premium_amount) || 0), 0))],
+        ['At-risk renewals ≤ 90d', atRisk.toLocaleString()],
+        ['Contactable', (inForce.length ? Math.round(reach * 100 / inForce.length) : 0) + '%'],
         ['Average LTV', avgLtv == null ? 'Not scored' : money(avgLtv)],
-        ['High-risk', high.toLocaleString()],
-        ['Imputed records', imputed.toLocaleString()],
         ['Avg confidence', String(avgConfidence)],
         ['Active rules', String(rules.filter((r) => r.enabled !== false).length) + ' / ' + rules.length],
-        ['Segments', String(segments.length)]
+        ['Lists', String(segments.length)]
       ].map(([label, value]) => `<div class="cell metric"><div class="n">${value}</div><div class="l">${label}</div></div>`).join('');
       document.getElementById('kpis').innerHTML = html;
+      const tabCount = document.getElementById('renewalTabCount');
+      if (tabCount) { tabCount.textContent = String(due30.length); tabCount.hidden = due30.length === 0; }
+    }
+    const RENEWAL_STAGES = [['not_started', 'Not started'], ['contacted', 'Contacted'], ['quoted', 'Quoted'], ['remarketing', 'Remarketing'], ['renewed', 'Renewed'], ['lost', 'Lost']];
+    let worklistWindow = 30;
+    let boardWindow = 60;
+    function tierBadge(t) { const v = t || 'Unknown'; return `<span class="tier tier-${esc(v.toLowerCase().replace(/[^a-z]/g, ''))}">${esc(v)}</span>`; }
+    function stagePill(s) { const k = s || 'not_started'; const l = (RENEWAL_STAGES.find((x) => x[0] === k) || [k, k])[1]; return `<span class="pill st-${esc(k)}">${esc(l)}</span>`; }
+    function shortDate(iso) { if (!iso) return '—'; const d = new Date(iso + 'T00:00:00Z'); return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }); }
+    function daysLabel(d) { return d === null || d === undefined ? '—' : (d < 0 ? Math.abs(d) + 'd overdue' : (d === 0 ? 'today' : 'in ' + d + 'd')); }
+    function windowChips(id, current) {
+      document.getElementById(id).innerHTML = [30, 60, 90, 120].map((w) => `<button class="chip" type="button" data-window="${w}" aria-pressed="${w === current}">${w} days</button>`).join('');
+    }
+    function renderWorklist() {
+      windowChips('worklistWindows', worklistWindow);
+      const rows = policies.filter((p) => !Engine.INACTIVE.includes(p.status) && p.days_to_expiry !== null && p.days_to_expiry >= 0 && p.days_to_expiry <= worklistWindow && !['renewed', 'lost'].includes(p.renewal_status))
+        .sort((a, b) => a.days_to_expiry - b.days_to_expiry);
+      document.getElementById('worklistRows').innerHTML = rows.slice(0, 12).map((p) => {
+        const touch = Engine.nextTouch(p.days_to_expiry, p.expiration_date);
+        return `<tr><td>${esc(p.policy_number)}</td><td>${esc(p.masked_name)}</td><td>${esc(p.line_of_business || p.policy_type || '—')}</td><td><span class="${p.days_to_expiry <= 15 ? 'due' : ''}">${esc(shortDate(p.expiration_date))}</span> <span class="muted">${esc(daysLabel(p.days_to_expiry))}</span></td><td class="${touch.due ? 'due' : 'muted'}">${esc(touch.label)}</td><td class="right">${esc(exactMoney(p.premium_amount))}</td><td>${tierBadge(p.risk_tier)}</td><td>${stagePill(p.renewal_status)}</td></tr>`;
+      }).join('') || '<tr><td colspan="8" class="muted">No open renewals in this window. Map an expiration or effective date column to fill this list.</td></tr>';
+      document.getElementById('worklistNote').textContent = `${rows.length} open renewal${rows.length === 1 ? '' : 's'} in the next ${worklistWindow} days. Touchpoints follow the ${Engine.SETTINGS.cadence.join(' / ')}-day cadence.`;
+    }
+    function renderBoard() {
+      windowChips('boardWindows', boardWindow);
+      const rows = policies.filter((p) => !Engine.INACTIVE.includes(p.status) && p.days_to_expiry !== null && p.days_to_expiry >= -30 && p.days_to_expiry <= boardWindow)
+        .sort((a, b) => a.days_to_expiry - b.days_to_expiry);
+      document.getElementById('boardNote').textContent = `${rows.length} policies expiring in the next ${boardWindow} days (plus 30 days overdue). Change a stage and it saves in this browser.`;
+      document.getElementById('renewalBoard').innerHTML = RENEWAL_STAGES.map(([key, label]) => {
+        const items = rows.filter((p) => (p.renewal_status || 'not_started') === key);
+        const premium = items.reduce((s, p) => s + (Number(p.premium_amount) || 0), 0);
+        const cards = items.slice(0, 12).map((p) => {
+          const touch = Engine.nextTouch(p.days_to_expiry, p.expiration_date);
+          const reach = p.opted_out ? 'opted out' : [p.consent_phone === 1 && p.phone ? 'call' : '', p.consent_sms === 1 && p.phone ? 'sms' : '', p.consent_email === 1 && p.email ? 'email' : ''].filter(Boolean).join(' · ') || 'no consent';
+          const closed = key === 'renewed' || key === 'lost';
+          return `<div class="rcard${p.days_to_expiry <= 15 && !closed ? ' is-due' : ''}"><div class="rcard-top"><strong>${esc(p.policy_number)}</strong>${tierBadge(p.risk_tier)}</div><div>${esc(p.masked_name)}</div><div class="rcard-meta"><span>${esc(p.line_of_business || p.policy_type || '—')}</span><span>${esc(exactMoney(p.premium_amount))}</span></div><div class="rcard-meta"><span class="${p.days_to_expiry <= 15 ? 'due' : ''}">${esc(daysLabel(p.days_to_expiry))}</span><span class="muted">${esc(closed ? '' : (p.days_to_expiry < 0 ? 'log outcome' : touch.label))}</span></div><div class="muted">${esc(reach)}</div><select data-renewal-stage="${esc(p.policy_number)}" aria-label="Stage for ${esc(p.policy_number)}">${RENEWAL_STAGES.map(([k, l]) => `<option value="${k}"${k === key ? ' selected' : ''}>${l}</option>`).join('')}</select></div>`;
+        }).join('');
+        return `<section class="board-col" aria-label="${esc(label)}"><div class="board-head">${stagePill(key)}<strong>${items.length}</strong><span style="margin-left:auto">${esc(money(premium))}</span></div>${cards || '<div class="board-empty">Nothing here.</div>'}${items.length > 12 ? `<div class="board-empty">+${items.length - 12} more</div>` : ''}</section>`;
+      }).join('');
+    }
+    function setRenewalStage(policyNumber, stage) {
+      const index = rawPolicyIndex(policyNumber);
+      if (index < 0) return;
+      pushHistory();
+      rawPolicies[index].renewal_status = stage;
+      recomputePolicies();
+      const saved = persistDemoData();
+      renderAll({ preserveFilters: true });
+      setInlineEditStatus(`Moved ${policyNumber} to ${(RENEWAL_STAGES.find((x) => x[0] === stage) || [stage, stage])[1]}${saved ? ' and saved it for this browser.' : '.'}`, saved ? 'success' : '');
     }
     function renderQualityChart() {
       const el = document.getElementById('qualityChart');
@@ -1311,23 +1754,21 @@
       }
       renderChart('qualityChart', filtered);
     }
-    function renderPriorityChart() {
-      const el = document.getElementById('priorityChart');
+    function renderRenewalChart() {
+      const el = document.getElementById('renewalChart');
       if (!el) return;
-      const bands = { '0-19': 0, '20-39': 0, '40-59': 0, '60-79': 0, '80-100': 0 };
-      policies.forEach((p) => {
-        const s = Number(p.priority_score) || 0;
-        if (s < 20) bands['0-19']++;
-        else if (s < 40) bands['20-39']++;
-        else if (s < 60) bands['40-59']++;
-        else if (s < 80) bands['60-79']++;
-        else bands['80-100']++;
+      const open = policies.filter((p) => !Engine.INACTIVE.includes(p.status) && p.days_to_expiry !== null && !['renewed', 'lost'].includes(p.renewal_status));
+      const bands = { 'Overdue': 0, '0–30 days': 0, '31–60 days': 0, '61–90 days': 0, '91–120 days': 0 };
+      open.forEach((p) => {
+        const d = p.days_to_expiry;
+        if (d < 0) bands['Overdue']++;
+        else if (d <= 30) bands['0–30 days']++;
+        else if (d <= 60) bands['31–60 days']++;
+        else if (d <= 90) bands['61–90 days']++;
+        else if (d <= 120) bands['91–120 days']++;
       });
-      el.innerHTML = Object.entries(bands)
-        .map(([label, value]) => {
-          const max = Math.max(...Object.values(bands), 1);
-          return `<div class="bar"><span>${esc(label)}</span><div class="track"><span class="fill" style="width:${Math.round(value / max * 100)}%"></span></div><strong>${value}</strong></div>`;
-        }).join('');
+      const max = Math.max(...Object.values(bands), 1);
+      el.innerHTML = Object.entries(bands).map(([label, value]) => `<div class="bar"><span>${esc(label)}</span><div class="track"><span class="fill" style="width:${Math.round(value / max * 100)}%"></span></div><strong>${value}</strong></div>`).join('');
     }
 
     function renderChart(id, data) {
@@ -1372,14 +1813,14 @@
       const rows = filteredPolicies();
       const customKeys = customFieldKeysFromRows(policies).slice(0, PROFILE_CUSTOM_COLUMN_LIMIT);
       document.getElementById('profilesHead').innerHTML = editablePolicyHeaders(customKeys, ['policy_number', 'name', 'age', 'policy_type', 'region', 'premium_amount', 'tenure_months'], { removableColumns: true })
-        + '<th class="right">LTV</th><th class="right">Priority</th><th>Tier</th><th class="right">Conf</th><th>Imputed</th><th></th>';
+        + '<th>Expires</th><th class="right">LTV</th><th>Tier</th><th class="right">Conf</th><th>Imputed</th><th></th>';
       document.getElementById('policyRows').innerHTML = rows.slice(0, 35).map((p) => editablePolicyRow(
         p,
         customKeys,
         ['policy_number', 'name', 'age', 'policy_type', 'region', 'premium_amount', 'tenure_months'],
         [
+          { value: p.expiration_date ? `${shortDate(p.expiration_date)} (${daysLabel(p.days_to_expiry)})` : '—' },
           { value: exactMoney(p.ltv_estimate), right: true },
-          { value: p.priority_score, right: true },
           { value: p.risk_tier },
           { value: p.confidence_score, right: true },
           { value: p.imputed_fields.length ? p.imputed_fields.join(', ') : 'No' }
@@ -1774,7 +2215,7 @@
     function downloadSegmentCsv(index) {
       const rows = segmentRows(index);
       const customKeys = customFieldKeysFromRows(rows);
-      const headers = ['policy_number', 'name', 'age', 'gender', 'policy_type', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'ltv_estimate', 'risk_tier', 'confidence_score'].concat(customKeys.map((key) => 'custom.' + key));
+      const headers = ['policy_number', 'name', 'age', 'gender', 'policy_type', 'line_of_business', 'region', 'premium_amount', 'tenure_months', 'sum_assured', 'expiration_date', 'days_to_expiry', 'renewal_status', 'consent_email', 'consent_sms', 'consent_phone', 'ltv_estimate', 'risk_tier', 'confidence_score'].concat(customKeys.map((key) => 'custom.' + key));
       const csv = [headers.join(',')].concat(rows.map((p) => headers.map((h) => JSON.stringify(exportValue(p, h))).join(','))).join('\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
       const url = URL.createObjectURL(blob);
@@ -1815,7 +2256,7 @@
         <div class="builder-grid" style="grid-template-columns:1fr;">
           <label>Name <input id="segmentName" type="text" maxlength="80" placeholder="High-value auto renewals"></label>
         </div>
-        <label style="margin-top:10px;">WHERE filter <input id="segmentCode" type="text" placeholder="line_of_business = 'auto' AND priority_score >= 60"></label>
+        <label style="margin-top:10px;">WHERE filter <input id="segmentCode" type="text" placeholder="days_to_expiry <= 60 AND consent_phone = 1"></label>
         <div class="builder-grid" style="margin-top:10px;grid-template-columns:1fr 1fr;">
           <label>Strict mode <select id="segmentStrict"><option value="false">Off</option><option value="true">Require confidence floor</option></select></label>
           <label>Min confidence <input id="segmentMinConfidence" type="number" min="0" max="100" value="70"></label>
@@ -1824,7 +2265,7 @@
           <button class="btn primary" id="saveSegment" type="button">Save segment</button>
           <button class="btn" id="resetSegmentForm" type="button">Clear</button>
         </div>
-        <p class="status" id="segmentStatus">Fields: standard, custom.&lt;key&gt;, plus derived risk_tier, ltv_estimate, priority_score, confidence_score, is_imputed. Combine with AND / OR and parentheses.</p>
+        <p class="status" id="segmentStatus">Fields: standard, custom.&lt;key&gt;, plus derived risk_tier, ltv_estimate, confidence_score, is_imputed, days_to_expiry, policies_in_household, consent_email / consent_sms / consent_phone, opted_out, renewal_status. Combine with AND / OR and parentheses.</p>
       </div>`;
       updateHistoryButtons();
     }
@@ -1896,23 +2337,35 @@
 
     function renderSimulator() {
       const segmentIndex = Number(document.getElementById('simSegment').value || 0);
+      const channel = document.getElementById('simChannel').value || 'email';
       const rate = Number(document.getElementById('simRate').value) / 100;
       const offer = Number(document.getElementById('simValue').value);
       const cost = Number(document.getElementById('simCost').value);
       const rows = segmentRows(segmentIndex);
-      const contacts = rows.length;
-      const conversions = contacts * rate;
+      const reachable = rows.filter((p) => {
+        if (p.opted_out) return false;
+        if (channel === 'email') return p.consent_email === 1 && !!p.email;
+        if (channel === 'sms') return p.consent_sms === 1 && !!p.phone;
+        if (channel === 'phone') return p.consent_phone === 1 && !!p.phone;
+        return true;
+      }).length;
+      const conversions = reachable * rate;
       const gross = conversions * offer;
-      const totalCost = contacts * cost;
+      const totalCost = reachable * cost;
       const net = gross - totalCost;
+      const breakEven = offer > 0 ? cost / offer : null;
       document.getElementById('simRateOut').value = pct(rate);
       document.getElementById('simValueOut').value = money(offer);
       document.getElementById('simCostOut').value = exactMoney(cost);
       document.getElementById('simResults').innerHTML = [
-        ['Contacts', contacts.toLocaleString()],
+        ['On the list', rows.length.toLocaleString()],
+        ['Reachable (consent)', reachable.toLocaleString()],
         ['Expected conversions', conversions.toFixed(1)],
         ['Gross revenue', money(gross)],
-        ['Net revenue', money(net)]
+        ['Net revenue', money(net)],
+        ['ROI', totalCost > 0 ? Math.round(net / totalCost * 100) + '%' : '—'],
+        ['Break-even rate', breakEven === null ? '—' : (breakEven * 100).toFixed(2) + '%'],
+        ['Contact cost', money(totalCost)]
       ].map(([label, value]) => `<div class="cell metric"><div class="n">${value}</div><div class="l">${label}</div></div>`).join('');
     }
     function renderDataSource() {
@@ -2024,7 +2477,9 @@
       renderChart('riskChart', countBy(policies, 'risk_tier'));
       renderChart('typeChart', countBy(policies, 'policy_type'));
       renderQualityChart();
-      renderPriorityChart();
+      renderRenewalChart();
+      renderWorklist();
+      renderBoard();
       renderDatalists();
       populateFilters(options);
       renderPolicies();
@@ -2092,7 +2547,23 @@
         document.getElementById('regionSelect').value = '';
         renderPolicies();
       });
-      ['simSegment', 'simRate', 'simValue', 'simCost'].forEach((id) => document.getElementById(id).addEventListener('input', renderSimulator));
+      ['simSegment', 'simChannel', 'simRate', 'simValue', 'simCost'].forEach((id) => document.getElementById(id).addEventListener('input', renderSimulator));
+      document.getElementById('worklistWindows').addEventListener('click', (event) => {
+        const b = event.target.closest('[data-window]');
+        if (!b) return;
+        worklistWindow = Number(b.dataset.window);
+        renderWorklist();
+      });
+      document.getElementById('boardWindows').addEventListener('click', (event) => {
+        const b = event.target.closest('[data-window]');
+        if (!b) return;
+        boardWindow = Number(b.dataset.window);
+        renderBoard();
+      });
+      document.getElementById('renewalBoard').addEventListener('change', (event) => {
+        const sel = event.target.closest('[data-renewal-stage]');
+        if (sel) setRenewalStage(sel.dataset.renewalStage, sel.value);
+      });
       document.getElementById('dataFile').addEventListener('change', handleDataFile);
       document.getElementById('resetDemoData').addEventListener('click', resetDemoData);
       document.getElementById('downloadDataCsv').addEventListener('click', downloadCurrentCsv);
