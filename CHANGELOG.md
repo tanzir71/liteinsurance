@@ -11,6 +11,11 @@ Added
 - Sample book gains `agent_code`, `renewal_probability` and `source_channel` custom columns (also used by the demo).
 
 Changed
+- `docs.html` and `compare.html` now use the landing v2 design (they still had the old "LI" logo and v1 styling):
+  - Both share the landing header (new logo, v1.2 tag, a mobile menu that works without JavaScript), its hero treatment, and its dark footer with the support band.
+  - Docs: a sticky "On this page" rail that highlights the section you are reading (chips on mobile), dark code blocks, a stacked configuration table on mobile, step cards for the pipeline, and a strip showing the renewal cadence. All the existing content is kept.
+  - Compare: an "At a glance" card, the landing comparison table (now with the "Dashboards across many systems" row), Which-is-right cards, a trade-offs grid and a dark demo call to action.
+  - Both pages have desktop and mobile frames in Figma.
 - Support link: a “Buy me a coffee” call to action (https://buymeacoffee.com/tanzir) sits above the footer on the landing page, docs, compare and demo, in the app footer, and on the sign-in card.
 - The whole app now follows the App UI v2 design, not just the demo:
   - Shell: navy sidebar with icons and counts, an agency box (new "Agency name" setting), a user card with sign-out, and a top bar with search and per-screen actions.

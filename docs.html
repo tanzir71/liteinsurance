@@ -8,56 +8,307 @@
   <meta name="robots" content="index, follow">
   <link rel="canonical" href="https://tanzir71.github.io/liteinsurance/docs.html">
   <link rel="stylesheet" href="./fonts/fonts.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%230a0a0a'/%3E%3Ctext x='50' y='58' text-anchor='middle' font-size='32' font-family='monospace' fill='%23f4f3ee'%3ELI%3C/text%3E%3C/svg%3E">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2032%2032%22%3E%3Cpath%20d=%22M8%203.5h11.5L26%2010v9.8c0%204.6-4.1%207.8-10%209.7-5.9-1.9-10-5.1-10-9.7V5.5a2%202%200%20012-2z%22%20fill=%22%230B0D12%22/%3E%3Cpath%20d=%22M19.5%203.5V8a2%202%200%20002%202H26z%22%20fill=%22%232540FF%22/%3E%3Crect%20x=%2210.5%22%20y=%2214%22%20width=%229%22%20height=%222.6%22%20rx=%221.3%22%20fill=%22%23fff%22/%3E%3Crect%20x=%2210.5%22%20y=%2219%22%20width=%226%22%20height=%222.6%22%20rx=%221.3%22%20fill=%22%23fff%22%20fill-opacity=%22.55%22/%3E%3C/svg%3E">
   <style>
-    :root { --bg:#f4f3ee; --bg-alt:#ebe9e1; --fg:#0a0a0a; --muted:#6b6b66; --muted-2:#8a877e; --faint:#a8a59c; --border:#cfcdc4; --border-soft:#e3e1d8; --panel:#fbfaf6; --acc:#2540ff; --dk-bg:#0c0d0e; --dk-ink:#f4f3ee; --dk-mute:#8e8f88; --dk-rule:#232527; --f-sans:Inter,"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif; --f-mono:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace; }
-    *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--f-sans);line-height:1.55} a{color:inherit;text-decoration:none} code,pre,.mono{font-family:var(--f-mono)}
-    .container{max-width:1152px;margin:0 auto;padding:0 20px} header{position:sticky;top:0;z-index:30;border-bottom:1px solid var(--border);background:rgba(244,243,238,.94);backdrop-filter:blur(10px)} header .container{max-width:1152px} .header-inner{min-height:60px;display:flex;align-items:center;justify-content:space-between;gap:16px}.brand{display:inline-flex;align-items:center;gap:12px}.logo{display:grid;place-items:center;width:34px;height:34px;background:var(--fg);color:var(--bg);font:11px/1 var(--f-mono);letter-spacing:.05em}.brand-name{font-size:14px;font-weight:650;letter-spacing:-.02em}nav{display:flex;flex-wrap:wrap;align-items:center;gap:6px;justify-content:flex-end;font-size:14px}.nav-link{display:inline-flex;height:36px;align-items:center;padding:0 10px;color:var(--muted)}.nav-link:hover{background:var(--bg-alt);color:var(--fg)}.btn{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:0 14px;border:1px solid var(--fg);background:var(--fg);color:var(--bg);font-weight:600}.header-inner .btn{min-height:44px;padding:0 18px;font-size:14px;font-family:var(--f-sans)}.btn-primary{background:var(--fg);color:var(--bg)}.btn:hover,.btn-primary:hover{background:var(--acc);border-color:var(--acc);color:#fff}
-    .hero{border-bottom:1px solid var(--border)}.hero-inner{padding:72px 0 54px}.eyebrow{display:inline-flex;align-items:center;gap:12px;font:12px/1.4 var(--f-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}.eyebrow:before{content:"";width:12px;height:12px;background:var(--acc)}h1{margin:20px 0 0;max-width:760px;font-size:48px;line-height:1.04;letter-spacing:-.035em;font-weight:650;text-wrap:balance}.lead{margin:18px 0 0;max-width:680px;color:var(--muted);line-height:1.7}
-    .layout{display:grid;grid-template-columns:1fr;gap:34px;padding:44px 0 76px}@media(min-width:980px){.layout{grid-template-columns:250px 1fr}.toc{position:sticky;top:86px;align-self:start}}.toc{border:1px solid var(--border);background:var(--panel);padding:16px}.toc .label{font:11px/1.4 var(--f-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--muted-2);margin-bottom:8px}.toc a{display:block;padding:8px 0;border-top:1px solid var(--border-soft);font-size:13px;color:var(--muted)}.toc a:hover{color:var(--acc)}
-    section.doc{padding:0 0 42px;margin-bottom:42px;border-bottom:1px solid var(--border)}.idx{font:12px/1.4 var(--f-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--faint)}h2{margin:10px 0 0;font-size:30px;line-height:1.12;letter-spacing:-.03em;font-weight:650}p{max-width:760px;color:var(--muted)}.grid{display:grid;grid-template-columns:1fr;gap:1px;background:var(--border);border:1px solid var(--border);margin-top:18px}@media(min-width:760px){.grid-2{grid-template-columns:repeat(2,1fr)}.grid-3{grid-template-columns:repeat(3,1fr)}}.cell{background:var(--panel);padding:18px}.cell h3{margin:0;font-size:15px}.cell p{margin:8px 0 0;font-size:13.5px}.cell .k{display:inline-block;margin-top:12px;color:var(--acc);font:11px/1.4 var(--f-mono)}pre{margin:18px 0 0;padding:16px;overflow:auto;background:var(--dk-bg);color:var(--dk-ink);font:12px/1.7 var(--f-mono)}table{width:100%;border-collapse:collapse;margin-top:18px;background:var(--panel);font-size:13px}th,td{padding:11px 10px;border:1px solid var(--border);text-align:left;vertical-align:top}th{font:11px/1.4 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted-2)}
-    footer{border-top:1px solid var(--border);padding:34px 0;color:var(--muted-2);font-size:12px}.footer-inner{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between}.footer-links{display:flex;flex-wrap:wrap;gap:14px;font-family:var(--f-mono)}.footer-links a:hover{color:var(--acc)}.donate-row{margin-bottom:22px;padding-bottom:22px;border-bottom:1px solid var(--border)}.donate{display:flex;align-items:center;gap:14px;color:var(--muted);font-size:14px;line-height:1.5}.donate-ic{display:grid;place-items:center;flex:none;width:36px;height:36px;border-radius:4px;background:#FFDD00;color:#0B0D12}.donate-text strong{color:var(--fg);font-weight:650}.donate-cta{margin-left:auto;flex:none;display:inline-flex;align-items:center;min-height:38px;padding:0 16px;border-radius:4px;background:#FFDD00;color:#0B0D12;font-weight:600;font-family:var(--f-sans)}.donate:hover .donate-cta{background:var(--fg);color:#fff}.donate:focus-visible{outline:2px solid var(--acc);outline-offset:4px}@media(max-width:700px){.donate{display:grid;grid-template-columns:36px minmax(0,1fr);align-items:start}.donate-cta{grid-column:2;justify-self:start;margin-left:0}}@media(max-width:760px){nav{display:none}h1{font-size:38px}}
-  .layout>*{min-width:0}pre,table{max-width:100%}@media(max-width:760px){table{display:block;overflow-x:auto}}</style>
+:root{
+  --ink:#0B0D12; --ink2:#1F2430; --slate:#4B5262; --muted:#6B7280; --faint:#9AA0AB;
+  --line:#E4E2DA; --line2:#EEECE6; --paper:#F6F5F0; --white:#FFFFFF;
+  --acc:#2540FF; --accInk:#1A2FD6; --acc50:#EEF1FF; --acc100:#DCE2FF;
+  --dark:#0A0E1A; --dark2:#111729; --darkLine:#232B40; --darkInk:#F3F4F7; --darkMute:#8E95A8;
+  --green:#157F3B; --green50:#E7F4EC; --amber:#B45309; --red:#B42318;
+  --sans: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--sans);color:var(--ink);background:#fff;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+code,pre,.k{font-variant-ligatures:none}
+.nw{white-space:nowrap}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.wrap{width:1152px;margin:0 auto}
+
+/* Header (shared with the landing page) */
+.hdr{border-bottom:1px solid var(--line);background:var(--white);position:relative;z-index:10}
+.hdr .wrap{height:72px;display:flex;align-items:center;justify-content:space-between}
+header .container{max-width:1152px;}
+.header-inner .btn{min-height:44px;padding:0 18px;}
+.brand{display:flex;align-items:center;gap:9px}
+.mark{display:block;flex:none}
+.brand-name{font-weight:600;font-size:18px;letter-spacing:-.025em}
+.brand-tag{font:500 11px/1 var(--mono);color:var(--muted);border:1px solid var(--line);padding:5px 7px;border-radius:4px;margin-left:4px;letter-spacing:.02em}
+.nav{display:flex;align-items:center;gap:6px}
+.nav a.nl{font-size:14px;font-weight:500;color:var(--slate);padding:10px 14px;border-radius:4px}
+.nav a.nl:hover{color:var(--ink)}
+.nav a.nl.on{color:var(--ink);background:var(--paper)}
+.nav .btn{margin-left:10px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:44px;padding:0 18px;border-radius:4px;font-size:14px;font-weight:600;border:1px solid transparent;white-space:nowrap}
+.btn-primary{background:var(--ink);color:var(--white)}
+.btn-accent{background:var(--acc);color:var(--white)}
+.btn-outline-dark{background:transparent;color:var(--darkInk);border-color:#3A4258}
+.btn svg{flex:none}
+.burger{display:none;width:44px;height:44px;border:1px solid var(--line);border-radius:4px;align-items:center;justify-content:center;cursor:pointer;background:var(--white)}
+.nav-toggle:focus-visible + .burger{outline:2px solid var(--acc);outline-offset:2px}
+
+/* Page hero */
+.page-hero{background:linear-gradient(180deg,#FFFFFF 0%,#F6F5F0 100%);border-bottom:1px solid var(--line);position:relative;overflow:hidden}
+.page-hero:before{content:"";position:absolute;right:-120px;top:-180px;width:980px;height:760px;background:radial-gradient(closest-side,rgba(37,64,255,.10),rgba(37,64,255,0));pointer-events:none}
+.page-hero .wrap{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 440px;gap:64px;padding:80px 0 88px;align-items:center}
+.eyebrow{display:inline-flex;align-items:center;gap:10px;font:600 12px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--acc)}
+.eyebrow i{font-style:normal;color:var(--faint);font-weight:500}
+h1{font-size:60px;line-height:1.02;letter-spacing:-.04em;font-weight:700;margin:22px 0 22px}
+.lead{font-size:18px;line-height:1.6;color:var(--slate)}
+h2{font-size:42px;line-height:1.1;letter-spacing:-.035em;font-weight:700;margin:16px 0 0;max-width:760px}
+.sub{font-size:17px;line-height:1.6;color:var(--slate)}
+.k{display:inline-block;font:500 11.5px/1 var(--mono);color:var(--accInk);background:var(--acc50);padding:6px 8px;border-radius:3px}
+
+/* Sections */
+.sec{padding:112px 0;border-bottom:1px solid var(--line)}
+.sec.alt{background:var(--paper)}
+.shead{margin-bottom:56px}
+.shead.split{display:grid;grid-template-columns:1fr 420px;gap:48px;align-items:end}
+.cell{background:var(--white);border:1px solid var(--line);border-radius:4px;padding:22px;display:flex;flex-direction:column}
+.cell h3{font-size:16px;letter-spacing:-.01em;margin-bottom:8px}
+.cell p{font-size:14.5px;line-height:1.55;color:var(--slate);margin-bottom:16px}
+.cell .k{margin-top:auto;align-self:flex-start}
+.step{font:500 11px/1 var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--acc);margin-bottom:10px}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font:500 11px/1 var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding:13px 18px;background:#FBFAF7;border-bottom:1px solid var(--line)}
+td{padding:14px 18px;border-bottom:1px solid var(--line2);font-size:14px;color:var(--slate);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.panel{background:var(--white);border:1px solid var(--line);border-radius:4px;overflow:hidden}
+
+/* Terminal */
+.term{background:var(--dark);color:var(--darkInk);border-radius:4px;border:1px solid var(--darkLine);box-shadow:0 20px 40px -12px rgba(10,14,26,.45)}
+.term-top{height:32px;border-bottom:1px solid var(--darkLine);display:flex;align-items:center;justify-content:space-between;padding:0 12px;font:500 10.5px/1 var(--mono);color:var(--darkMute)}
+.term-top b{color:#7CE0A3;font-weight:500}
+.term pre{font:400 12px/1.7 var(--mono);padding:14px 16px;white-space:pre;color:var(--darkInk);overflow:hidden}
+.term .c,.code .c{color:#6F7891}.term .a,.code .a{color:#8FA3FF}.term .v{color:#7CE0A3}
+
+/* CTA */
+.cta{background:var(--dark);color:var(--darkInk);position:relative;overflow:hidden}
+.cta .glow{position:absolute;right:-120px;top:-160px;width:620px;height:620px;border-radius:50%;background:radial-gradient(closest-side,rgba(37,64,255,.45),rgba(37,64,255,0))}
+.cta .wrap{position:relative;display:flex;align-items:flex-end;justify-content:space-between;gap:48px;padding:104px 0}
+.cta .eyebrow{color:#A9B6FF}
+.cta h2{color:#fff;font-size:48px;max-width:720px;margin:16px 0}
+.cta p{font-size:17px;line-height:1.6;color:var(--darkMute);max-width:640px}
+.cta .btns{display:flex;gap:12px}
+.cta .btns .btn{height:52px;padding:0 24px;font-size:15px}
+
+/* Footer (shared with the landing page) */
+.ftr{background:var(--dark);color:var(--darkMute);border-top:1px solid var(--darkLine)}
+.ftr .wrap{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:48px;padding:56px 0 40px}
+.ftr .brand-name{color:#fff}
+.footer-note{font-size:14px;line-height:1.6;margin-top:16px;max-width:340px}
+.footer-note a{color:#fff;font-weight:600}
+.fcol h5{font:600 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:#C8CCD8;margin-bottom:16px}
+.fcol a{display:block;font-size:14px;margin-bottom:12px;color:var(--darkMute)}
+.fcol a[href]:hover{color:#fff}
+.donate-band{border-top:1px solid var(--darkLine)}
+.ftr .donate-band .wrap{display:block;padding:22px 0}
+.donate{display:flex;align-items:center;gap:14px;color:var(--darkMute);text-decoration:none;font-size:14.5px;line-height:1.5}
+.donate-ic{display:grid;place-items:center;flex:none;width:38px;height:38px;border-radius:4px;background:#FFDD00;color:#0B0D12}
+.donate-text strong{color:#fff;font-weight:600}
+.donate-cta{margin-left:auto;flex:none;display:inline-flex;align-items:center;height:40px;padding:0 18px;border-radius:4px;background:#FFDD00;color:#0B0D12;font-weight:600;font-size:14px}
+.donate:hover .donate-cta,.donate:focus-visible .donate-cta{background:#fff}
+.donate:focus-visible{outline:2px solid #4D66FF;outline-offset:4px}
+.fbot{border-top:1px solid var(--darkLine)}
+.ftr .fbot .wrap{display:flex;justify-content:space-between;gap:16px;padding:20px 0;font-size:12.5px}
+
+@media (max-width:1240px){
+  .wrap{width:auto;margin:0 32px}
+}
+@media (max-width:980px){
+  .wrap{margin:0 20px}
+  .hdr .wrap{height:64px}
+  .brand-tag{display:none}
+  .burger{display:flex}
+  .nav{display:none;position:absolute;left:0;right:0;top:64px;flex-direction:column;align-items:stretch;gap:2px;padding:10px 20px 16px;background:var(--white);border-bottom:1px solid var(--line);box-shadow:0 16px 24px -16px rgba(11,13,18,.2)}
+  .nav-toggle:checked ~ .nav{display:flex}
+  .nav .btn{margin:8px 0 0}
+  .page-hero .wrap{grid-template-columns:minmax(0,1fr);gap:40px;padding:48px 0 56px}
+  h1{font-size:40px;margin:20px 0 16px}
+  .lead{font-size:16px}
+  h2{font-size:30px}
+  .sub{font-size:16px}
+  .sec{padding:64px 0}
+  .shead{margin-bottom:32px}
+  .shead.split{grid-template-columns:minmax(0,1fr);gap:16px}
+  .term pre{white-space:pre-wrap;word-break:break-word}
+  .cta .wrap{flex-direction:column;align-items:flex-start;padding:64px 0;gap:28px}
+  .cta h2{font-size:32px}
+  .cta .btns{flex-direction:column;width:100%}
+  .cta .btns .btn{width:100%}
+  .ftr .wrap{grid-template-columns:1fr 1fr;gap:32px}
+  .ftr .wrap > div:first-child{grid-column:1/-1}
+  .ftr .fbot .wrap{flex-direction:column;gap:6px}
+  td,th{padding:11px 12px}
+}
+@media (max-width:700px){
+  .donate{display:grid;grid-template-columns:38px minmax(0,1fr);align-items:start}
+  .donate-cta{grid-column:2;justify-self:start;margin-left:0}
+}
+
+/* Docs */
+.reqs{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
+.docs-body .wrap{display:grid;grid-template-columns:260px minmax(0,1fr);gap:64px;padding:72px 0 112px}
+.rail{position:sticky;top:24px;align-self:start;display:flex;flex-direction:column;gap:24px}
+.toc-lbl{font:500 11px/1 var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin-bottom:12px}
+.toc a{display:flex;align-items:center;gap:12px;padding:9px 12px 9px 14px;border-left:2px solid var(--line2);font-size:14px;font-weight:500;color:var(--slate)}
+.toc a span{font:500 11px/1 var(--mono);color:var(--faint)}
+.toc a:hover{color:var(--ink)}
+.toc a.on{background:var(--acc50);border-left-color:var(--acc);color:var(--ink);font-weight:600}
+.toc a.on span{color:var(--acc)}
+.help{border:1px solid var(--line);border-radius:4px;padding:22px;background:var(--white)}
+.help h4{font-size:15px;margin-bottom:6px}
+.help p{font-size:14px;color:var(--slate);line-height:1.55;margin-bottom:16px}
+.help .links{display:flex;gap:16px;font-size:14px;font-weight:600;color:var(--acc)}
+.doc{padding-bottom:56px;margin-bottom:56px;border-bottom:1px solid var(--line);scroll-margin-top:24px}
+.doc:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0}
+.doc h2{font-size:32px;line-height:1.15;letter-spacing:-.03em;margin:18px 0 18px;max-width:none}
+.doc p{font-size:16px;line-height:1.65;color:var(--slate);margin-bottom:18px}
+.doc p code{font:400 14px/1 var(--mono);color:var(--accInk);background:var(--acc50);padding:2px 5px;border-radius:3px}
+.doc > :last-child{margin-bottom:0}
+.code{background:var(--dark);border:1px solid var(--darkLine);border-radius:4px;overflow:hidden;margin-bottom:18px}
+.code-bar{display:flex;justify-content:space-between;gap:16px;padding:10px 16px;border-bottom:1px solid var(--darkLine);font:500 11px/1 var(--mono);color:var(--darkMute)}
+.code-bar b{color:#8FA3FF;font-weight:500}
+.code pre{padding:16px 18px 18px;font:400 12.5px/1.65 var(--mono);color:var(--darkInk);white-space:pre-wrap;word-break:break-word}
+.cfg td:first-child,.cfg td.m{font:400 12.5px/1.5 var(--mono)}
+.cfg td:first-child{color:var(--ink);width:170px}
+.cfg td.m{width:250px}
+.cfg td.dim{color:var(--muted)}
+.steps3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.steps2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.ops{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
+.cadence{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));list-style:none;border:1px solid var(--line);border-radius:4px;background:var(--white);overflow:hidden;margin-bottom:18px}
+.cadence li{padding:14px;border-left:1px solid var(--line)}
+.cadence li:first-child{border-left:0}
+.cadence b{display:block;font:500 11.5px/1 var(--mono);color:var(--acc);margin-bottom:8px}
+.cadence span{font-size:13.5px;font-weight:600;line-height:1.35}
+.cadence li:last-child{background:var(--green50)}
+.cadence li:last-child b{color:var(--green)}
+@media (max-width:980px){
+  .docs-body .wrap{grid-template-columns:minmax(0,1fr);gap:32px;padding:40px 0 64px}
+  .rail{position:static}
+  .help{display:none}
+  .toc{display:flex;flex-wrap:wrap;gap:6px}
+  .toc-lbl{flex:1 0 100%;margin-bottom:4px}
+  .toc a{border:1px solid var(--line);border-radius:4px;padding:6px 10px;font-size:13px}
+  .toc a span{display:none}
+  .toc a.on{border-color:var(--line);background:var(--white);font-weight:500;color:var(--slate)}
+  .doc{padding-bottom:40px;margin-bottom:40px}
+  .doc h2{font-size:26px}
+  .steps3,.steps2{grid-template-columns:minmax(0,1fr)}
+  .cadence{grid-template-columns:minmax(0,1fr)}
+  .cadence li{display:flex;align-items:center;gap:14px;border-left:0;border-top:1px solid var(--line)}
+  .cadence li:first-child{border-top:0}
+  .cadence b{width:52px;margin:0}
+  .cfg thead{display:none}
+  .cfg tr{display:block;padding:12px 14px;border-bottom:1px solid var(--line2)}
+  .cfg tr:last-child{border-bottom:0}
+  .cfg td{display:block;width:auto!important;padding:2px 0;border:0}
+}
+</style>
 </head>
 <body>
-  <header><div class="container header-inner"><a class="brand" href="./index.html"><span class="logo">LI</span><span class="brand-name">LiteInsurance</span></a><nav><a class="nav-link" href="./index.html">Home</a><a class="nav-link" href="./demo.html">Demo</a><a class="nav-link" href="./docs.html">Docs</a><a class="nav-link" href="./compare.html">Compare</a><a class="btn btn-primary" href="https://github.com/tanzir71/liteinsurance" target="_blank" rel="noopener">GitHub</a></nav></div></header>
-  <main>
-    <div class="hero"><div class="container hero-inner"><span class="eyebrow">Docs / verified against the PHP app</span><h1>Deploy, configure, and operate LiteInsurance.</h1><p class="lead">These docs cover the actual single-file PHP application: CSV import, imputation, LTV scoring, visual or JSON rules, segments, campaign simulation, security controls, cron, and backups.</p></div></div>
-    <div class="container layout">
-      <aside class="toc" aria-label="Docs table of contents"><div class="label">Contents</div><a href="#deploy">Deploy</a><a href="#local">Run locally</a><a href="#config">Config</a><a href="#pipeline">Pipeline</a><a href="#rules">Rules</a><a href="#renewals">Renewals</a><a href="#segments">Lists</a><a href="#security">Security</a><a href="#ops">Operations</a></aside>
-      <div>
-        <section class="doc" id="deploy"><span class="idx">DOC / 01</span><h2>Deploy to shared hosting</h2><p>Upload <code>liteinsurance.php</code> into <code>public_html/</code>, ensure PHP 8.1+ (8.3 recommended) and PDO SQLite are enabled, then visit <code>/liteinsurance.php</code>. The first registered user becomes the admin. Settings includes a Setup doctor for PHP, SQLite, paths, upload limits, cron token, and webroot storage checks.</p><pre>public_html/
-  liteinsurance.php
-  .env             # optional
+<header class="hdr">
+  <div class="wrap container header-inner">
+    <a class="brand" href="./index.html" aria-label="LiteInsurance home"><svg class="mark" width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><path d="M8 3.5h11.5L26 10v9.8c0 4.6-4.1 7.8-10 9.7-5.9-1.9-10-5.1-10-9.7V5.5a2 2 0 012-2z" fill="#0B0D12"/><path d="M19.5 3.5V8a2 2 0 002 2H26z" fill="#2540FF"/><rect x="10.5" y="14" width="9" height="2.6" rx="1.3" fill="#fff"/><rect x="10.5" y="19" width="6" height="2.6" rx="1.3" fill="#fff" fill-opacity=".55"/></svg><span class="brand-name">LiteInsurance</span><span class="brand-tag">v1.2 · self-hosted</span></a>
+    <input type="checkbox" id="navToggle" class="nav-toggle sr-only" aria-label="Show navigation">
+    <label for="navToggle" class="burger" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 5h14M2 9h14M2 13h14"/></svg></label>
+    <nav class="nav" aria-label="Primary">
+      <a class="nl" href="./index.html">Home</a>
+      <a class="nl" href="./demo.html">Demo</a>
+      <a class="nl on" href="./docs.html" aria-current="page">Docs</a>
+      <a class="nl" href="./compare.html">Compare</a>
+      <a class="btn btn-primary" href="https://github.com/tanzir71/liteinsurance" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+<main>
+<section class="page-hero">
+  <div class="wrap">
+    <div>
+      <span class="eyebrow">Docs <i>/</i> Verified against the PHP app</span>
+      <h1>Deploy, configure, and operate LiteInsurance.</h1>
+      <p class="lead">These docs cover the actual single-file PHP application: CSV import, imputation, LTV scoring, visual or JSON rules, renewals, consent-aware lists, campaign simulation, security controls, cron, and backups.</p>
+      <div class="reqs"><span class="k">PHP 8.1+</span><span class="k">PDO SQLite</span><span class="k">One PHP file</span><span class="k">No build step</span></div>
+    </div>
+    <div class="term" aria-label="Fast setup snippet">
+      <div class="term-top"><span>public_html / deploy</span><b>● ready</b></div>
+<pre><span class="c"># upload one file</span>
+liteinsurance.php <span class="a">--&gt;</span> /public_html/
 
-Visit: https://YOURDOMAIN/liteinsurance.php
-Register first user -> Settings -> Setup doctor -> Import -> Preview -> Confirm import</pre></section>
-        <section class="doc" id="local"><span class="idx">DOC / 02</span><h2>Run locally</h2><p>The app has no build step. Use PHP's built-in server from the repository root. Upload the optional <code>fonts/</code> folder next to the PHP file to use the bundled Inter typeface; without it the system font stack is used. No third-party requests either way.</p><pre>php -S 127.0.0.1:8000
-open http://127.0.0.1:8000/liteinsurance.php</pre></section>
-        <section class="doc" id="config"><span class="idx">DOC / 03</span><h2>Configuration keys</h2><p>Most defaults live in the PHP file. Optional environment overrides can be set in <code>.env</code>.</p><table><thead><tr><th>Key</th><th>Default</th><th>Effect</th></tr></thead><tbody><tr><td><code>CRON_TOKEN</code></td><td>blank</td><td>Protects web cron. CLI cron can run without it.</td></tr><tr><td><code>DB_PATH</code></td><td><code>liteinsurance.db</code></td><td>SQLite database path. Move outside webroot when hosting allows.</td></tr><tr><td><code>UPLOAD_DIR</code></td><td><code>liteinsurance_uploads/</code></td><td>CSV staging directory. Move outside webroot when possible.</td></tr></tbody></table></section>
-        <section class="doc" id="pipeline"><span class="idx">DOC / 04</span><h2>Import and scoring pipeline</h2><div class="grid grid-3"><div class="cell"><h3>Import</h3><p>CSV upload, Record ID mapping (AMS headers like Policy #, Expiration Date, Line of Business are recognised), optional Display name mapping, custom CSV field preservation, preview, and staged commit. Re-importing updates matching Record IDs in place.</p><span class="k">metadata.custom_fields</span></div><div class="cell"><h3>Impute</h3><p>Mapped numeric fields use mean. Mapped categorical fields use mode or configured defaults.</p><span class="k">is_imputed</span></div><div class="cell"><h3>Score</h3><p>LTV requires mapped premium, tenure, and policy type. Without them, scoring stays blank or Unknown.</p><span class="k">ltv_estimate</span></div></div></section>
-        <section class="doc" id="rules"><span class="idx">DOC / 05</span><h2>Risk rules</h2><p>Rules are priority-ordered conditions and actions. They run highest priority first: the first matching rule that sets a tier wins, tags and score deltas accumulate, and <code>"stop": true</code> ends evaluation. Every policy stores which rules matched, so the Book panel can explain its tier, LTV and confidence. The app provides a visual builder for common field/operator/value rules and a plain JSON editor for nested groups or advanced edits. A matching rule can set <code>risk_tier</code>, adjust score, and add a tag. Supported leaf operators include <code>=</code>, <code>!=</code>, <code>&gt;</code>, <code>&lt;</code>, <code>&gt;=</code>, <code>&lt;=</code>, <code>in</code>, <code>contains</code>, and <code>regex</code>.</p><pre>{
+<span class="c"># open in browser</span>
+https://yourdomain.com/<span class="v">liteinsurance.php</span>
+
+<span class="c"># first user becomes admin</span>
+Register <span class="a">--&gt;</span> Import <span class="a">--&gt;</span> Load sample
+Preview <span class="a">--&gt;</span> Confirm import</pre>
+    </div>
+  </div>
+</section>
+<section class="docs-body">
+  <div class="wrap">
+    <aside class="rail">
+      <nav class="toc" aria-label="Docs table of contents"><div class="toc-lbl">On this page</div><a href="#deploy" class="on"><span>01</span>Deploy</a><a href="#local"><span>02</span>Run locally</a><a href="#config"><span>03</span>Configuration</a><a href="#pipeline"><span>04</span>Pipeline</a><a href="#rules"><span>05</span>Risk rules</a><a href="#renewals"><span>06</span>Renewals &amp; consent</a><a href="#segments"><span>07</span>Lists &amp; exports</a><a href="#security"><span>08</span>Security</a><a href="#ops"><span>09</span>Operations</a></nav>
+      <div class="help"><h4>Need a hand?</h4><p>Open an issue on GitHub, or read SETUP.md and SECURITY.md in the repository.</p><div class="links"><a href="./SETUP.md">Setup →</a><a href="https://github.com/tanzir71/liteinsurance">GitHub →</a></div></div>
+    </aside>
+    <div class="docs-content">
+<section class="doc" id="deploy"><span class="eyebrow">01 <i>/</i> Deploy</span><h2>Deploy to shared hosting</h2><p>Upload <code>liteinsurance.php</code> into <code>public_html/</code>, make sure PHP 8.1+ (8.3 recommended) and PDO SQLite are enabled, then visit <code>/liteinsurance.php</code>. The first registered user becomes the admin. Settings includes a Setup doctor for PHP, SQLite, paths, upload limits, cron token, and webroot storage checks.</p><div class="code"><div class="code-bar"><span>shared hosting</span><b>text</b></div><pre>public_html/
+  liteinsurance.php
+  fonts/            <span class="c"># optional, self-hosted Inter</span>
+  .env              <span class="c"># optional overrides</span>
+
+Visit https://YOURDOMAIN/liteinsurance.php
+Register first user <span class="a">→</span> Settings <span class="a">→</span> Setup doctor <span class="a">→</span> Import <span class="a">→</span> Review <span class="a">→</span> Import rows</pre></div></section><section class="doc" id="local"><span class="eyebrow">02 <i>/</i> Run locally</span><h2>Run locally</h2><p>The app has no build step. Use PHP's built-in server from the repository root. Upload the optional <code>fonts/</code> folder next to the PHP file to use the bundled Inter typeface; without it the system font stack is used. No third-party requests either way.</p><div class="code"><div class="code-bar"><span>terminal</span><b>bash</b></div><pre>php -S 127.0.0.1:8000
+open http://127.0.0.1:8000/liteinsurance.php</pre></div></section><section class="doc" id="config"><span class="eyebrow">03 <i>/</i> Configuration</span><h2>Configuration keys</h2><p>Most defaults live in the PHP file. Optional environment overrides can be set in <code>.env</code>.</p><div class="panel"><table class="cfg"><thead><tr><th>Key</th><th>Default</th><th>Effect</th></tr></thead><tbody><tr><td>CRON_TOKEN</td><td class="dim">blank</td><td>Protects web cron. CLI cron can run without it.</td></tr><tr><td>DB_PATH</td><td class="m">liteinsurance.db</td><td>SQLite database path. Move outside webroot when hosting allows.</td></tr><tr><td>UPLOAD_DIR</td><td class="m">liteinsurance_uploads/</td><td>CSV staging directory. Move outside webroot when possible.</td></tr></tbody></table></div></section><section class="doc" id="pipeline"><span class="eyebrow">04 <i>/</i> Pipeline</span><h2>Import and scoring pipeline</h2><p>Every import runs the same three steps. Re-importing a file updates matching Record IDs in place, so renewal status, owner, contact history and opt-outs are kept.</p><div class="steps3"><div class="cell"><div class="step">Step 1</div><h3>Import</h3><p>CSV upload, Record ID mapping (AMS headers like Policy #, Expiration Date and Line of Business are recognised), optional Display name mapping, custom CSV field preservation, review, and staged commit.</p><span class="k">metadata.custom_fields</span></div><div class="cell"><div class="step">Step 2</div><h3>Impute</h3><p>Mapped numeric fields use the book mean. Mapped categorical fields use the most common value or a configured default, and are flagged with lower confidence.</p><span class="k">is_imputed</span></div><div class="cell"><div class="step">Step 3</div><h3>Score</h3><p>LTV needs mapped premium, tenure and policy type. Without them, scoring stays blank or Unknown instead of guessing.</p><span class="k">ltv_estimate</span></div></div></section><section class="doc" id="rules"><span class="eyebrow">05 <i>/</i> Risk rules</span><h2>Risk rules</h2><p>Rules are priority-ordered conditions and actions. They run highest priority first: the first matching rule that sets a tier wins, tags and score deltas accumulate, and <code>"stop": true</code> ends evaluation. Every policy stores which rules matched, so the Book panel can explain its tier, LTV and confidence.</p><p>The app provides a visual builder for common field / operator / value rules and a plain JSON editor for nested groups or advanced edits. A matching rule can set <code>risk_tier</code>, adjust the score, and add a tag. Supported leaf operators:</p><div class="ops"><span class="k">=</span><span class="k">!=</span><span class="k">&gt;</span><span class="k">&lt;</span><span class="k">&gt;=</span><span class="k">&lt;=</span><span class="k">in</span><span class="k">contains</span><span class="k">regex</span></div><div class="code"><div class="code-bar"><span>rule.json</span><b>json</b></div><pre>{
   "logic": "AND",
   "conditions": [
-    { "field": "age", "op": ">=", "value": 60 },
-    { "field": "tenure_months", "op": "<", "value": 12 }
+    { "field": "age", "op": "&gt;=", "value": 60 },
+    { "field": "tenure_months", "op": "&lt;", "value": 12 }
   ],
   "actions": {
     "set_risk_tier": "High",
     "score_delta": 20,
     "add_tag": "senior_short_tenure"
   }
-}</pre></section>
-        <section class="doc" id="renewals"><span class="idx">DOC / 06</span><h2>Renewals and consent</h2><p>Map an expiration (or effective) date and Today shows a renewal worklist; the Renewals board puts each open renewal in the column for its next step on the 120/90/75/45/30/15-day cadence (flag and prioritise, update exposures, remarket decision, compare quotes, present to client, bind), with its status (not started, contacted, quoted, remarketing, renewed, lost), owner and premium change on the card. Change the cadence in Settings and the columns follow it. Per-channel consent (email, SMS, calls) and opt-outs are stored on each policy; call lists, list exports and campaign reach only include consented, not-opted-out records. Paste a suppression list in Settings to opt people out in bulk. This is tooling, not legal advice: confirm the consent rules for your market (for example TCPA in the US).</p><pre>Today -> Renewals board -> Call list CSV / Calendar (.ics)
-Book -> open a policy -> log contact, update consent, see why it scored</pre></section>
-        <section class="doc" id="segments"><span class="idx">DOC / 07</span><h2>Lists, segments and exports</h2><p>Lists (segments) combine selected rule IDs with a validated WHERE-style filter, written for you by a plain-language builder with a live, consent-aware count. Allowed fields include core fields, renewal fields such as <code>days_to_expiry</code>, <code>renewal_status</code> and <code>policies_in_household</code>, consent fields, plus custom fields using <code>custom.field_key</code>. CSV export is protected by a session token, filtered by channel consent, and appends enabled custom fields.</p><pre>risk_tier = 'High' AND ltv_estimate > 7000
-custom.renewal_probability >= 0.7 AND confidence_score >= 80
-days_to_expiry >= 0 AND days_to_expiry <= 90 AND consent_phone = 1</pre></section>
-        <section class="doc" id="security"><span class="idx">DOC / 08</span><h2>Security model</h2><div class="grid grid-2"><div class="cell"><h3>Web controls</h3><p>CSRF on POST, session hardening, idle timeout, rate limits, security headers, optional TOTP two-step sign-in (admins can require it), and invite-only registration by default.</p><span class="k">csrf_token</span></div><div class="cell"><h3>Data controls</h3><p>PII is masked in list views; revealing a name or contact detail is audited. Uploads are randomized and blocked from direct browsing when possible. Settings shows a data inventory, exports the audit log, applies retention rules (staged uploads, audit log, contact history, long-expired policies), erases a person on request, or wipes all policy data.</p><span class="k">mask_name</span></div></div></section>
-        <section class="doc" id="ops"><span class="idx">DOC / 09</span><h2>Operations</h2><p>Back up the SQLite database, rotate <code>CRON_TOKEN</code>, and run cron daily to recompute LTV, risk tiers and list sizes (rules that use <code>days_to_expiry</code> need it).</p><pre>php /home/USER/public_html/liteinsurance.php action=cron_jobs cron_token=YOUR_TOKEN</pre></section>
-      </div>
+}</pre></div></section><section class="doc" id="renewals"><span class="eyebrow">06 <i>/</i> Renewals &amp; consent</span><h2>Renewals and consent</h2><p>Map an expiration (or effective) date and Today shows a renewal worklist. The Renewals board puts each open renewal in the column for its next step on the 120 / 90 / 75 / 45 / 30 / 15-day cadence, with its status (not started, contacted, quoted, remarketing, renewed, lost), owner and premium change on the card. Change the cadence in Settings and the columns follow it.</p><ol class="cadence" aria-label="Default renewal cadence"><li><b>120 d</b><span>Flag &amp; prioritise</span></li><li><b>90 d</b><span>Update exposures</span></li><li><b>75 d</b><span>Remarket decision</span></li><li><b>45 d</b><span>Compare quotes</span></li><li><b>30 d</b><span>Present to client</span></li><li><b>15 d</b><span>Bind</span></li></ol><p>Per-channel consent (email, SMS, calls) and opt-outs are stored on each policy; call lists, list exports and campaign reach only include consented, not-opted-out records. Paste a suppression list in Settings to opt people out in bulk. This is tooling, not legal advice: confirm the consent rules for your market (for example TCPA in the US).</p><div class="code"><div class="code-bar"><span>where to find it</span><b>text</b></div><pre>Today <span class="a">→</span> Renewals board <span class="a">→</span> Call list CSV / Calendar (.ics)
+Book <span class="a">→</span> open a policy <span class="a">→</span> log contact, update consent, see why it scored</pre></div></section><section class="doc" id="segments"><span class="eyebrow">07 <i>/</i> Lists &amp; exports</span><h2>Lists, segments and exports</h2><p>Lists (segments) combine selected rule IDs with a validated WHERE-style filter, written for you by a plain-language builder with a live, consent-aware count. Allowed fields include core fields, renewal fields such as <code>days_to_expiry</code>, <code>renewal_status</code> and <code>policies_in_household</code>, consent fields, plus custom fields using <code>custom.field_key</code>. CSV export is protected by a session token, filtered by channel consent, and appends enabled custom fields.</p><div class="code"><div class="code-bar"><span>list filters</span><b>sql</b></div><pre>risk_tier = 'High' AND ltv_estimate &gt; 7000
+custom.renewal_probability &gt;= 0.7 AND confidence_score &gt;= 80
+days_to_expiry &gt;= 0 AND days_to_expiry &lt;= 90 AND consent_phone = 1</pre></div></section><section class="doc" id="security"><span class="eyebrow">08 <i>/</i> Security</span><h2>Security model</h2><div class="steps2"><div class="cell"><h3>Web controls</h3><p>CSRF on every POST, session hardening, idle timeout, rate limits, security headers, optional TOTP two-step sign-in (admins can require it), and invite-only registration by default.</p><span class="k">csrf_token</span></div><div class="cell"><h3>Data controls</h3><p>PII is masked in list views; revealing a name or contact detail is audited. Uploads are randomised and blocked from direct browsing when possible. Settings shows a data inventory, exports the audit log, applies retention rules (staged uploads, audit log, contact history, long-expired policies), erases a person on request, or wipes all policy data.</p><span class="k">mask_name</span></div></div></section><section class="doc" id="ops"><span class="eyebrow">09 <i>/</i> Operations</span><h2>Operations</h2><p>Back up the SQLite database, rotate <code>CRON_TOKEN</code>, and run cron daily to recompute LTV, risk tiers and list sizes (rules that use <code>days_to_expiry</code> need it).</p><div class="code"><div class="code-bar"><span>cPanel cron · daily</span><b>bash</b></div><pre>php /home/USER/public_html/liteinsurance.php action=cron_jobs cron_token=YOUR_TOKEN</pre></div></section>
     </div>
-  </main>
-  <footer><div class="container donate-row"><a class="donate" href="https://buymeacoffee.com/tanzir" target="_blank" rel="noopener"><span class="donate-ic"><svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8h10v4.5a4 4 0 01-4 4h-2a4 4 0 01-4-4z"/><path d="M13.5 9.5h1.2a2 2 0 010 4h-1.4"/><path d="M6.5 2.5c-.6.8.6 1.6 0 2.5M9.5 2.5c-.6.8.6 1.6 0 2.5"/></svg></span><span class="donate-text"><strong>Tanzir Rahman</strong> is fueling open-source code, local utilities, and late-night builds.</span><span class="donate-cta">Buy me a coffee</span></a></div><div class="container footer-inner"><span>LiteInsurance docs</span><span class="footer-links"><a href="./index.html">home</a><a href="./demo.html">demo</a><a href="./SECURITY.md">security</a><a href="./SETUP.md">setup md</a></span></div></footer>
+  </div>
+</section>
+</main>
+<footer class="ftr">
+  <div class="wrap">
+    <div>
+      <a class="brand" href="./index.html"><svg class="mark" width="30" height="30" viewBox="0 0 32 32" aria-hidden="true"><path d="M8 3.5h11.5L26 10v9.8c0 4.6-4.1 7.8-10 9.7-5.9-1.9-10-5.1-10-9.7V5.5a2 2 0 012-2z" fill="#FFFFFF"/><path d="M19.5 3.5V8a2 2 0 002 2H26z" fill="#4D66FF"/><rect x="10.5" y="14" width="9" height="2.6" rx="1.3" fill="#0A0E1A"/><rect x="10.5" y="19" width="6" height="2.6" rx="1.3" fill="#0A0E1A" fill-opacity=".55"/></svg><span class="brand-name">LiteInsurance</span></a>
+      <p class="footer-note">LiteInsurance — self-hosted insurance ops tooling by <a href="https://tanziro.com">tanziro.com</a>.</p>
+    </div>
+    <div class="fcol"><h5>Product</h5><a href="./demo.html">Demo</a><a href="./docs.html">Docs</a><a href="./compare.html">Compare</a></div>
+    <div class="fcol"><h5>Resources</h5><a href="./SETUP.md">Setup</a><a href="./SECURITY.md">Security</a><a href="https://github.com/tanzir71/liteinsurance">GitHub</a></div>
+    <div class="fcol"><h5>Stack</h5><a>PHP 8.1+ · PDO SQLite</a><a>No build step</a><a href="https://github.com/tanzir71/liteinsurance">Source on GitHub</a><a href="https://github.com/tanzir71/liteinsurance/blob/main/LICENSE">MIT license</a></div>
+  </div>
+  <div class="donate-band"><div class="wrap"><a class="donate" href="https://buymeacoffee.com/tanzir" target="_blank" rel="noopener"><span class="donate-ic"><svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8h10v4.5a4 4 0 01-4 4h-2a4 4 0 01-4-4z"/><path d="M13.5 9.5h1.2a2 2 0 010 4h-1.4"/><path d="M6.5 2.5c-.6.8.6 1.6 0 2.5M9.5 2.5c-.6.8.6 1.6 0 2.5"/></svg></span><span class="donate-text"><strong>Tanzir Rahman</strong> is fueling open-source code, local utilities, and late-night builds.</span><span class="donate-cta">Buy me a coffee</span></a></div></div>
+  <div class="fbot"><div class="wrap"><span>© 2026 Tanzir Rahman · MIT licensed</span><span>No affiliation with any CRM, AMS, BI, or insurance software vendor.</span></div></div>
+</footer>
+<script>
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+  if (!('IntersectionObserver' in window) || !links.length) return;
+  var byId = {};
+  links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      links.forEach(function (a) { a.classList.remove('on'); });
+      var a = byId[e.target.id]; if (a) a.classList.add('on');
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  document.querySelectorAll('.doc').forEach(function (s) { io.observe(s); });
+})();
+</script>
 </body>
 </html>
