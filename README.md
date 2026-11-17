@@ -42,7 +42,7 @@ v1.1 added the day-to-day agency workflow; v1.2 adds two-step sign-in, user mana
 |---|---|
 | `liteinsurance.php` | Single-file PHP + SQLite app |
 | `index.html` | Commercial landing page |
-| `demo.html` | Browser-only demo with 200-policy seed data, local CSV upload, editable custom fields, visual/JSON rules, and local storage |
+| `demo.html` | Browser-only demo of the App UI v2 screens (Today, Renewals, Book, Lists, Campaigns, Import & health, Scoring rules) with 200-policy seed data, local CSV upload, editable custom fields, visual/JSON rules, and local storage |
 | `docs.html` | Deployment and operating docs |
 | `compare.html` | Honest comparison guide |
 | `SETUP.md` | cPanel/shared-hosting setup notes |

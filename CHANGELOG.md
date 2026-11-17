@@ -10,6 +10,9 @@ Added
 - MIT `LICENSE`.
 - Sample book gains `agent_code`, `renewal_probability` and `source_channel` custom columns (also used by the demo).
 
+Changed
+- `demo.html` rebuilt to match the App UI v2 design: navy sidebar (Today, Renewals, Book, Lists, Campaigns, Import & health, Scoring rules), a top bar with search (`/`) and per-screen actions, and the designed screens: KPI cards and renewal worklist with Opportunities, Data health and Consent; a Renewals board grouped by the 120/90/75/45/30/15-day cadence; a Book table with bulk status changes and a "Why this tier" panel (rule conditions, LTV formula, confidence, consent); a plain-language list builder with consent filters and a live result; Campaigns with a funnel, break-even and saved scenarios; and Import & health with column mapping. Masked names use `•` and can be revealed per policy; sensitive sample values stay masked in the mapping table.
+
 
 ## 2026-11-17 — v1.1
 Fixes
